@@ -1,0 +1,408 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use gpui::{
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, Window, actions, div, px,
+};
+use gpui_component::ActiveTheme;
+use gpui_component::{
+    IconName, Root, Sizable, TitleBar, WindowExt,
+    button::{Button, ButtonVariants as _},
+    dock::{DockArea, DockItem},
+    h_flex, v_flex,
+};
+
+use crate::data_source::manager::DataSourceManager;
+use crate::data_source::{
+    create_data_source, ConnectionStatus, DataSourceConfig, DataSourceError, QueryResult,
+};
+use crate::ui::panels::connection::ConnectionPanel;
+use crate::ui::panels::file_editor::{
+    EditorTabs, ExecuteQuery, QuerySelected, QuerySelector, SaveFile,
+};
+use crate::ui::panels::file_editor::query_detector::{queries_at_cursor, queries_in_text};
+use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
+use crate::ui::panels::result::ResultPanel;
+
+actions!(workspace, [OpenFolder]);
+
+pub struct Workspace {
+    #[allow(dead_code)]
+    file_tree_panel: Entity<FileTreePanel>,
+    dock_area: Entity<DockArea>,
+    editor_tabs: Entity<EditorTabs>,
+    results_panel: Entity<ResultPanel>,
+    data_source_manager: Entity<DataSourceManager>,
+    focus_handle: FocusHandle,
+}
+
+impl Workspace {
+    pub fn new(
+        root_path: PathBuf,
+        initial_file: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let dock_area = cx.new(|cx| DockArea::new("main-dock", None, window, cx));
+
+        let file_tree_panel = cx.new(|cx| FileTreePanel::new(root_path, window, cx));
+        let data_source_manager = cx.new(|_cx| {
+            DataSourceManager::load().unwrap_or_else(|e| {
+                eprintln!("failed to load data source config: {}", e);
+                DataSourceManager::empty()
+            })
+        });
+
+        // Test connection when active source changes or status is reset to Idle
+        cx.observe(&data_source_manager, |this, manager, cx| {
+            if let Some(config) = manager.read(cx).active_config().cloned() {
+                if manager.read(cx).status(&config.name) == ConnectionStatus::Idle {
+                    this.test_connection(config, cx);
+                }
+            }
+        })
+        .detach();
+
+        // Subscribe to file open events from the file tree
+        cx.subscribe_in(
+            &file_tree_panel,
+            window,
+            |this, _file_tree, event: &OpenFileEvent, window, cx| {
+                this.open_file(event.path.clone(), window, cx);
+            },
+        )
+        .detach();
+
+        // Subscribe to root changed events to clear editor tabs
+        cx.subscribe_in(
+            &file_tree_panel,
+            window,
+            |this, _file_tree, _event: &RootChangedEvent, _window, cx| {
+                this.editor_tabs.update(cx, |tabs, cx| {
+                    tabs.clear_tabs(cx);
+                });
+            },
+        )
+        .detach();
+
+        let weak_dock_area = dock_area.downgrade();
+
+        let editor_tabs = cx.new(|cx| {
+            let mut tabs = EditorTabs::new(data_source_manager.clone(), window, cx);
+            tabs.set_dock_area(weak_dock_area.clone());
+            tabs
+        });
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
+
+        // Set up left dock: file tree (panel mode to avoid title bar)
+        let left_panels = DockItem::panel(Arc::new(file_tree_panel.clone()));
+
+        // Set up center dock with our custom editor tabs
+        let center_panels = DockItem::panel(Arc::new(editor_tabs.clone()));
+
+        // Set up right dock: database connections
+        let database_panel =
+            cx.new(|cx| ConnectionPanel::new(data_source_manager.clone(), window, cx));
+        let right_panels = DockItem::panel(Arc::new(database_panel));
+
+        let results_panel = cx.new(|cx| {
+            let mut panel = ResultPanel::new(window, cx);
+            panel.set_dock_area(weak_dock_area.clone());
+            panel
+        });
+
+        // Set up bottom dock: query results
+        let bottom_panels = DockItem::panel(Arc::new(results_panel.clone()));
+
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(center_panels, window, cx);
+            dock_area.set_left_dock(left_panels, Some(px(240.)), true, window, cx);
+            dock_area.set_right_dock(right_panels, Some(px(260.)), true, window, cx);
+            dock_area.set_bottom_dock(bottom_panels, Some(px(200.)), true, window, cx);
+            dock_area.set_dock_collapsible(
+                gpui::Edges {
+                    left: true,
+                    bottom: true,
+                    right: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+        });
+
+        let mut this = Self {
+            file_tree_panel,
+            dock_area,
+            editor_tabs,
+            results_panel,
+            data_source_manager: data_source_manager.clone(),
+            focus_handle,
+        };
+
+        if let Some(file) = initial_file {
+            this.open_file(file, window, cx);
+        }
+
+        // Initial connection test
+        if let Some(config) = data_source_manager.read(cx).active_config().cloned() {
+            this.test_connection(config, cx);
+        }
+
+        this
+    }
+
+    fn test_connection(&mut self, config: DataSourceConfig, cx: &mut Context<Self>) {
+        let manager = self.data_source_manager.clone();
+        let config_name = config.name.clone();
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut source = create_data_source(&config)?;
+                    source.connect().await?;
+                    source.disconnect().await?;
+                    Ok::<(), DataSourceError>(())
+                })
+                .await;
+
+            cx.update_entity(&manager, move |manager, cx| {
+                match result {
+                    Ok(_) => {
+                        manager.set_status(&config_name, ConnectionStatus::Connected);
+                        manager.clear_last_error(&config_name);
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        manager.set_status(&config_name, ConnectionStatus::Failed);
+                        manager.set_last_error(&config_name, msg);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_tabs.update(cx, |editor_tabs, cx| {
+            editor_tabs.open_file(path, window, cx);
+        });
+    }
+
+    fn on_open_folder(&mut self, _: &OpenFolder, _window: &mut Window, cx: &mut Context<Self>) {
+        let options = gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open Folder".into()),
+        };
+        let rx = cx.prompt_for_paths(options);
+        let file_tree = self.file_tree_panel.clone();
+        cx.spawn(async move |_this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await {
+                if let Some(path) = paths.first() {
+                    cx.update_entity(&file_tree, |tree, cx| {
+                        tree.set_root(path.clone(), cx);
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn on_save_file(&mut self, _: &SaveFile, _window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_tabs.update(cx, |tabs, cx| {
+            if let Some(editor) = tabs.active_editor() {
+                editor.update(cx, |editor, cx| {
+                    editor.save(cx);
+                });
+            }
+        });
+    }
+
+    fn on_execute_query(&mut self, _: &ExecuteQuery, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((text, cursor, selected)) = self
+            .editor_tabs
+            .read(cx)
+            .active_editor()
+            .map(|editor| editor.read(cx).query_context(cx))
+        else {
+            window.open_alert_dialog(cx, |alert, _, _| {
+                alert
+                    .title("No Active Editor")
+                    .child("Open a SQL file before executing a query.")
+            });
+            return;
+        };
+
+        let queries = if !selected.trim().is_empty() {
+            queries_in_text(&selected)
+        } else {
+            queries_at_cursor(&text, cursor)
+        };
+
+        if queries.is_empty() {
+            window.open_alert_dialog(cx, |alert, _, _| {
+                alert
+                    .title("No Query Detected")
+                    .child("Place the cursor inside a SQL statement or select query text.")
+            });
+            return;
+        }
+
+        if queries.len() == 1 {
+            self.execute_single_query(queries[0].clone(), window, cx);
+            return;
+        }
+
+        let selector = cx.new(|cx| QuerySelector::new(queries, cx));
+        cx.subscribe_in(
+            &selector,
+            window,
+            |this, _selector, event: &QuerySelected, window, cx| {
+                window.close_dialog(cx);
+                this.execute_single_query(event.query.clone(), window, cx);
+            },
+        )
+        .detach();
+
+        window.open_alert_dialog(cx, {
+            let selector = selector.clone();
+            move |alert, _window, _cx| {
+                alert
+                    .title("Choose Query")
+                    .child(selector.clone())
+                    .footer(div())
+                    .close_button(true)
+            }
+        });
+        window.focus(&selector.read(cx).focus_handle(cx), cx);
+    }
+
+    fn execute_single_query(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(config) = self.data_source_manager.read(cx).active_config().cloned() else {
+            window.open_alert_dialog(cx, |alert, _, _| {
+                alert
+                    .title("No Active Connection")
+                    .child("Select a data source from the Connections panel.")
+            });
+            return;
+        };
+
+        let results_panel = self.results_panel.clone();
+        let data_source_manager = self.data_source_manager.clone();
+        let config_for_result = config.clone();
+        let config_name = config.name.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let query_for_task = query.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut source = create_data_source(&config)?;
+                    source.connect().await?;
+                    let result = source.execute_query(&query_for_task).await;
+                    source.disconnect().await?;
+                    result
+                })
+                .await;
+
+            let (result, succeeded, connection_failed) = match result {
+                Ok(result) => (result, true, false),
+                Err(error) => {
+                    let is_conn_fail = matches!(error, DataSourceError::ConnectionFailed(_));
+                    (error_result(error), false, is_conn_fail)
+                }
+            };
+
+            cx.update_entity(&results_panel, |panel, cx| {
+                panel.set_result(query, result, succeeded, Some(config_for_result), cx);
+            });
+
+            cx.update_entity(&data_source_manager, move |manager, cx| {
+                if connection_failed {
+                    manager.set_status(&config_name, ConnectionStatus::Failed);
+                } else {
+                    manager.set_status(&config_name, ConnectionStatus::Connected);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+impl Focusable for Workspace {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for Workspace {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_dark = cx.theme().is_dark();
+        let theme_icon = if is_dark {
+            IconName::Sun
+        } else {
+            IconName::Moon
+        };
+
+        v_flex()
+            .id("workspace")
+            .size_full()
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_open_folder))
+            .on_action(cx.listener(Self::on_save_file))
+            .on_action(cx.listener(Self::on_execute_query))
+            .child(
+                TitleBar::new().child(
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .child(
+                            div()
+                                .child("zql")
+                                .text_color(cx.theme().foreground)
+                                .font_weight(gpui::FontWeight::MEDIUM),
+                        )
+                        .child(
+                            Button::new("theme-toggle")
+                                .icon(theme_icon)
+                                .small()
+                                .ghost()
+                                .tooltip(if is_dark {
+                                    "Switch to Light"
+                                } else {
+                                    "Switch to Dark"
+                                })
+                                .on_click(move |_event, window, cx| {
+                                    let new_mode = if is_dark {
+                                        gpui_component::ThemeMode::Light
+                                    } else {
+                                        gpui_component::ThemeMode::Dark
+                                    };
+                                    gpui_component::Theme::change(new_mode, Some(window), cx);
+                                }),
+                        ),
+                ),
+            )
+            .child(self.dock_area.clone())
+            .children(Root::render_dialog_layer(window, cx))
+    }
+}
+
+fn error_result(error: DataSourceError) -> QueryResult {
+    let error_msg = match error {
+        DataSourceError::QueryFailed(msg) => msg,
+        _ => error.to_string(),
+    };
+    QueryResult {
+        columns: vec!["error".into()],
+        rows: vec![vec![error_msg]],
+        row_count: 1,
+        execution_time_ms: 0,
+    }
+}

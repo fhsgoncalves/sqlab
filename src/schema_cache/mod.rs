@@ -1,0 +1,272 @@
+pub mod db;
+pub mod models;
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use rusqlite::params;
+
+use crate::data_source::DataSourceConfig;
+use crate::data_source::DatabaseSchema;
+use crate::schema_cache::db::with_conn;
+use crate::schema_cache::models::{
+    ColumnRow, FunctionRow, IndexRow, SchemaRow, SequenceRow, TableRow, TriggerRow,
+    rows_to_schema, schema_to_rows,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaCacheError {
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+pub fn cache_key(config: &DataSourceConfig) -> String {
+    let mut hasher = DefaultHasher::new();
+    config.db_type.hash(&mut hasher);
+    config.host.hash(&mut hasher);
+    config.port.hash(&mut hasher);
+    config.database.hash(&mut hasher);
+    config.user.hash(&mut hasher);
+    config.schema.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
+pub fn save(
+    connection_key: &str,
+    connection_name: &str,
+    schema: &DatabaseSchema,
+) -> Result<(), SchemaCacheError> {
+    with_conn(|conn| {
+        db::clear_connection(conn, connection_key)?;
+
+        let (schemas, tables, columns, functions, sequences, indexes, triggers) =
+            schema_to_rows(connection_key, schema);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO cache_metadata (connection_key, connection_name, refreshed_at) VALUES (?1, ?2, ?3)",
+            params![connection_key, connection_name, now],
+        )?;
+
+        for s in &schemas {
+            conn.execute(
+                "INSERT INTO schemas (connection_key, name, owner) VALUES (?1, ?2, ?3)",
+                params![s.connection_key, s.name, s.owner],
+            )?;
+        }
+
+        for t in &tables {
+            conn.execute(
+                "INSERT INTO tables (connection_key, schema_name, name, kind) VALUES (?1, ?2, ?3, ?4)",
+                params![t.connection_key, t.schema_name, t.name, t.kind],
+            )?;
+        }
+
+        for c in &columns {
+            conn.execute(
+                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, nullable, ordinal) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.nullable, c.ordinal],
+            )?;
+        }
+
+        for f in &functions {
+            conn.execute(
+                "INSERT INTO functions (connection_key, schema_name, name, arguments, return_type) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![f.connection_key, f.schema_name, f.name, f.arguments, f.return_type],
+            )?;
+        }
+
+        for s in &sequences {
+            conn.execute(
+                "INSERT INTO sequences (connection_key, schema_name, name, data_type, start_value, min_value, max_value, increment_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![s.connection_key, s.schema_name, s.name, s.data_type, s.start_value, s.min_value, s.max_value, s.increment_by],
+            )?;
+        }
+
+        for i in &indexes {
+            conn.execute(
+                "INSERT INTO indexes (connection_key, schema_name, table_name, name, is_unique, is_primary, columns) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![i.connection_key, i.schema_name, i.table_name, i.name, i.is_unique, i.is_primary, i.columns],
+            )?;
+        }
+
+        for t in &triggers {
+            conn.execute(
+                "INSERT INTO triggers (connection_key, schema_name, table_name, name, event, timing, definition) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![t.connection_key, t.schema_name, t.table_name, t.name, t.event, t.timing, t.definition],
+            )?;
+        }
+
+        Ok(())
+    })
+}
+
+pub fn load(connection_key: &str) -> Result<Option<DatabaseSchema>, SchemaCacheError> {
+    with_conn(|conn| {
+        let schemas = load_schemas(conn, connection_key)?;
+        if schemas.is_empty() {
+            return Ok(None);
+        }
+
+        let tables = load_tables(conn, connection_key)?;
+        let columns = load_columns(conn, connection_key)?;
+        let functions = load_functions(conn, connection_key)?;
+        let sequences = load_sequences(conn, connection_key)?;
+        let indexes = load_indexes(conn, connection_key)?;
+        let triggers = load_triggers(conn, connection_key)?;
+
+        Ok(Some(rows_to_schema(
+            schemas, tables, columns, functions, sequences, indexes, triggers,
+        )))
+    })
+}
+
+pub fn clear(connection_key: &str) -> Result<(), SchemaCacheError> {
+    with_conn(|conn| {
+        db::clear_connection(conn, connection_key)?;
+        Ok(())
+    })
+}
+
+fn load_schemas(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<SchemaRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT connection_key, name, owner FROM schemas WHERE connection_key = ?1")?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(SchemaRow {
+            connection_key: row.get(0)?,
+            name: row.get(1)?,
+            owner: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn load_tables(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<TableRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT connection_key, schema_name, name, kind FROM tables WHERE connection_key = ?1")?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(TableRow {
+            connection_key: row.get(0)?,
+            schema_name: row.get(1)?,
+            name: row.get(2)?,
+            kind: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn load_columns(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<ColumnRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT connection_key, schema_name, table_name, name, data_type, nullable, ordinal FROM columns WHERE connection_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(ColumnRow {
+            connection_key: row.get(0)?,
+            schema_name: row.get(1)?,
+            table_name: row.get(2)?,
+            name: row.get(3)?,
+            data_type: row.get(4)?,
+            nullable: row.get(5)?,
+            ordinal: row.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn load_functions(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<FunctionRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT connection_key, schema_name, name, arguments, return_type FROM functions WHERE connection_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(FunctionRow {
+            connection_key: row.get(0)?,
+            schema_name: row.get(1)?,
+            name: row.get(2)?,
+            arguments: row.get(3)?,
+            return_type: row.get(4)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn load_sequences(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<SequenceRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT connection_key, schema_name, name, data_type, start_value, min_value, max_value, increment_by FROM sequences WHERE connection_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(SequenceRow {
+            connection_key: row.get(0)?,
+            schema_name: row.get(1)?,
+            name: row.get(2)?,
+            data_type: row.get(3)?,
+            start_value: row.get(4)?,
+            min_value: row.get(5)?,
+            max_value: row.get(6)?,
+            increment_by: row.get(7)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn load_indexes(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<IndexRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT connection_key, schema_name, table_name, name, is_unique, is_primary, columns FROM indexes WHERE connection_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(IndexRow {
+            connection_key: row.get(0)?,
+            schema_name: row.get(1)?,
+            table_name: row.get(2)?,
+            name: row.get(3)?,
+            is_unique: row.get(4)?,
+            is_primary: row.get(5)?,
+            columns: row.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn load_triggers(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<TriggerRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT connection_key, schema_name, table_name, name, event, timing, definition FROM triggers WHERE connection_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(TriggerRow {
+            connection_key: row.get(0)?,
+            schema_name: row.get(1)?,
+            table_name: row.get(2)?,
+            name: row.get(3)?,
+            event: row.get(4)?,
+            timing: row.get(5)?,
+            definition: row.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
