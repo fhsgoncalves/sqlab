@@ -514,19 +514,21 @@ impl ConnectionPanel {
 
     fn node_icon(id: &str) -> IconName {
         if id.contains(":col:") {
-            if id.contains(":pk") {
+            if id.contains(":pk:") {
                 IconName::CircleCheck
-            } else if id.contains(":fk") {
+            } else if id.contains(":fk:") {
                 IconName::ArrowRight
             } else {
-                IconName::CircleCheck
+                IconName::Minimize
             }
-        } else if id.contains(":table:") || id.contains(":view:") {
+        } else if id.contains(":view:") {
+            IconName::Inbox
+        } else if id.contains(":table:") {
             IconName::File
         } else if id.contains(":func:") {
             IconName::Cpu
         } else if id.contains(":seq:") {
-            IconName::ArrowRight
+            IconName::ArrowDown
         } else if id.contains(":idx:") {
             IconName::Search
         } else if id.contains(":trig:") {
@@ -540,6 +542,31 @@ impl ConnectionPanel {
             IconName::Folder
         } else {
             IconName::HardDrive
+        }
+    }
+
+    fn node_icon_path(id: &str) -> Option<&'static str> {
+        if id.contains(":col:") {
+            if id.contains(":pk:") {
+                Some("icons/primary_key.svg")
+            } else if id.contains(":fk:") {
+                Some("icons/column.svg")
+            } else {
+                Some("icons/column.svg")
+            }
+        } else if id.contains(":table:") {
+            Some("icons/table.svg")
+        } else if id.contains(":view:") {
+            Some("icons/table.svg")
+        } else if id.contains(":schema:") {
+            Some("icons/schema.svg")
+        } else if id.contains(":schemas") || id.ends_with(":tables") || id.ends_with(":views")
+            || id.ends_with(":sequences") || id.ends_with(":indexes") || id.ends_with(":triggers")
+            || id.ends_with(":functions")
+        {
+            Some("icons/schema.svg")
+        } else {
+            None
         }
     }
 
@@ -687,7 +714,7 @@ impl Render for ConnectionPanel {
                     .child(
                         div()
                             .id(format!("connection-expand-icon-{}", row_name))
-                            .size(px(14.))
+                            .size(px(16.))
                             .flex_none()
                             .child(
                                 Icon::new(if is_expanded {
@@ -695,7 +722,7 @@ impl Render for ConnectionPanel {
                                 } else {
                                     IconName::ArrowRight
                                 })
-                                .size(px(12.))
+                                .size(px(14.))
                                 .text_color(cx.theme().muted_foreground),
                             )
                             .cursor_pointer()
@@ -712,9 +739,18 @@ impl Render for ConnectionPanel {
                         div()
                             .id(format!("connection-icon-{}", row_name))
                             .child(
-                                Icon::new(IconName::HardDrive)
-                                    .size(px(14.))
-                                    .text_color(status_color),
+                                if config.db_type == "postgres" {
+                                    Icon::new(IconName::File)
+                                        .path("icons/pg.svg")
+                                        .size(px(28.))
+                                        .text_color(rgb(0x336791))
+                                        .into_any_element()
+                                } else {
+                                    Icon::new(IconName::HardDrive)
+                                        .size(px(26.))
+                                        .text_color(status_color)
+                                        .into_any_element()
+                                },
                             ),
                     )
                     .child(
@@ -725,7 +761,7 @@ impl Render for ConnectionPanel {
                             .id(format!("connection-label-{}", row_name))
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_base()
                                     .truncate()
                                     .when(is_active, |this| this.font_weight(gpui::FontWeight::BOLD))
                                     .child(config.name.clone()),
@@ -847,6 +883,7 @@ impl Render for ConnectionPanel {
                         let label = item.label.to_string();
                         let is_selected = self.selected_node.as_deref() == Some(&id);
                         let icon = Self::node_icon(&id);
+                        let icon_path = Self::node_icon_path(&id);
                         let is_leaf = Self::is_leaf_node(&id);
                         let is_node_expanded = item.is_expanded();
                         let id_click = id.clone();
@@ -886,7 +923,7 @@ impl Render for ConnectionPanel {
                                                         } else {
                                                             IconName::ArrowRight
                                                         })
-                                                        .size(px(12.))
+                                                        .size(px(14.))
                                                         .text_color(cx.theme().muted_foreground)
                                                         .into_any_element()
                                                     } else {
@@ -906,10 +943,25 @@ impl Render for ConnectionPanel {
                                                 })),
                                         )
                                         .child(
-                                            Icon::new(icon)
-                                                .size(px(14.))
-                                                .flex_none()
-                                                .text_color(cx.theme().muted_foreground),
+                                            if let Some(path) = icon_path {
+                                                let icon_color = if cx.theme().is_dark() {
+                                                    cx.theme().muted_foreground
+                                                } else {
+                                                    cx.theme().foreground
+                                                };
+                                                Icon::new(IconName::File)
+                                                    .path(path)
+                                                    .size(px(16.))
+                                                    .flex_none()
+                                                    .text_color(icon_color)
+                                                    .into_any_element()
+                                            } else {
+                                                Icon::new(icon)
+                                                    .size(px(16.))
+                                                    .flex_none()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .into_any_element()
+                                            },
                                         )
                                         .child(
                                             h_flex()
