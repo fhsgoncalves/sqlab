@@ -14,14 +14,12 @@ use gpui_component::{
 };
 
 use crate::data_source::manager::DataSourceManager;
-use crate::data_source::{
-    create_data_source, ConnectionStatus, DataSourceConfig, DataSourceError, QueryResult,
-};
+use crate::data_source::{ConnectionStatus, DataSourceError, QueryResult, create_data_source};
 use crate::ui::panels::connection::ConnectionPanel;
+use crate::ui::panels::file_editor::query_detector::{queries_at_cursor, queries_in_text};
 use crate::ui::panels::file_editor::{
     EditorTabs, ExecuteQuery, QuerySelected, QuerySelector, SaveFile,
 };
-use crate::ui::panels::file_editor::query_detector::{queries_at_cursor, queries_in_text};
 use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
 use crate::ui::panels::result::ResultPanel;
 
@@ -53,16 +51,6 @@ impl Workspace {
                 DataSourceManager::empty()
             })
         });
-
-        // Test connection when active source changes or status is reset to Idle
-        cx.observe(&data_source_manager, |this, manager, cx| {
-            if let Some(config) = manager.read(cx).active_config().cloned() {
-                if manager.read(cx).status(&config.name) == ConnectionStatus::Idle {
-                    this.test_connection(config, cx);
-                }
-            }
-        })
-        .detach();
 
         // Subscribe to file open events from the file tree
         cx.subscribe_in(
@@ -146,44 +134,7 @@ impl Workspace {
             this.open_file(file, window, cx);
         }
 
-        // Initial connection test
-        if let Some(config) = data_source_manager.read(cx).active_config().cloned() {
-            this.test_connection(config, cx);
-        }
-
         this
-    }
-
-    fn test_connection(&mut self, config: DataSourceConfig, cx: &mut Context<Self>) {
-        let manager = self.data_source_manager.clone();
-        let config_name = config.name.clone();
-        cx.spawn(async move |_this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut source = create_data_source(&config)?;
-                    source.connect().await?;
-                    source.disconnect().await?;
-                    Ok::<(), DataSourceError>(())
-                })
-                .await;
-
-            cx.update_entity(&manager, move |manager, cx| {
-                match result {
-                    Ok(_) => {
-                        manager.set_status(&config_name, ConnectionStatus::Connected);
-                        manager.clear_last_error(&config_name);
-                    }
-                    Err(e) => {
-                        let msg = e.to_string();
-                        manager.set_status(&config_name, ConnectionStatus::Failed);
-                        manager.set_last_error(&config_name, msg);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -287,7 +238,7 @@ impl Workspace {
             window.open_alert_dialog(cx, |alert, _, _| {
                 alert
                     .title("No Active Connection")
-                    .child("Select a data source from the Connections panel.")
+                    .child("Activate a database connection before running queries.")
             });
             return;
         };

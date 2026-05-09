@@ -1,977 +1,1470 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ZQL — SQL Editor Built in Rust</title>
-  <meta name="description" content="ZQL is a blazing-fast, memory-efficient SQL editor powered by GPUI. Open source. Built in Rust." />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Ubuntu+Mono:wght@400;700&family=Ubuntu:wght@400;500;700&display=swap" rel="stylesheet" />
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ZQL — SQL Editor Built in Rust</title>
+        <meta
+            name="description"
+            content="ZQL is a blazing-fast, memory-efficient SQL editor powered by GPUI. Open source. Built in Rust."
+        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Ubuntu+Mono:wght@400;700&family=Ubuntu:wght@400;500;700&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
 
-    :root {
-      --bg:        #0c0a08;
-      --surface:   #131109;
-      --border:    #241e14;
-      --border2:   #352c1a;
-      --accent:    #e8611a;
-      --accent2:   #f0a050;
-      --muted:     #5a5040;
-      --text:      #f0ebe0;
-      --text-dim:  #9a8870;
-      --mono:      'Ubuntu Mono', monospace;
-      --sans:      'Ubuntu', sans-serif;
-    }
+            :root {
+                --bg: #0c0a08;
+                --surface: #131109;
+                --border: #241e14;
+                --border2: #352c1a;
+                --accent: #e8611a;
+                --accent2: #f0a050;
+                --muted: #5a5040;
+                --text: #f0ebe0;
+                --text-dim: #9a8870;
+                --mono: "Ubuntu Mono", monospace;
+                --sans: "Ubuntu", sans-serif;
+            }
 
-    html { scroll-behavior: smooth; }
+            html {
+                scroll-behavior: smooth;
+            }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--sans);
-      overflow-x: hidden;
-      min-height: 100vh;
-    }
+            body {
+                background: var(--bg);
+                color: var(--text);
+                font-family: var(--sans);
+                overflow-x: hidden;
+                min-height: 100vh;
+            }
 
-    /* ── NOISE OVERLAY ── */
-    body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
-      opacity: 0.025;
-      pointer-events: none;
-      z-index: 0;
-    }
+            /* ── NOISE OVERLAY ── */
+            body::before {
+                content: "";
+                position: fixed;
+                inset: 0;
+                background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+                opacity: 0.025;
+                pointer-events: none;
+                z-index: 0;
+            }
 
-    /* ── GLOW ORBS ── */
-    .orb {
-      position: fixed;
-      border-radius: 50%;
-      filter: blur(120px);
-      pointer-events: none;
-      z-index: 0;
-      opacity: 0.12;
-    }
-    .orb-1 { width: 600px; height: 600px; background: var(--accent); top: -200px; left: -100px; animation: drift1 18s ease-in-out infinite alternate; }
-    .orb-2 { width: 500px; height: 500px; background: var(--accent2); bottom: -150px; right: -100px; animation: drift2 22s ease-in-out infinite alternate; }
+            /* ── GLOW ORBS ── */
+            .orb {
+                position: fixed;
+                border-radius: 50%;
+                filter: blur(120px);
+                pointer-events: none;
+                z-index: 0;
+                opacity: 0.12;
+            }
+            .orb-1 {
+                width: 600px;
+                height: 600px;
+                background: var(--accent);
+                top: -200px;
+                left: -100px;
+                animation: drift1 18s ease-in-out infinite alternate;
+            }
+            .orb-2 {
+                width: 500px;
+                height: 500px;
+                background: var(--accent2);
+                bottom: -150px;
+                right: -100px;
+                animation: drift2 22s ease-in-out infinite alternate;
+            }
 
-    @keyframes drift1 { from { transform: translate(0,0); } to { transform: translate(80px, 60px); } }
-    @keyframes drift2 { from { transform: translate(0,0); } to { transform: translate(-60px, -80px); } }
+            @keyframes drift1 {
+                from {
+                    transform: translate(0, 0);
+                }
+                to {
+                    transform: translate(80px, 60px);
+                }
+            }
+            @keyframes drift2 {
+                from {
+                    transform: translate(0, 0);
+                }
+                to {
+                    transform: translate(-60px, -80px);
+                }
+            }
 
-    /* ── NAV ── */
-    nav {
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 1.2rem 3rem;
-      border-bottom: 1px solid var(--border);
-      background: rgba(10,10,12,0.7);
-      backdrop-filter: blur(16px);
-    }
+            /* ── NAV ── */
+            nav {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                z-index: 100;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 1.2rem 3rem;
+                border-bottom: 1px solid var(--border);
+                background: rgba(10, 10, 12, 0.7);
+                backdrop-filter: blur(16px);
+            }
 
-    .nav-logo {
-      font-family: var(--mono);
-      font-size: 1.3rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: var(--accent);
-    }
-    .nav-logo span { color: var(--accent); }
+            .nav-logo {
+                font-family: var(--mono);
+                font-size: 1.3rem;
+                font-weight: 700;
+                letter-spacing: -0.02em;
+                color: var(--accent);
+            }
+            .nav-logo span {
+                color: var(--accent);
+            }
 
-    .nav-links { display: flex; gap: 2rem; align-items: center; }
-    .nav-links a:not(.btn) {
-      font-size: 0.85rem;
-      color: var(--text-dim);
-      text-decoration: none;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      transition: color 0.2s;
-    }
-    .nav-links a:not(.btn):hover { color: var(--accent); }
+            .nav-links {
+                display: flex;
+                gap: 2rem;
+                align-items: center;
+            }
+            .nav-links a:not(.btn) {
+                font-size: 0.85rem;
+                color: var(--text-dim);
+                text-decoration: none;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                transition: color 0.2s;
+            }
+            .nav-links a:not(.btn):hover {
+                color: var(--accent);
+            }
 
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.55rem 1.2rem;
-      border-radius: 6px;
-      font-family: var(--mono);
-      font-size: 0.8rem;
-      font-weight: 700;
-      text-decoration: none;
-      letter-spacing: 0.04em;
-      cursor: pointer;
-      border: none;
-      transition: all 0.2s;
-    }
-    .btn-ghost {
-      background: transparent;
-      border: 1px solid var(--border2);
-      color: var(--text-dim);
-    }
-    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-    .btn-primary {
-      background: var(--accent);
-      color: #000000 !important;
-      font-weight: 700;
-    }
-    .nav-links .btn-primary {
-      color: #000000 !important;
-    }
-    .btn-primary:hover { background: #f07030; transform: translateY(-1px); box-shadow: 0 0 24px rgba(232,97,26,0.4); }
+            .btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.55rem 1.2rem;
+                border-radius: 6px;
+                font-family: var(--mono);
+                font-size: 0.8rem;
+                font-weight: 700;
+                text-decoration: none;
+                letter-spacing: 0.04em;
+                cursor: pointer;
+                border: none;
+                transition: all 0.2s;
+            }
+            .btn-ghost {
+                background: transparent;
+                border: 1px solid var(--border2);
+                color: var(--text-dim);
+            }
+            .btn-ghost:hover {
+                border-color: var(--accent);
+                color: var(--accent);
+            }
+            .btn-primary {
+                background: var(--accent);
+                color: #000000 !important;
+                font-weight: 700;
+            }
+            .nav-links .btn-primary {
+                color: #000000 !important;
+            }
+            .btn-primary:hover {
+                background: #f07030;
+                transform: translateY(-1px);
+                box-shadow: 0 0 24px rgba(232, 97, 26, 0.4);
+            }
 
-    /* ── HERO ── */
-    .hero {
-      position: relative;
-      z-index: 1;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 8rem 2rem 4rem;
-    }
+            /* ── HERO ── */
+            .hero {
+                position: relative;
+                z-index: 1;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 8rem 2rem 4rem;
+            }
 
-    .hero-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      color: var(--accent);
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      border: 1px solid rgba(232,97,26,0.3);
-      border-radius: 99px;
-      padding: 0.35rem 1rem;
-      margin-bottom: 2.5rem;
-      background: rgba(232,97,26,0.06);
-      animation: fadeUp 0.8s ease both;
-    }
-    .badge-dot {
-      width: 6px; height: 6px;
-      background: var(--accent);
-      border-radius: 50%;
-      animation: pulse 2s ease infinite;
-    }
-    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+            .hero-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+                font-family: var(--mono);
+                font-size: 0.72rem;
+                color: var(--accent);
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+                border: 1px solid rgba(232, 97, 26, 0.3);
+                border-radius: 99px;
+                padding: 0.35rem 1rem;
+                margin-bottom: 2.5rem;
+                background: rgba(232, 97, 26, 0.06);
+                animation: fadeUp 0.8s ease both;
+            }
+            .badge-dot {
+                width: 6px;
+                height: 6px;
+                background: var(--accent);
+                border-radius: 50%;
+                animation: pulse 2s ease infinite;
+            }
+            @keyframes pulse {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0.3;
+                }
+            }
 
-    .hero h1 {
-      font-size: clamp(4rem, 12vw, 9rem);
-      font-weight: 800;
-      letter-spacing: -0.04em;
-      line-height: 0.95;
-      margin-bottom: 0.3em;
-      animation: fadeUp 0.8s 0.1s ease both;
-    }
-    .hero h1 .z { color: var(--accent); }
-    .hero h1 .ql { color: var(--accent); }
+            .hero h1 {
+                font-size: clamp(4rem, 12vw, 9rem);
+                font-weight: 800;
+                letter-spacing: -0.04em;
+                line-height: 0.95;
+                margin-bottom: 0.3em;
+                animation: fadeUp 0.8s 0.1s ease both;
+            }
+            .hero h1 .z {
+                color: var(--accent);
+            }
+            .hero h1 .ql {
+                color: var(--accent);
+            }
 
-    .hero-sub {
-      font-size: clamp(1rem, 2.5vw, 1.3rem);
-      color: var(--text-dim);
-      max-width: 560px;
-      line-height: 1.6;
-      margin-bottom: 2.5rem;
-      animation: fadeUp 0.8s 0.2s ease both;
-    }
-    .hero-sub strong { color: var(--text); }
+            .hero-sub {
+                font-size: clamp(1rem, 2.5vw, 1.3rem);
+                color: var(--text-dim);
+                max-width: 560px;
+                line-height: 1.6;
+                margin-bottom: 2.5rem;
+                animation: fadeUp 0.8s 0.2s ease both;
+            }
+            .hero-sub strong {
+                color: var(--text);
+            }
 
-    .hero-actions {
-      display: flex;
-      gap: 1rem;
-      flex-wrap: wrap;
-      justify-content: center;
-      animation: fadeUp 0.8s 0.3s ease both;
-    }
-    .btn-lg { padding: 0.8rem 2rem; font-size: 0.9rem; border-radius: 8px; }
+            .hero-actions {
+                display: flex;
+                gap: 1rem;
+                flex-wrap: wrap;
+                justify-content: center;
+                animation: fadeUp 0.8s 0.3s ease both;
+            }
+            .btn-lg {
+                padding: 0.8rem 2rem;
+                font-size: 0.9rem;
+                border-radius: 8px;
+            }
 
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(20px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
+            @keyframes fadeUp {
+                from {
+                    opacity: 0;
+                    transform: translateY(20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
 
-    /* ── APP WINDOW ── */
-    .app-shot-wrap {
-      position: relative;
-      z-index: 1;
-      width: 100%;
-      max-width: 1180px;
-      margin: 5rem auto 0;
-      animation: fadeUp 0.9s 0.4s ease both;
-    }
-    .app-shot-wrap.container { max-width: 1180px; }
-    .app-shot {
-      background: #202332;
-      border: 1px solid #52586f;
-      border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 34px 90px rgba(0,0,0,0.48), 0 0 0 1px rgba(255,255,255,0.04), inset 0 1px 0 rgba(255,255,255,0.08);
-      color: #c8d0ed;
-      font-family: var(--sans);
-    }
-    .app-titlebar {
-      display: flex;
-      align-items: center;
-      height: 38px;
-      gap: 11px;
-      padding: 0 15px;
-      background: #1c1f2b;
-      border-bottom: 1px solid #3a4054;
-    }
-    .dot { width: 13px; height: 13px; border-radius: 50%; }
-    .dot-r { background: #ff5f57; }
-    .dot-y { background: #febc2e; }
-    .dot-g { background: #28c840; }
-    .app-name {
-      margin-left: 16px;
-      color: #cbd4f4;
-      font-size: 1rem;
-      font-weight: 700;
-    }
-    .app-theme { margin-left: auto; color: #b9c2e4; font-size: 1.25rem; }
+            /* ── APP WINDOW ── */
+            .app-shot-wrap {
+                position: relative;
+                z-index: 1;
+                width: 100%;
+                max-width: 1180px;
+                margin: 5rem auto 0;
+                animation: fadeUp 0.9s 0.4s ease both;
+            }
+            .app-shot-wrap.container {
+                max-width: 1180px;
+            }
+            .app-shot {
+                background: #202332;
+                border: 1px solid #52586f;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow:
+                    0 34px 90px rgba(0, 0, 0, 0.48),
+                    0 0 0 1px rgba(255, 255, 255, 0.04),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+                color: #c8d0ed;
+                font-family: var(--sans);
+            }
+            .app-titlebar {
+                display: flex;
+                align-items: center;
+                height: 38px;
+                gap: 11px;
+                padding: 0 15px;
+                background: #1c1f2b;
+                border-bottom: 1px solid #3a4054;
+            }
+            .dot {
+                width: 13px;
+                height: 13px;
+                border-radius: 50%;
+            }
+            .dot-r {
+                background: #ff5f57;
+            }
+            .dot-y {
+                background: #febc2e;
+            }
+            .dot-g {
+                background: #28c840;
+            }
+            .app-name {
+                margin-left: 16px;
+                color: #cbd4f4;
+                font-size: 1rem;
+                font-weight: 700;
+            }
+            .app-theme {
+                margin-left: auto;
+                color: #b9c2e4;
+                font-size: 1.25rem;
+            }
 
-    .app-body {
-      display: grid;
-      grid-template-columns: 270px minmax(0, 1fr) 300px;
-      min-height: 645px;
-    }
-    .app-sidebar,
-    .app-connections {
-      background: #222534;
-      overflow: hidden;
-    }
-    .app-sidebar { border-right: 1px solid #43495f; }
-    .app-connections { border-left: 1px solid #43495f; }
-    .tree-title,
-    .connections-title {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      height: 40px;
-      padding: 0 14px;
-      color: #c9d1ef;
-      font-size: 1rem;
-      font-weight: 700;
-    }
-    .connections-title { justify-content: space-between; }
-    .tree-list,
-    .schema-list {
-      list-style: none;
-      padding: 4px 4px 0;
-      font-size: 0.95rem;
-      font-weight: 700;
-    }
-    .tree-item,
-    .schema-item,
-    .conn-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-height: 32px;
-      border-radius: 6px;
-      padding: 0 10px;
-      color: #c9d1ef;
-      white-space: nowrap;
-    }
-    .tree-item.active,
-    .schema-item.active { background: rgba(255,255,255,0.035); }
-    .folder-icon,
-    .file-icon,
-    .sql-icon {
-      width: 14px;
-      height: 12px;
-      flex: 0 0 auto;
-      border: 2px solid #b7c1e5;
-      border-radius: 3px;
-      opacity: 0.95;
-    }
-    .folder-icon { position: relative; }
-    .folder-icon::before {
-      content: '';
-      position: absolute;
-      left: -2px;
-      top: -7px;
-      width: 9px;
-      height: 6px;
-      border: 2px solid #b7c1e5;
-      border-bottom: 0;
-      border-radius: 3px 3px 0 0;
-      background: #222534;
-    }
-    .file-icon { height: 16px; border-radius: 3px; }
-    .file-icon.small { width: 13px; height: 15px; }
-    .sql-icon {
-      position: relative;
-      height: 15px;
-      border-width: 0 2px 2px;
-      border-radius: 0 0 7px 7px;
-    }
-    .sql-icon::before,
-    .sql-icon::after {
-      content: '';
-      position: absolute;
-      left: -2px;
-      width: 14px;
-      height: 6px;
-      border: 2px solid #b7c1e5;
-      border-radius: 50%;
-      background: #222534;
-    }
-    .sql-icon::before { top: -4px; }
-    .sql-icon::after { top: 4px; }
-    .app-main {
-      display: grid;
-      grid-template-rows: 40px minmax(280px, 1fr) 232px;
-      min-width: 0;
-      background: #202332;
-    }
-    .editor-tabs,
-    .result-tabs {
-      display: flex;
-      align-items: stretch;
-      background: #202332;
-      border-bottom: 1px solid #43495f;
-      min-width: 0;
-    }
-    .tab {
-      display: flex;
-      align-items: center;
-      gap: 11px;
-      padding: 0 22px;
-      border-right: 1px solid #2b3041;
-      color: #c6cdec;
-      font-weight: 700;
-      min-width: 160px;
-      background: #232638;
-    }
-    .tab.inactive { background: #202332; color: #aeb7d8; }
-    .tab-actions {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      padding-right: 13px;
-      color: #c6cdec;
-      font-weight: 700;
-    }
-    .editor {
-      position: relative;
-      overflow: hidden;
-      border-bottom: 1px solid #43495f;
-      font-family: var(--mono);
-      font-size: clamp(0.9rem, 1.8vw, 1.28rem);
-      line-height: 1.65;
-      color: #c9d1ef;
-    }
-    .code-line {
-      display: grid;
-      grid-template-columns: 72px 1fr;
-      min-height: 33px;
-    }
-    .line-no {
-      padding-right: 22px;
-      text-align: right;
-      color: #a0a8c0;
-      user-select: none;
-    }
-    .code {
-      padding-left: 34px;
-      border-left: 1px solid rgba(255,255,255,0.08);
-      white-space: pre;
-    }
-    .code-line.active { background: rgba(143,150,180,0.16); }
-    .kw { color: #f08383; }
-    .id { color: #cbd3ee; }
-    .fn { color: #96b4f4; }
-    .str { color: #e6db83; }
-    .num { color: #a2de79; }
-    .result-pane { min-width: 0; overflow: hidden; }
-    .result-tabs {
-      height: 42px;
-      border-top: 0;
-      border-bottom: 1px solid #43495f;
-    }
-    .result-tabs .tab {
-      min-width: 110px;
-      padding: 0 18px;
-      font-size: 0.95rem;
-    }
-    .result-toolbar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
-      height: 49px;
-      padding: 0 14px;
-      border-bottom: 1px solid #43495f;
-      color: #9ca4bc;
-      font-weight: 700;
-      overflow: hidden;
-    }
-    .pill {
-      flex: 0 0 auto;
-      padding: 7px 12px;
-      border-radius: 8px;
-      border: 1px solid #444a61;
-      background: #282d42;
-      color: #cbd3ee;
-    }
-    .query-preview {
-      min-width: 0;
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-      font-family: var(--mono);
-    }
-    .results-grid {
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed;
-      font-size: 0.96rem;
-      font-weight: 700;
-      color: #c5cdec;
-    }
-    .results-grid th,
-    .results-grid td {
-      height: 36px;
-      border-right: 1px solid #444a61;
-      border-bottom: 1px solid #444a61;
-      padding: 0 10px;
-      text-align: left;
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-    .results-grid th { color: #9ea6bd; background: #272b3d; }
-    .results-grid tr:nth-child(even) td { background: rgba(255,255,255,0.035); }
-    .conn-list { padding: 14px 12px 0; }
-    .conn-row {
-      display: grid;
-      grid-template-columns: 16px 24px 1fr 24px;
-      gap: 10px;
-      min-height: 58px;
-      margin-bottom: 6px;
-      padding: 0;
-    }
-    .status-dot {
-      width: 11px;
-      height: 11px;
-      border-radius: 99px;
-      background: #a7adbd;
-      align-self: center;
-    }
-    .status-dot.green { background: #19c463; }
-    .db-icon {
-      width: 16px;
-      height: 14px;
-      align-self: center;
-      border: 2px solid currentColor;
-      border-radius: 4px 4px 3px 3px;
-      color: #a7adbd;
-    }
-    .db-icon.green { color: #19c463; }
-    .conn-name { color: #d2d9f5; font-weight: 700; }
-    .conn-detail {
-      margin-top: 3px;
-      color: #969db4;
-      font-size: 0.78rem;
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-      max-width: 190px;
-    }
-    .schema-list { padding-left: 16px; }
-    .schema-list .schema-list { padding-left: 24px; padding-top: 3px; }
-    .schema-list.root { padding-left: 24px; }
-    .schema-item { min-height: 30px; padding-right: 4px; overflow: hidden; }
-    .schema-item span:last-child {
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .column-dot {
-      width: 14px;
-      height: 14px;
-      border: 2px solid #b7c1e5;
-      border-radius: 99px;
-      flex: 0 0 auto;
-      position: relative;
-    }
-    .column-dot::after {
-      content: '';
-      position: absolute;
-      left: 3px;
-      top: 3px;
-      width: 4px;
-      height: 7px;
-      border-right: 2px solid #b7c1e5;
-      border-bottom: 2px solid #b7c1e5;
-      transform: rotate(45deg);
-    }
+            .app-body {
+                display: grid;
+                grid-template-columns: 270px minmax(0, 1fr) 300px;
+                min-height: 645px;
+            }
+            .app-sidebar,
+            .app-connections {
+                background: #222534;
+                overflow: hidden;
+            }
+            .app-sidebar {
+                border-right: 1px solid #43495f;
+            }
+            .app-connections {
+                border-left: 1px solid #43495f;
+            }
+            .tree-title,
+            .connections-title {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                height: 40px;
+                padding: 0 14px;
+                color: #c9d1ef;
+                font-size: 1rem;
+                font-weight: 700;
+            }
+            .connections-title {
+                justify-content: space-between;
+            }
+            .tree-list,
+            .schema-list {
+                list-style: none;
+                padding: 4px 4px 0;
+                font-size: 0.95rem;
+                font-weight: 700;
+            }
+            .tree-item,
+            .schema-item,
+            .conn-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                min-height: 32px;
+                border-radius: 6px;
+                padding: 0 10px;
+                color: #c9d1ef;
+                white-space: nowrap;
+            }
+            .tree-item.active,
+            .schema-item.active {
+                background: rgba(255, 255, 255, 0.035);
+            }
+            .folder-icon,
+            .file-icon,
+            .sql-icon {
+                width: 14px;
+                height: 12px;
+                flex: 0 0 auto;
+                border: 2px solid #b7c1e5;
+                border-radius: 3px;
+                opacity: 0.95;
+            }
+            .folder-icon {
+                position: relative;
+            }
+            .folder-icon::before {
+                content: "";
+                position: absolute;
+                left: -2px;
+                top: -7px;
+                width: 9px;
+                height: 6px;
+                border: 2px solid #b7c1e5;
+                border-bottom: 0;
+                border-radius: 3px 3px 0 0;
+                background: #222534;
+            }
+            .file-icon {
+                height: 16px;
+                border-radius: 3px;
+            }
+            .file-icon.small {
+                width: 13px;
+                height: 15px;
+            }
+            .sql-icon {
+                position: relative;
+                height: 15px;
+                border-width: 0 2px 2px;
+                border-radius: 0 0 7px 7px;
+            }
+            .sql-icon::before,
+            .sql-icon::after {
+                content: "";
+                position: absolute;
+                left: -2px;
+                width: 14px;
+                height: 6px;
+                border: 2px solid #b7c1e5;
+                border-radius: 50%;
+                background: #222534;
+            }
+            .sql-icon::before {
+                top: -4px;
+            }
+            .sql-icon::after {
+                top: 4px;
+            }
+            .app-main {
+                display: grid;
+                grid-template-rows: 40px minmax(280px, 1fr) 232px;
+                min-width: 0;
+                background: #202332;
+            }
+            .editor-tabs,
+            .result-tabs {
+                display: flex;
+                align-items: stretch;
+                background: #202332;
+                border-bottom: 1px solid #43495f;
+                min-width: 0;
+            }
+            .tab {
+                display: flex;
+                align-items: center;
+                gap: 11px;
+                padding: 0 22px;
+                border-right: 1px solid #2b3041;
+                color: #c6cdec;
+                font-weight: 700;
+                min-width: 160px;
+                background: #232638;
+            }
+            .tab.inactive {
+                background: #202332;
+                color: #aeb7d8;
+            }
+            .tab-actions {
+                margin-left: auto;
+                display: flex;
+                align-items: center;
+                gap: 20px;
+                padding-right: 13px;
+                color: #c6cdec;
+                font-weight: 700;
+            }
+            .editor {
+                position: relative;
+                overflow: hidden;
+                border-bottom: 1px solid #43495f;
+                font-family: var(--mono);
+                font-size: clamp(0.9rem, 1.8vw, 1.28rem);
+                line-height: 1.65;
+                color: #c9d1ef;
+            }
+            .code-line {
+                display: grid;
+                grid-template-columns: 72px 1fr;
+                min-height: 33px;
+            }
+            .line-no {
+                padding-right: 22px;
+                text-align: right;
+                color: #a0a8c0;
+                user-select: none;
+            }
+            .code {
+                padding-left: 34px;
+                border-left: 1px solid rgba(255, 255, 255, 0.08);
+                white-space: pre;
+            }
+            .code-line.active {
+                background: rgba(143, 150, 180, 0.16);
+            }
+            .kw {
+                color: #f08383;
+            }
+            .id {
+                color: #cbd3ee;
+            }
+            .fn {
+                color: #96b4f4;
+            }
+            .str {
+                color: #e6db83;
+            }
+            .num {
+                color: #a2de79;
+            }
+            .result-pane {
+                min-width: 0;
+                overflow: hidden;
+            }
+            .result-tabs {
+                height: 42px;
+                border-top: 0;
+                border-bottom: 1px solid #43495f;
+            }
+            .result-tabs .tab {
+                min-width: 110px;
+                padding: 0 18px;
+                font-size: 0.95rem;
+            }
+            .result-toolbar {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                min-width: 0;
+                height: 49px;
+                padding: 0 14px;
+                border-bottom: 1px solid #43495f;
+                color: #9ca4bc;
+                font-weight: 700;
+                overflow: hidden;
+            }
+            .pill {
+                flex: 0 0 auto;
+                padding: 7px 12px;
+                border-radius: 8px;
+                border: 1px solid #444a61;
+                background: #282d42;
+                color: #cbd3ee;
+            }
+            .query-preview {
+                min-width: 0;
+                overflow: hidden;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+                font-family: var(--mono);
+            }
+            .results-grid {
+                width: 100%;
+                border-collapse: collapse;
+                table-layout: fixed;
+                font-size: 0.96rem;
+                font-weight: 700;
+                color: #c5cdec;
+            }
+            .results-grid th,
+            .results-grid td {
+                height: 36px;
+                border-right: 1px solid #444a61;
+                border-bottom: 1px solid #444a61;
+                padding: 0 10px;
+                text-align: left;
+                overflow: hidden;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+            }
+            .results-grid th {
+                color: #9ea6bd;
+                background: #272b3d;
+            }
+            .results-grid tr:nth-child(even) td {
+                background: rgba(255, 255, 255, 0.035);
+            }
+            .conn-list {
+                padding: 14px 12px 0;
+            }
+            .conn-row {
+                display: grid;
+                grid-template-columns: 16px 24px 1fr 24px;
+                gap: 10px;
+                min-height: 58px;
+                margin-bottom: 6px;
+                padding: 0;
+            }
+            .status-dot {
+                width: 11px;
+                height: 11px;
+                border-radius: 99px;
+                background: #a7adbd;
+                align-self: center;
+            }
+            .status-dot.green {
+                background: #19c463;
+            }
+            .db-icon {
+                width: 16px;
+                height: 14px;
+                align-self: center;
+                border: 2px solid currentColor;
+                border-radius: 4px 4px 3px 3px;
+                color: #a7adbd;
+            }
+            .db-icon.green {
+                color: #19c463;
+            }
+            .conn-name {
+                color: #d2d9f5;
+                font-weight: 700;
+            }
+            .conn-detail {
+                margin-top: 3px;
+                color: #969db4;
+                font-size: 0.78rem;
+                overflow: hidden;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+                max-width: 190px;
+            }
+            .schema-list {
+                padding-left: 16px;
+            }
+            .schema-list .schema-list {
+                padding-left: 24px;
+                padding-top: 3px;
+            }
+            .schema-list.root {
+                padding-left: 24px;
+            }
+            .schema-item {
+                min-height: 30px;
+                padding-right: 4px;
+                overflow: hidden;
+            }
+            .schema-item span:last-child {
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .column-dot {
+                width: 14px;
+                height: 14px;
+                border: 2px solid #b7c1e5;
+                border-radius: 99px;
+                flex: 0 0 auto;
+                position: relative;
+            }
+            .column-dot::after {
+                content: "";
+                position: absolute;
+                left: 3px;
+                top: 3px;
+                width: 4px;
+                height: 7px;
+                border-right: 2px solid #b7c1e5;
+                border-bottom: 2px solid #b7c1e5;
+                transform: rotate(45deg);
+            }
 
-    /* ── DIVIDER ── */
-    .divider {
-      position: relative; z-index: 1;
-      border: none;
-      border-top: 1px solid var(--border);
-      margin: 0;
-    }
+            /* ── DIVIDER ── */
+            .divider {
+                position: relative;
+                z-index: 1;
+                border: none;
+                border-top: 1px solid var(--border);
+                margin: 0;
+            }
 
-    /* ── SECTION ── */
-    section { position: relative; z-index: 1; }
-    .container { max-width: 1100px; margin: 0 auto; padding: 0 2rem; }
+            /* ── SECTION ── */
+            section {
+                position: relative;
+                z-index: 1;
+            }
+            .container {
+                max-width: 1100px;
+                margin: 0 auto;
+                padding: 0 2rem;
+            }
 
-    /* ── STATS BAR ── */
-    .stats {
-      display: flex;
-      align-items: stretch;
-      justify-content: center;
-      border-bottom: 1px solid var(--border);
-    }
-    .stat {
-      flex: 1;
-      padding: 2.5rem 2rem;
-      text-align: center;
-      border-right: 1px solid var(--border);
-    }
-    .stat:last-child { border-right: none; }
-    .stat-val {
-      font-family: var(--mono);
-      font-size: 2.2rem;
-      font-weight: 700;
-      color: var(--accent);
-      display: block;
-    }
-    .stat-label {
-      font-size: 0.78rem;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      margin-top: 0.3rem;
-      display: block;
-    }
+            /* ── STATS BAR ── */
+            .stats {
+                display: flex;
+                align-items: stretch;
+                justify-content: center;
+                border-bottom: 1px solid var(--border);
+            }
+            .stat {
+                flex: 1;
+                padding: 2.5rem 2rem;
+                text-align: center;
+                border-right: 1px solid var(--border);
+            }
+            .stat:last-child {
+                border-right: none;
+            }
+            .stat-val {
+                font-family: var(--mono);
+                font-size: 2.2rem;
+                font-weight: 700;
+                color: var(--accent);
+                display: block;
+            }
+            .stat-label {
+                font-size: 0.78rem;
+                color: var(--text-dim);
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+                margin-top: 0.3rem;
+                display: block;
+            }
 
-    /* ── FEATURES ── */
-    .features { padding: 7rem 2rem; }
-    .section-label {
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      color: var(--accent);
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      margin-bottom: 1rem;
-    }
-    .section-title {
-      font-size: clamp(2rem, 5vw, 3rem);
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      line-height: 1.1;
-      margin-bottom: 1rem;
-    }
-    .section-desc {
-      font-size: 1rem;
-      color: var(--text-dim);
-      max-width: 500px;
-      line-height: 1.7;
-      margin-bottom: 4rem;
-    }
+            /* ── FEATURES ── */
+            .features {
+                padding: 7rem 2rem;
+            }
+            .section-label {
+                font-family: var(--mono);
+                font-size: 0.72rem;
+                color: var(--accent);
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                margin-bottom: 1rem;
+            }
+            .section-title {
+                font-size: clamp(2rem, 5vw, 3rem);
+                font-weight: 800;
+                letter-spacing: -0.03em;
+                line-height: 1.1;
+                margin-bottom: 1rem;
+            }
+            .section-desc {
+                font-size: 1rem;
+                color: var(--text-dim);
+                max-width: 500px;
+                line-height: 1.7;
+                margin-bottom: 4rem;
+            }
 
-    .features-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 1px;
-      background: var(--border);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    .feature-card {
-      background: var(--surface);
-      padding: 2.5rem 2rem;
-      transition: background 0.2s;
-    }
-    .feature-card:hover { background: #13131a; }
+            .features-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 1px;
+                background: var(--border);
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                overflow: hidden;
+            }
+            .feature-card {
+                background: var(--surface);
+                padding: 2.5rem 2rem;
+                transition: background 0.2s;
+            }
+            .feature-card:hover {
+                background: #13131a;
+            }
 
-    .feature-icon {
-      width: 44px; height: 44px;
-      border-radius: 10px;
-      border: 1px solid var(--border2);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 1.3rem;
-      margin-bottom: 1.5rem;
-      background: var(--bg);
-    }
-    .feature-card h3 {
-      font-size: 1.05rem;
-      font-weight: 700;
-      margin-bottom: 0.6rem;
-      letter-spacing: -0.01em;
-    }
-    .feature-card p {
-      font-size: 0.88rem;
-      color: var(--text-dim);
-      line-height: 1.7;
-    }
-    .tag {
-      display: inline-block;
-      font-family: var(--mono);
-      font-size: 0.65rem;
-      padding: 0.2rem 0.6rem;
-      border-radius: 4px;
-      background: rgba(232,97,26,0.08);
-      color: var(--accent);
-      border: 1px solid rgba(232,97,26,0.2);
-      margin-bottom: 0.8rem;
-    }
+            .feature-icon {
+                width: 44px;
+                height: 44px;
+                border-radius: 10px;
+                border: 1px solid var(--border2);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.3rem;
+                margin-bottom: 1.5rem;
+                background: var(--bg);
+            }
+            .feature-card h3 {
+                font-size: 1.05rem;
+                font-weight: 700;
+                margin-bottom: 0.6rem;
+                letter-spacing: -0.01em;
+            }
+            .feature-card p {
+                font-size: 0.88rem;
+                color: var(--text-dim);
+                line-height: 1.7;
+            }
+            .tag {
+                display: inline-block;
+                font-family: var(--mono);
+                font-size: 0.65rem;
+                padding: 0.2rem 0.6rem;
+                border-radius: 4px;
+                background: rgba(232, 97, 26, 0.08);
+                color: var(--accent);
+                border: 1px solid rgba(232, 97, 26, 0.2);
+                margin-bottom: 0.8rem;
+            }
 
-    /* ── PITCH ── */
-    .pitch {
-      padding: 6rem 2rem;
-      border-top: 1px solid var(--border);
-    }
-    .pitch-inner {
-      max-width: 800px;
-      margin: 0 auto;
-    }
-    blockquote {
-      font-size: clamp(1.3rem, 3vw, 2rem);
-      font-weight: 500;
-      line-height: 1.5;
-      letter-spacing: -0.02em;
-      color: var(--text);
-      border-left: 3px solid var(--accent);
-      padding-left: 2rem;
-      margin-bottom: 1.5rem;
-    }
-    blockquote em { color: var(--accent); font-style: normal; }
-    .pitch-attr {
-      font-family: var(--mono);
-      font-size: 0.78rem;
-      color: var(--text-dim);
-      padding-left: 2rem;
-    }
+            /* ── PITCH ── */
+            .pitch {
+                padding: 6rem 2rem;
+                border-top: 1px solid var(--border);
+            }
+            .pitch-inner {
+                max-width: 800px;
+                margin: 0 auto;
+            }
+            blockquote {
+                font-size: clamp(1.3rem, 3vw, 2rem);
+                font-weight: 500;
+                line-height: 1.5;
+                letter-spacing: -0.02em;
+                color: var(--text);
+                border-left: 3px solid var(--accent);
+                padding-left: 2rem;
+                margin-bottom: 1.5rem;
+            }
+            blockquote em {
+                color: var(--accent);
+                font-style: normal;
+            }
+            .pitch-attr {
+                font-family: var(--mono);
+                font-size: 0.78rem;
+                color: var(--text-dim);
+                padding-left: 2rem;
+            }
 
-    /* ── CTA ── */
-    .cta {
-      padding: 7rem 2rem;
-      text-align: center;
-      border-top: 1px solid var(--border);
-    }
-    .cta h2 {
-      font-size: clamp(2.5rem, 6vw, 4.5rem);
-      font-weight: 800;
-      letter-spacing: -0.04em;
-      margin-bottom: 1rem;
-      line-height: 1;
-    }
-    .cta h2 span { color: var(--accent); }
-    .cta p {
-      color: var(--text-dim);
-      font-size: 1rem;
-      margin-bottom: 2.5rem;
-      max-width: 400px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    .cta-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+            /* ── CTA ── */
+            .cta {
+                padding: 7rem 2rem;
+                text-align: center;
+                border-top: 1px solid var(--border);
+            }
+            .cta h2 {
+                font-size: clamp(2.5rem, 6vw, 4.5rem);
+                font-weight: 800;
+                letter-spacing: -0.04em;
+                margin-bottom: 1rem;
+                line-height: 1;
+            }
+            .cta h2 span {
+                color: var(--accent);
+            }
+            .cta p {
+                color: var(--text-dim);
+                font-size: 1rem;
+                margin-bottom: 2.5rem;
+                max-width: 400px;
+                margin-left: auto;
+                margin-right: auto;
+            }
+            .cta-actions {
+                display: flex;
+                gap: 1rem;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
 
-    /* ── FOOTER ── */
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 2rem 3rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 1rem;
-      position: relative;
-      z-index: 1;
-    }
-    .footer-logo { font-family: var(--mono); font-size: 1rem; color: var(--accent); font-weight: 700; }
-    .footer-copy { font-size: 0.78rem; color: var(--muted); }
-    .footer-links { display: flex; gap: 1.5rem; }
-    .footer-links a { font-size: 0.78rem; color: var(--text-dim); text-decoration: none; transition: color 0.2s; }
-    .footer-links a:hover { color: var(--accent); }
+            /* ── FOOTER ── */
+            footer {
+                border-top: 1px solid var(--border);
+                padding: 2rem 3rem;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                flex-wrap: wrap;
+                gap: 1rem;
+                position: relative;
+                z-index: 1;
+            }
+            .footer-logo {
+                font-family: var(--mono);
+                font-size: 1rem;
+                color: var(--accent);
+                font-weight: 700;
+            }
+            .footer-copy {
+                font-size: 0.78rem;
+                color: var(--muted);
+            }
+            .footer-links {
+                display: flex;
+                gap: 1.5rem;
+            }
+            .footer-links a {
+                font-size: 0.78rem;
+                color: var(--text-dim);
+                text-decoration: none;
+                transition: color 0.2s;
+            }
+            .footer-links a:hover {
+                color: var(--accent);
+            }
 
-    /* ── RESPONSIVE ── */
-    @media (max-width: 640px) {
-      nav { padding: 1rem 1.5rem; }
-      .nav-links { display: none; }
-      .stats { flex-direction: column; }
-      .stat { border-right: none; border-bottom: 1px solid var(--border); }
-      .stat:last-child { border-bottom: none; }
-      .hero { padding-top: 7rem; }
-      .app-shot-wrap { margin-top: 3rem; padding: 0 1rem; }
-      .app-body {
-        grid-template-columns: 98px minmax(340px, 1fr) 132px;
-        min-height: 430px;
-      }
-      .app-shot {
-        overflow-x: auto;
-        border-radius: 10px;
-      }
-      .tree-title,
-      .connections-title,
-      .tree-list,
-      .schema-list,
-      .conn-name { font-size: 0.72rem; }
-      .app-main { grid-template-rows: 36px 220px 174px; }
-      .tab { min-width: 122px; padding: 0 12px; }
-      .editor { font-size: 0.82rem; }
-      .code-line { grid-template-columns: 44px 1fr; min-height: 28px; }
-      .line-no { padding-right: 12px; }
-      .code { padding-left: 16px; }
-      .conn-detail { display: none; }
-      .conn-row { grid-template-columns: 12px 18px 1fr; min-height: 40px; }
-      .conn-row > span:last-child { display: none; }
-      .result-toolbar { height: 42px; font-size: 0.82rem; }
-      .results-grid { font-size: 0.78rem; }
-      footer { flex-direction: column; text-align: center; }
-    }
-  </style>
-</head>
-<body>
+            /* ── RESPONSIVE ── */
+            @media (max-width: 640px) {
+                nav {
+                    padding: 1rem 1.5rem;
+                }
+                .nav-links {
+                    display: none;
+                }
+                .stats {
+                    flex-direction: column;
+                }
+                .stat {
+                    border-right: none;
+                    border-bottom: 1px solid var(--border);
+                }
+                .stat:last-child {
+                    border-bottom: none;
+                }
+                .hero {
+                    padding-top: 7rem;
+                }
+                .app-shot-wrap {
+                    margin-top: 3rem;
+                    padding: 0 1rem;
+                }
+                .app-body {
+                    grid-template-columns: 98px minmax(340px, 1fr) 132px;
+                    min-height: 430px;
+                }
+                .app-shot {
+                    overflow-x: auto;
+                    border-radius: 10px;
+                }
+                .tree-title,
+                .connections-title,
+                .tree-list,
+                .schema-list,
+                .conn-name {
+                    font-size: 0.72rem;
+                }
+                .app-main {
+                    grid-template-rows: 36px 220px 174px;
+                }
+                .tab {
+                    min-width: 122px;
+                    padding: 0 12px;
+                }
+                .editor {
+                    font-size: 0.82rem;
+                }
+                .code-line {
+                    grid-template-columns: 44px 1fr;
+                    min-height: 28px;
+                }
+                .line-no {
+                    padding-right: 12px;
+                }
+                .code {
+                    padding-left: 16px;
+                }
+                .conn-detail {
+                    display: none;
+                }
+                .conn-row {
+                    grid-template-columns: 12px 18px 1fr;
+                    min-height: 40px;
+                }
+                .conn-row > span:last-child {
+                    display: none;
+                }
+                .result-toolbar {
+                    height: 42px;
+                    font-size: 0.82rem;
+                }
+                .results-grid {
+                    font-size: 0.78rem;
+                }
+                footer {
+                    flex-direction: column;
+                    text-align: center;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
 
-  <div class="orb orb-1"></div>
-  <div class="orb orb-2"></div>
-
-  <!-- NAV -->
-  <nav>
-    <div class="nav-logo">zql</div>
-    <div class="nav-links">
-      <a href="#features">Features</a>
-      <a href="#pitch">About</a>
-      <a href="https://github.com/fhsgoncalves/zql" target="_blank">GitHub</a>
-      <a href="https://github.com/fhsgoncalves/zql/releases" target="_blank" class="btn btn-primary">Download</a>
-    </div>
-  </nav>
-
-  <!-- HERO -->
-  <div class="hero container">
-    <div class="hero-badge">
-      <span class="badge-dot"></span>
-      Open Source · Built in Rust
-    </div>
-    <h1><span class="z">zql</span></h1>
-    <p class="hero-sub">
-      A <strong>blazing-fast</strong>, memory-efficient SQL editor.<br/>
-      No bloat. No nonsense. Just your queries — <strong>flying</strong>.
-    </p>
-    <div class="hero-actions">
-      <a href="https://github.com/fhsgoncalves/zql/releases" target="_blank" class="btn btn-primary btn-lg">↓ Download</a>
-      <a href="https://github.com/fhsgoncalves/zql" target="_blank" class="btn btn-ghost btn-lg">★ Star on GitHub</a>
-    </div>
-  </div>
-
-  <!-- APP SCREENSHOT -->
-  <div class="app-shot-wrap container">
-    <div class="app-shot" aria-label="zql SQL editor interface preview">
-      <div class="app-titlebar">
-        <span class="dot dot-r"></span>
-        <span class="dot dot-y"></span>
-        <span class="dot dot-g"></span>
-        <span class="app-name">zql</span>
-        <span class="app-theme">☼</span>
-      </div>
-      <div class="app-body">
-        <aside class="app-sidebar">
-          <div class="tree-title"><span class="folder-icon"></span><span>queries</span></div>
-          <ul class="tree-list">
-            <li class="tree-item"><span class="sql-icon"></span><span>analysis.sql</span></li>
-            <li class="tree-item active"><span class="sql-icon"></span><span>sandbox.sql</span></li>
-          </ul>
-        </aside>
-
-        <main class="app-main">
-          <div class="editor-tabs">
-            <div class="tab"><span>▣</span><span>analysis.sql</span><span>×</span></div>
-            <div class="tab inactive"><span>sandbox.sql</span><span>×</span></div>
-            <div class="tab-actions"><span>↗</span><span>▣</span></div>
-          </div>
-
-          <section class="editor" aria-label="SQL editor">
-            <div class="code-line"><span class="line-no">1</span><span class="code"><span class="kw">SELECT</span> <span class="id">customer_id</span>, <span class="fn">COUNT</span>(*) <span class="kw">as</span> <span class="id">orders</span></span></div>
-            <div class="code-line"><span class="line-no">2</span><span class="code">    <span class="kw">FROM</span> <span class="fn">orders</span></span></div>
-            <div class="code-line"><span class="line-no">3</span><span class="code">    <span class="kw">WHERE</span> <span class="id">created_at</span> &gt; <span class="fn">NOW</span>() - <span class="fn">INTERVAL</span> <span class="str">'7 days'</span></span></div>
-            <div class="code-line"><span class="line-no">4</span><span class="code">    <span class="kw">GROUP BY</span> <span class="id">customer_id</span></span></div>
-            <div class="code-line active"><span class="line-no">5</span><span class="code">    <span class="kw">ORDER BY</span> <span class="id">orders</span> <span class="str">DESC</span> <span class="kw">LIMIT</span> <span class="num">5</span>;</span></div>
-          </section>
-
-          <section class="result-pane" aria-label="Query result">
-            <div class="result-tabs">
-              <div class="tab inactive"><span>▣</span><span>History</span></div>
-              <div class="tab"><span>Result 2</span><span>×</span></div>
+        <!-- NAV -->
+        <nav>
+            <div class="nav-logo">zql</div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#pitch">About</a>
+                <a href="https://github.com/fhsgoncalves/zql" target="_blank"
+                    >GitHub</a
+                >
+                <a
+                    href="https://github.com/fhsgoncalves/zql/releases"
+                    target="_blank"
+                    class="btn btn-primary"
+                    >Download</a
+                >
             </div>
-            <div class="result-toolbar">
-              <span class="pill">Output</span>
-              <span class="pill">db-dev</span>
-              <span class="query-preview">SELECT customer_id, COUNT(*) as orders FROM orders WHERE created_at &gt; NOW()</span>
+        </nav>
+
+        <!-- HERO -->
+        <div class="hero container">
+            <div class="hero-badge">
+                <span class="badge-dot"></span>
+                Open Source · Built in Rust
             </div>
-            <table class="results-grid">
-              <thead>
-                <tr><th>customer_id</th><th>orders</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>2721a340-72c0-4bb8-816b-f53c99e320ef</td><td>26</td></tr>
-                <tr><td>99ee5309-0466-4f5a-ae12-d65bb1423512</td><td>20</td></tr>
-                <tr><td>66abe481-a162-451e-8da1-3b4448d379da</td><td>17</td></tr>
-                <tr><td>4173eb2c-0929-48f4-beb9-04a126793f50</td><td>6</td></tr>
-              </tbody>
-            </table>
-          </section>
-        </main>
-
-        <aside class="app-connections">
-          <div class="connections-title"><span>Connections</span><span>＋</span></div>
-          <div class="conn-list">
-            <div class="conn-row">
-              <span class="status-dot"></span><span class="db-icon"></span>
-              <div><div class="conn-name">db-prd</div><div class="conn-detail">ep-noisy-star-124345.udfg...</div></div>
-              <span>...</span>
+            <h1><span class="z">zql</span></h1>
+            <p class="hero-sub">
+                A <strong>blazing-fast</strong>, memory-efficient SQL editor.<br />
+                No bloat. No nonsense. Just your queries —
+                <strong>flying</strong>.
+            </p>
+            <div class="hero-actions">
+                <a
+                    href="https://github.com/fhsgoncalves/zql/releases"
+                    target="_blank"
+                    class="btn btn-primary btn-lg"
+                    >↓ Download</a
+                >
+                <a
+                    href="https://github.com/fhsgoncalves/zql"
+                    target="_blank"
+                    class="btn btn-ghost btn-lg"
+                    >★ Star on GitHub</a
+                >
             </div>
-            <div class="conn-row">
-              <span class="status-dot green"></span><span class="db-icon green"></span>
-              <div><div class="conn-name">db-dev</div><div class="conn-detail">localhost:5435 / postgres</div></div>
-              <span>...</span>
+        </div>
+
+        <!-- APP SCREENSHOT -->
+        <div class="app-shot-wrap container">
+            <div class="app-shot" aria-label="zql SQL editor interface preview">
+                <div class="app-titlebar">
+                    <span class="dot dot-r"></span>
+                    <span class="dot dot-y"></span>
+                    <span class="dot dot-g"></span>
+                    <span class="app-name">zql</span>
+                    <span class="app-theme">☼</span>
+                </div>
+                <div class="app-body">
+                    <aside class="app-sidebar">
+                        <div class="tree-title">
+                            <span class="folder-icon"></span
+                            ><span>queries</span>
+                        </div>
+                        <ul class="tree-list">
+                            <li class="tree-item">
+                                <span class="sql-icon"></span
+                                ><span>analysis.sql</span>
+                            </li>
+                            <li class="tree-item active">
+                                <span class="sql-icon"></span
+                                ><span>sandbox.sql</span>
+                            </li>
+                        </ul>
+                    </aside>
+
+                    <main class="app-main">
+                        <div class="editor-tabs">
+                            <div class="tab">
+                                <span>▣</span><span>analysis.sql</span
+                                ><span>×</span>
+                            </div>
+                            <div class="tab inactive">
+                                <span>sandbox.sql</span><span>×</span>
+                            </div>
+                            <div class="tab-actions">
+                                <span>↗</span><span>▣</span>
+                            </div>
+                        </div>
+
+                        <section class="editor" aria-label="SQL editor">
+                            <div class="code-line">
+                                <span class="line-no">1</span
+                                ><span class="code"
+                                    ><span class="kw">SELECT</span>
+                                    <span class="id">customer_id</span>,
+                                    <span class="fn">COUNT</span>(*)
+                                    <span class="kw">as</span>
+                                    <span class="id">orders</span></span
+                                >
+                            </div>
+                            <div class="code-line">
+                                <span class="line-no">2</span
+                                ><span class="code">
+                                    <span class="kw">FROM</span>
+                                    <span class="fn">orders</span></span
+                                >
+                            </div>
+                            <div class="code-line">
+                                <span class="line-no">3</span
+                                ><span class="code">
+                                    <span class="kw">WHERE</span>
+                                    <span class="id">created_at</span> &gt;
+                                    <span class="fn">NOW</span>() -
+                                    <span class="fn">INTERVAL</span>
+                                    <span class="str">'7 days'</span></span
+                                >
+                            </div>
+                            <div class="code-line">
+                                <span class="line-no">4</span
+                                ><span class="code">
+                                    <span class="kw">GROUP BY</span>
+                                    <span class="id">customer_id</span></span
+                                >
+                            </div>
+                            <div class="code-line active">
+                                <span class="line-no">5</span
+                                ><span class="code">
+                                    <span class="kw">ORDER BY</span>
+                                    <span class="id">orders</span>
+                                    <span class="str">DESC</span>
+                                    <span class="kw">LIMIT</span>
+                                    <span class="num">5</span>;</span
+                                >
+                            </div>
+                        </section>
+
+                        <section class="result-pane" aria-label="Query result">
+                            <div class="result-tabs">
+                                <div class="tab inactive">
+                                    <span>▣</span><span>History</span>
+                                </div>
+                                <div class="tab">
+                                    <span>Result 2</span><span>×</span>
+                                </div>
+                            </div>
+                            <div class="result-toolbar">
+                                <span class="pill">Output</span>
+                                <span class="pill">db-dev</span>
+                                <span class="query-preview"
+                                    >SELECT customer_id, COUNT(*) as orders FROM
+                                    orders WHERE created_at &gt; NOW()</span
+                                >
+                            </div>
+                            <table class="results-grid">
+                                <thead>
+                                    <tr>
+                                        <th>customer_id</th>
+                                        <th>orders</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>
+                                            2721a340-72c0-4bb8-816b-f53c99e320ef
+                                        </td>
+                                        <td>26</td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            99ee5309-0466-4f5a-ae12-d65bb1423512
+                                        </td>
+                                        <td>20</td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            66abe481-a162-451e-8da1-3b4448d379da
+                                        </td>
+                                        <td>17</td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            4173eb2c-0929-48f4-beb9-04a126793f50
+                                        </td>
+                                        <td>6</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </section>
+                    </main>
+
+                    <aside class="app-connections">
+                        <div class="connections-title">
+                            <span>Connections</span><span>＋</span>
+                        </div>
+                        <div class="conn-list">
+                            <div class="conn-row">
+                                <span class="status-dot"></span
+                                ><span class="db-icon"></span>
+                                <div>
+                                    <div class="conn-name">db-prd</div>
+                                    <div class="conn-detail">
+                                        ep-noisy-star-124345.udfg...
+                                    </div>
+                                </div>
+                                <span>...</span>
+                            </div>
+                            <div class="conn-row">
+                                <span class="status-dot green"></span
+                                ><span class="db-icon green"></span>
+                                <div>
+                                    <div class="conn-name">db-dev</div>
+                                    <div class="conn-detail">
+                                        localhost:5435 / postgres
+                                    </div>
+                                </div>
+                                <span>...</span>
+                            </div>
+                        </div>
+                        <ul class="schema-list root">
+                            <li>
+                                <div class="schema-item">
+                                    <span class="folder-icon"></span
+                                    ><span>postgres</span>
+                                </div>
+                                <ul class="schema-list">
+                                    <li>
+                                        <div class="schema-item">
+                                            <span class="folder-icon"></span
+                                            ><span>public</span>
+                                        </div>
+                                        <ul class="schema-list">
+                                            <li>
+                                                <div class="schema-item">
+                                                    <span
+                                                        class="folder-icon"
+                                                    ></span
+                                                    ><span>Tables</span>
+                                                </div>
+                                                <ul class="schema-list">
+                                                    <li class="schema-item">
+                                                        <span
+                                                            class="file-icon small"
+                                                        ></span
+                                                        ><span>customers</span>
+                                                    </li>
+                                                    <li class="schema-item">
+                                                        <span
+                                                            class="file-icon small"
+                                                        ></span
+                                                        ><span
+                                                            >order_items</span
+                                                        >
+                                                    </li>
+                                                    <li
+                                                        class="schema-item active"
+                                                    >
+                                                        <span
+                                                            class="file-icon small"
+                                                        ></span
+                                                        ><span>orders</span>
+                                                    </li>
+                                                    <li class="schema-item">
+                                                        <span
+                                                            class="column-dot"
+                                                        ></span
+                                                        ><span
+                                                            >created_at
+                                                            timestamp</span
+                                                        >
+                                                    </li>
+                                                    <li class="schema-item">
+                                                        <span
+                                                            class="column-dot"
+                                                        ></span
+                                                        ><span
+                                                            >customer_id uuid
+                                                            not null</span
+                                                        >
+                                                    </li>
+                                                    <li class="schema-item">
+                                                        <span
+                                                            class="column-dot"
+                                                        ></span
+                                                        ><span
+                                                            >id bigint not
+                                                            null</span
+                                                        >
+                                                    </li>
+                                                    <li class="schema-item">
+                                                        <span
+                                                            class="column-dot"
+                                                        ></span
+                                                        ><span
+                                                            >status text not
+                                                            null</span
+                                                        >
+                                                    </li>
+                                                    <li class="schema-item">
+                                                        <span
+                                                            class="file-icon small"
+                                                        ></span
+                                                        ><span>products</span>
+                                                    </li>
+                                                </ul>
+                                            </li>
+                                            <li class="schema-item">
+                                                <span class="folder-icon"></span
+                                                ><span>Functions</span>
+                                            </li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                            </li>
+                        </ul>
+                    </aside>
+                </div>
             </div>
-          </div>
-          <ul class="schema-list root">
-            <li>
-              <div class="schema-item"><span class="folder-icon"></span><span>postgres</span></div>
-              <ul class="schema-list">
-                <li>
-                  <div class="schema-item"><span class="folder-icon"></span><span>public</span></div>
-                  <ul class="schema-list">
-                    <li>
-                      <div class="schema-item"><span class="folder-icon"></span><span>Tables</span></div>
-                      <ul class="schema-list">
-                        <li class="schema-item"><span class="file-icon small"></span><span>customers</span></li>
-                        <li class="schema-item"><span class="file-icon small"></span><span>order_items</span></li>
-                        <li class="schema-item active"><span class="file-icon small"></span><span>orders</span></li>
-                        <li class="schema-item"><span class="column-dot"></span><span>created_at timestamp</span></li>
-                        <li class="schema-item"><span class="column-dot"></span><span>customer_id uuid not null</span></li>
-                        <li class="schema-item"><span class="column-dot"></span><span>id bigint not null</span></li>
-                        <li class="schema-item"><span class="column-dot"></span><span>status text not null</span></li>
-                        <li class="schema-item"><span class="file-icon small"></span><span>products</span></li>
-                      </ul>
-                    </li>
-                    <li class="schema-item"><span class="folder-icon"></span><span>Functions</span></li>
-                  </ul>
-                </li>
-              </ul>
-            </li>
-          </ul>
-        </aside>
-      </div>
-    </div>
-  </div>
-
-  <!-- STATS -->
-  <section class="stats" style="margin-top: 5rem;">
-    <div class="stat">
-      <span class="stat-val">&lt;20MB</span>
-      <span class="stat-label">Memory footprint</span>
-    </div>
-    <div class="stat">
-      <span class="stat-val">&lt;5ms</span>
-      <span class="stat-label">Cold start time</span>
-    </div>
-    <div class="stat">
-      <span class="stat-val">Native</span>
-      <span class="stat-label">Not Electron</span>
-    </div>
-    <div class="stat">
-      <span class="stat-val">100%</span>
-      <span class="stat-label">Open Source</span>
-    </div>
-  </section>
-
-  <!-- FEATURES -->
-  <section class="features" id="features">
-    <div class="container">
-      <div class="section-label">// why zql</div>
-      <h2 class="section-title">Built different.<br/>By design.</h2>
-      <p class="section-desc">Most SQL editors are slow, bloated, or locked behind a paywall. zql is none of those things.</p>
-
-      <div class="features-grid">
-        <div class="feature-card">
-          <div class="tag">Rust</div>
-          <div class="feature-icon">⚡</div>
-          <h3>Blazing Fast</h3>
-          <p>Written in Rust from the ground up. No garbage collector pauses, no JVM warmup, no JavaScript runtime. Every keystroke is instant.</p>
         </div>
-        <div class="feature-card">
-          <div class="tag">GPUI</div>
-          <div class="feature-icon">🎛️</div>
-          <h3>Native UI via GPUI</h3>
-          <p>Powered by the same GPU-accelerated UI framework behind the Zed editor. Silky smooth rendering, even on large result sets.</p>
-        </div>
-        <div class="feature-card">
-          <div class="tag">Memory</div>
-          <div class="feature-icon">🧠</div>
-          <h3>Memory Efficient</h3>
-          <p>zql sips memory where other editors gulp it. Run it comfortably alongside your dev server, Docker containers, and everything else.</p>
-        </div>
-        <div class="feature-card">
-          <div class="tag">UX</div>
-          <div class="feature-icon">✦</div>
-          <h3>Radically Simple</h3>
-          <p>No bloat. No 200-option settings menus. zql does one thing — lets you write and run SQL — and it does it beautifully.</p>
-        </div>
-        <div class="feature-card">
-          <div class="tag">PostgreSQL</div>
-          <div class="feature-icon">🐘</div>
-          <h3>PostgreSQL Support</h3>
-          <p>Full PostgreSQL support out of the box — connect, explore your schema, and run queries instantly. More databases coming soon.</p>
-        </div>
-        <div class="feature-card">
-          <div class="tag">Open Source</div>
-          <div class="feature-icon">🌍</div>
-          <h3>Free. Forever.</h3>
-          <p>No subscriptions. No telemetry. No "Pro" tier for basic features. zql is fully open source and always will be.</p>
-        </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- PITCH -->
-  <section class="pitch" id="pitch">
-    <div class="pitch-inner container">
-      <div class="section-label">// the idea</div>
-      <blockquote>
-        zql is a fast, open-source SQL editor built in Rust — powered by <em>GPUI</em>, the same GPU-accelerated UI engine that drives the Zed Editor.
-      </blockquote>
-      <p class="pitch-attr">— The zql Project</p>
-    </div>
-  </section>
+        <!-- STATS -->
+        <section class="stats" style="margin-top: 5rem">
+            <div class="stat">
+                <span class="stat-val">&lt;80MB</span>
+                <span class="stat-label">Memory footprint</span>
+            </div>
+            <div class="stat">
+                <span class="stat-val">&lt;25ms</span>
+                <span class="stat-label">Cold start time</span>
+            </div>
+            <div class="stat">
+                <span class="stat-val">Native</span>
+                <span class="stat-label">Not Electron</span>
+            </div>
+            <div class="stat">
+                <span class="stat-val">100%</span>
+                <span class="stat-label">Open Source</span>
+            </div>
+        </section>
 
-  <!-- CTA -->
-  <section class="cta" id="download">
-    <h2>Ready to query<br/><span>at the speed of thought?</span></h2>
-    <p>Download zql for free and feel the difference on your first query.</p>
-    <div class="cta-actions">
-      <a href="https://github.com/fhsgoncalves/zql/releases" target="_blank" class="btn btn-primary btn-lg">↓ Download for macOS</a>
-      <a href="https://github.com/fhsgoncalves/zql" target="_blank" class="btn btn-ghost btn-lg">View on GitHub</a>
-    </div>
-  </section>
+        <!-- FEATURES -->
+        <section class="features" id="features">
+            <div class="container">
+                <div class="section-label">// why zql</div>
+                <h2 class="section-title">Built different.<br />By design.</h2>
+                <p class="section-desc">
+                    Most SQL editors are slow, bloated, or locked behind a
+                    paywall. zql is none of those things.
+                </p>
 
-  <!-- FOOTER -->
-  <footer>
-    <div class="footer-logo">zql</div>
-    <div class="footer-copy">© 2025 zql. Open source under MIT License.</div>
-    <div class="footer-links">
-      <a href="https://github.com/fhsgoncalves/zql">Docs</a>
-      <a href="https://github.com/fhsgoncalves/zql" target="_blank">GitHub</a>
-      <a href="https://github.com/fhsgoncalves/zql/releases" target="_blank">Releases</a>
-    </div>
-  </footer>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="tag">Rust</div>
+                        <div class="feature-icon">⚡</div>
+                        <h3>Blazing Fast</h3>
+                        <p>
+                            Written in Rust from the ground up. No garbage
+                            collector pauses, no JVM warmup, no JavaScript
+                            runtime. Every keystroke is instant.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="tag">GPUI</div>
+                        <div class="feature-icon">🎛️</div>
+                        <h3>Native UI via GPUI</h3>
+                        <p>
+                            Powered by the same GPU-accelerated UI framework
+                            behind the Zed editor. Silky smooth rendering, even
+                            on large result sets.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="tag">Memory</div>
+                        <div class="feature-icon">🧠</div>
+                        <h3>Memory Efficient</h3>
+                        <p>
+                            zql sips memory where other editors gulp it. Run it
+                            comfortably alongside your dev server, Docker
+                            containers, and everything else.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="tag">UX</div>
+                        <div class="feature-icon">✦</div>
+                        <h3>Radically Simple</h3>
+                        <p>
+                            No bloat. No 200-option settings menus. zql does one
+                            thing — lets you write and run SQL — and it does it
+                            beautifully.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="tag">PostgreSQL</div>
+                        <div class="feature-icon">🐘</div>
+                        <h3>PostgreSQL Support</h3>
+                        <p>
+                            Full PostgreSQL support out of the box — connect,
+                            explore your schema, and run queries instantly. More
+                            databases coming soon.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="tag">Open Source</div>
+                        <div class="feature-icon">🌍</div>
+                        <h3>Free. Forever.</h3>
+                        <p>
+                            No subscriptions. No telemetry. No "Pro" tier for
+                            basic features. zql is fully open source and always
+                            will be.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-</body>
+        <!-- PITCH -->
+        <section class="pitch" id="pitch">
+            <div class="pitch-inner container">
+                <div class="section-label">// the idea</div>
+                <blockquote>
+                    zql is a fast, open-source SQL editor built in Rust —
+                    powered by <em>GPUI</em>, the same GPU-accelerated UI engine
+                    that drives the Zed Editor.
+                </blockquote>
+                <p class="pitch-attr">— The zql Project</p>
+            </div>
+        </section>
+
+        <!-- CTA -->
+        <section class="cta" id="download">
+            <h2>Ready to query<br /><span>at the speed of thought?</span></h2>
+            <p>
+                Download zql for free and feel the difference on your first
+                query.
+            </p>
+            <div class="cta-actions">
+                <a
+                    href="https://github.com/fhsgoncalves/zql/releases"
+                    target="_blank"
+                    class="btn btn-primary btn-lg"
+                    >↓ Download for macOS</a
+                >
+                <a
+                    href="https://github.com/fhsgoncalves/zql"
+                    target="_blank"
+                    class="btn btn-ghost btn-lg"
+                    >View on GitHub</a
+                >
+            </div>
+        </section>
+
+        <!-- FOOTER -->
+        <footer>
+            <div class="footer-logo">zql</div>
+            <div class="footer-copy">
+                © 2025 zql. Open source under MIT License.
+            </div>
+            <div class="footer-links">
+                <a href="https://github.com/fhsgoncalves/zql">Docs</a>
+                <a href="https://github.com/fhsgoncalves/zql" target="_blank"
+                    >GitHub</a
+                >
+                <a
+                    href="https://github.com/fhsgoncalves/zql/releases"
+                    target="_blank"
+                    >Releases</a
+                >
+            </div>
+        </footer>
+    </body>
 </html>

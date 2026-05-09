@@ -17,7 +17,9 @@ use gpui_component::{
 };
 
 use crate::data_source::manager::{DataSourceManager, IntrospectionStatus};
-use crate::data_source::{ConnectionStatus, DataSourceConfig, TableKind, create_data_source};
+use crate::data_source::{
+    ConnectionStatus, DataSourceConfig, DataSourceError, TableKind, create_data_source,
+};
 use crate::schema_cache;
 
 pub struct ConnectionPanel {
@@ -250,6 +252,52 @@ impl ConnectionPanel {
                 cx.notify();
             });
         }).detach();
+    }
+
+    fn test_connection(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(config) = self.manager.read(cx).configs()
+            .iter()
+            .find(|config| config.name == name)
+            .cloned()
+        else { return; };
+
+        let manager = self.manager.clone();
+        let config_name = config.name.clone();
+
+        manager.update(cx, |manager, cx| {
+            manager.set_active(Some(config_name.clone()));
+            manager.set_status(&config_name, ConnectionStatus::Idle);
+            manager.clear_last_error(&config_name);
+            cx.notify();
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut source = create_data_source(&config)?;
+                    source.connect().await?;
+                    source.disconnect().await?;
+                    Ok::<(), DataSourceError>(())
+                })
+                .await;
+
+            cx.update_entity(&manager, move |manager, cx| {
+                match result {
+                    Ok(_) => {
+                        manager.set_status(&config_name, ConnectionStatus::Connected);
+                        manager.clear_last_error(&config_name);
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        manager.set_status(&config_name, ConnectionStatus::Failed);
+                        manager.set_last_error(&config_name, msg);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn refresh_schema(&mut self, name: String, _window: &mut Window, cx: &mut Context<Self>) {
@@ -648,24 +696,23 @@ impl Render for ConnectionPanel {
                                 move |this, _, window, cx| {
                                     let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
                                     if current_active.as_deref() == Some(row_name.as_str()) {
-                                        if row_manager.read(cx).status(&row_name) == ConnectionStatus::Failed {
-                                            this.show_error_dialog(row_name.clone(), window, cx);
-                                            row_manager.update(cx, |manager, cx| {
-                                                manager.set_status(&row_name, ConnectionStatus::Idle);
-                                                cx.notify();
-                                            });
-                                        } else {
-                                            row_manager.update(cx, |manager, cx| {
-                                                manager.set_active(None);
-                                                cx.notify();
-                                            });
+                                        match row_manager.read(cx).status(&row_name) {
+                                            ConnectionStatus::Connected => {
+                                                row_manager.update(cx, |manager, cx| {
+                                                    manager.set_active(None);
+                                                    cx.notify();
+                                                });
+                                            }
+                                            ConnectionStatus::Failed => {
+                                                this.show_error_dialog(row_name.clone(), window, cx);
+                                                this.test_connection(row_name.clone(), cx);
+                                            }
+                                            ConnectionStatus::Idle => {
+                                                this.test_connection(row_name.clone(), cx);
+                                            }
                                         }
                                     } else {
-                                        row_manager.update(cx, |manager, cx| {
-                                            manager.set_active(Some(row_name.clone()));
-                                            manager.set_status(&row_name, ConnectionStatus::Idle);
-                                            cx.notify();
-                                        });
+                                        this.test_connection(row_name.clone(), cx);
                                     }
                                     cx.stop_propagation();
                                 }
@@ -678,19 +725,19 @@ impl Render for ConnectionPanel {
                             .on_click(cx.listener({
                                 let row_manager = row_manager.clone();
                                 let row_name = row_name_for_icon;
-                                move |_this, _, _, cx| {
+                                move |this, _, _, cx| {
                                     let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
                                     if current_active.as_deref() == Some(row_name.as_str()) {
-                                        row_manager.update(cx, |manager, cx| {
-                                            manager.set_active(None);
-                                            cx.notify();
-                                        });
+                                        if row_manager.read(cx).status(&row_name) == ConnectionStatus::Connected {
+                                            row_manager.update(cx, |manager, cx| {
+                                                manager.set_active(None);
+                                                cx.notify();
+                                            });
+                                        } else {
+                                            this.test_connection(row_name.clone(), cx);
+                                        }
                                     } else {
-                                        row_manager.update(cx, |manager, cx| {
-                                            manager.set_active(Some(row_name.clone()));
-                                            manager.set_status(&row_name, ConnectionStatus::Idle);
-                                            cx.notify();
-                                        });
+                                        this.test_connection(row_name.clone(), cx);
                                     }
                                     cx.stop_propagation();
                                 }
@@ -727,8 +774,16 @@ impl Render for ConnectionPanel {
                                     ),
                             )
                             .on_click(cx.listener({
+                                let row_manager = row_manager.clone();
                                 let row_name = row_name_for_expand;
                                 move |this, _, _, cx| {
+                                    let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
+                                    let status = row_manager.read(cx).status(&row_name);
+                                    if current_active.as_deref() != Some(row_name.as_str())
+                                        || status != ConnectionStatus::Connected
+                                    {
+                                        this.test_connection(row_name.clone(), cx);
+                                    }
                                     this.toggle_connection_expanded(&row_name);
                                     cx.notify();
                                 }

@@ -24,13 +24,9 @@ pub struct DataSourceManager {
 impl DataSourceManager {
     pub fn load() -> anyhow::Result<Self> {
         let config = Config::load()?;
-        let active_name = config
-            .data_sources
-            .first()
-            .map(|source| source.name.clone());
         Ok(Self {
             configs: config.data_sources,
-            active_name,
+            active_name: None,
             statuses: HashMap::new(),
             introspection_statuses: HashMap::new(),
             last_errors: HashMap::new(),
@@ -110,9 +106,6 @@ impl DataSourceManager {
 
     pub fn add(&mut self, config: DataSourceConfig) {
         self.remove(&config.name);
-        if self.active_name.is_none() {
-            self.active_name = Some(config.name.clone());
-        }
         self.configs.push(config);
     }
 

@@ -2,6 +2,17 @@
 name = "zql"
 version = "0.1.0"
 edition = "2024"
+description = "A SQL editor written in Rust using GPUI."
+
+[package.metadata.bundle]
+name = "zql"
+identifier = "io.github.fhsgoncalves.zql"
+icon = ["assets/app-icon.svg", "assets/app-icon.icns"]
+category = "Developer Tool"
+short_description = "A SQL editor written in Rust using GPUI."
+long_description = """
+zql is a SQL editor written in Rust using GPUI.
+"""
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed" }
@@ -9,6 +20,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 gpui-component = { git = "https://github.com/longbridge/gpui-component", features = ["tree-sitter-sql"] }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 anyhow = "1"
+image = "0.25.1"
 tree-sitter = "0.26"
 tree-sitter-sequel = "0.3.8"
 tokio = { version = "1", features = ["rt-multi-thread"] }

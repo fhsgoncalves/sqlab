@@ -8372,6 +8372,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "image",
  "lsp-types",
  "postgres_rustls",
  "rusqlite",

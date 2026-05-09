@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use gpui::{
     AppContext, Bounds, KeyBinding, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions, px, size,
@@ -18,6 +18,17 @@ use ui::panels::file_editor::{
 };
 use ui::panels::result::CopyResultSelection;
 use workspace::{OpenFolder, Workspace};
+
+fn app_icon() -> Option<Arc<image::RgbaImage>> {
+    let bytes = include_bytes!("../assets/app-icon.png");
+    match image::load_from_memory_with_format(bytes, image::ImageFormat::Png) {
+        Ok(image) => Some(Arc::new(image.to_rgba8())),
+        Err(error) => {
+            eprintln!("Failed to load app icon: {}", error);
+            None
+        }
+    }
+}
 
 fn main() {
     let app = gpui_platform::application().with_assets(assets::AppAssets);
@@ -105,6 +116,7 @@ fn main() {
                     width: px(800.),
                     height: px(600.),
                 }),
+                icon: app_icon(),
                 ..Default::default()
             },
             |window, cx| {
