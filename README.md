@@ -40,7 +40,6 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 
 ## Roadmap
 
-- [ ] Editor toolbar, allowing run the query via button
 - [ ] Refactor connection panel layout (IntelliJ-style)
 - [ ] Autosave when window or panel focus is lost
 - [ ] Improve autocompletion reliability

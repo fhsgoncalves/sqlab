@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, Styled, WeakEntity, Window, div, prelude::FluentBuilder,
+    px, rgb,
 };
 use gpui_component::{
     ActiveTheme, IconName, Sizable,
@@ -11,7 +12,7 @@ use gpui_component::{
     h_flex, v_flex,
 };
 
-use super::editor::EditorPanel;
+use super::editor::{EditorPanel, ExecuteQuery};
 use crate::data_source::manager::DataSourceManager;
 use crate::ui::components::tab::{Tab, TabBar};
 
@@ -240,11 +241,33 @@ impl Render for EditorTabs {
                 )
             });
 
+        let editor_toolbar = h_flex()
+            .id("editor-toolbar")
+            .h(px(32.))
+            .flex_none()
+            .items_center()
+            .px_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().tab_bar)
+            .child(
+                Button::new("execute-query")
+                    .icon(IconName::Play)
+                    .xsmall()
+                    .ghost()
+                    .text_color(rgb(0x58a65c))
+                    .tooltip_with_action("Execute Query", &ExecuteQuery, Some("Input"))
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(ExecuteQuery), cx);
+                    }),
+            );
+
         v_flex()
             .id("editor-tabs")
             .size_full()
             .bg(cx.theme().background)
             .child(tab_bar)
+            .child(editor_toolbar)
             .child(
                 div()
                     .id("editor-content")
