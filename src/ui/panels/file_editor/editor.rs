@@ -22,10 +22,19 @@ pub struct EditorPanel {
     editor: Entity<InputState>,
     focus_handle: FocusHandle,
     active_query: Option<QueryRange>,
+    query_decoration_override: Option<QueryRange>,
+    query_decoration_override_snapshot: Option<EditorSnapshot>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
+
+#[derive(Clone, Debug, PartialEq)]
+struct EditorSnapshot {
+    text: String,
+    cursor: usize,
+    selected: String,
+}
 
 impl EditorPanel {
     pub fn path(&self) -> &PathBuf {
@@ -65,6 +74,8 @@ impl EditorPanel {
             editor: editor.clone(),
             focus_handle: cx.focus_handle(),
             active_query: None,
+            query_decoration_override: None,
+            query_decoration_override_snapshot: None,
             _subscriptions: vec![cx.observe(&editor, |this, _, cx| {
                 this.refresh_active_query(cx);
             })],
@@ -72,7 +83,7 @@ impl EditorPanel {
         panel.refresh_active_query(cx);
         panel
     }
-    pub fn query_context(&self, cx: &App) -> (String, Vec<String>) {
+    pub fn query_context(&self, cx: &App) -> (String, Vec<QueryRange>) {
         let state = self.editor.read(cx);
         let text = state.value().to_string();
         let cursor = state.cursor();
@@ -82,27 +93,63 @@ impl EditorPanel {
             return (selected, Vec::new());
         }
 
-        let queries = query_ranges_for_execution(&text, cursor)
-            .into_iter()
-            .map(|query| query.text)
-            .collect();
+        let queries = query_ranges_for_execution(&text, cursor);
         (String::new(), queries)
     }
 
     fn refresh_active_query(&mut self, cx: &mut Context<Self>) {
-        let active_query = {
+        let (active_query, snapshot) = {
             let state = self.editor.read(cx);
             let text = state.value().to_string();
             let selected = state.selected_value().to_string();
-            if selected.trim().is_empty() {
-                query_ranges_for_execution(&text, state.cursor())
-                    .into_iter()
-                    .next()
+            let snapshot = EditorSnapshot {
+                text: text.clone(),
+                cursor: state.cursor(),
+                selected: selected.clone(),
+            };
+
+            if self.query_decoration_override_snapshot.as_ref() == Some(&snapshot) {
+                (self.query_decoration_override.clone(), snapshot)
+            } else if selected.trim().is_empty() {
+                (
+                    query_ranges_for_execution(&text, state.cursor())
+                        .into_iter()
+                        .next(),
+                    snapshot,
+                )
             } else {
-                None
+                (None, snapshot)
             }
         };
 
+        if self.query_decoration_override_snapshot.as_ref() != Some(&snapshot) {
+            self.query_decoration_override = None;
+            self.query_decoration_override_snapshot = None;
+        }
+
+        self.apply_query_decoration(active_query, cx);
+    }
+
+    pub fn override_query_decoration(
+        &mut self,
+        active_query: Option<QueryRange>,
+        cx: &mut Context<Self>,
+    ) {
+        self.query_decoration_override = active_query.clone();
+        self.query_decoration_override_snapshot = Some(self.editor_snapshot(cx));
+        self.apply_query_decoration(active_query, cx);
+    }
+
+    fn editor_snapshot(&self, cx: &App) -> EditorSnapshot {
+        let state = self.editor.read(cx);
+        EditorSnapshot {
+            text: state.value().to_string(),
+            cursor: state.cursor(),
+            selected: state.selected_value().to_string(),
+        }
+    }
+
+    fn apply_query_decoration(&mut self, active_query: Option<QueryRange>, cx: &mut Context<Self>) {
         let decorations = active_query
             .as_ref()
             .map(|query| InputDecoration {
@@ -113,6 +160,7 @@ impl EditorPanel {
             })
             .into_iter()
             .collect();
+
         self.editor.update(cx, |state, cx| {
             state.set_decorations(decorations, cx);
         });

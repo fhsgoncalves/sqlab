@@ -20,7 +20,7 @@ use crate::data_source::{ConnectionStatus, DataSourceError, QueryResult, create_
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::file_editor::query_detector::queries_in_text;
 use crate::ui::panels::file_editor::{
-    EditorTabs, ExecuteQuery, QuerySelected, QuerySelector, SaveFile,
+    EditorTabs, ExecuteQuery, QueryChoice, QuerySelected, QuerySelector, SaveFile,
 };
 use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
 use crate::ui::panels::{connection::ConnectionPanel, result::ResultPanel};
@@ -205,10 +205,19 @@ impl Workspace {
             return;
         };
 
-        let queries = if !selected.trim().is_empty() {
+        let queries: Vec<QueryChoice> = if !selected.trim().is_empty() {
             queries_in_text(&selected)
+                .into_iter()
+                .map(|query| QueryChoice { query, range: None })
+                .collect()
         } else {
             active_queries
+                .into_iter()
+                .map(|query| QueryChoice {
+                    query: query.text.clone(),
+                    range: Some(query),
+                })
+                .collect()
         };
 
         if queries.is_empty() {
@@ -221,7 +230,7 @@ impl Workspace {
         }
 
         if queries.len() == 1 {
-            self.execute_single_query(queries[0].clone(), window, cx);
+            self.execute_single_query(queries[0].query.clone(), window, cx);
             return;
         }
 
@@ -230,8 +239,19 @@ impl Workspace {
             &selector,
             window,
             |this, _selector, event: &QuerySelected, window, cx| {
-                window.close_dialog(cx);
-                this.execute_single_query(event.query.clone(), window, cx);
+                let active_editor = this
+                    .editor_tabs
+                    .update(cx, |tabs, _cx| tabs.active_editor().cloned());
+                if let Some(editor) = active_editor {
+                    editor.update(cx, |editor, cx| {
+                        editor.override_query_decoration(event.choice.range.clone(), cx);
+                    });
+                }
+
+                if event.confirmed {
+                    window.close_dialog(cx);
+                    this.execute_single_query(event.choice.query.clone(), window, cx);
+                }
             },
         )
         .detach();

@@ -6,6 +6,7 @@ pub mod tabs;
 
 pub use editor::{ExecuteQuery, SaveFile};
 pub use query_selector::{
-    ConfirmSelectedQuery, QuerySelected, QuerySelector, SelectNextQuery, SelectPreviousQuery,
+    ConfirmSelectedQuery, QueryChoice, QuerySelected, QuerySelector, SelectNextQuery,
+    SelectPreviousQuery,
 };
 pub use tabs::EditorTabs;

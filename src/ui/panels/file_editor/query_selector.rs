@@ -5,18 +5,27 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, h_flex, v_flex};
 
+use super::query_detector::QueryRange;
+
 actions!(
     query_selector,
     [SelectPreviousQuery, SelectNextQuery, ConfirmSelectedQuery]
 );
 
 #[derive(Clone, Debug)]
-pub struct QuerySelected {
+pub struct QueryChoice {
     pub query: String,
+    pub range: Option<QueryRange>,
+}
+
+#[derive(Clone, Debug)]
+pub struct QuerySelected {
+    pub choice: QueryChoice,
+    pub confirmed: bool,
 }
 
 pub struct QuerySelector {
-    queries: Vec<String>,
+    queries: Vec<QueryChoice>,
     selected_ix: usize,
     focus_handle: FocusHandle,
 }
@@ -24,7 +33,7 @@ pub struct QuerySelector {
 impl EventEmitter<QuerySelected> for QuerySelector {}
 
 impl QuerySelector {
-    pub fn new(queries: Vec<String>, cx: &mut Context<Self>) -> Self {
+    pub fn new(queries: Vec<QueryChoice>, cx: &mut Context<Self>) -> Self {
         Self {
             queries,
             selected_ix: 0,
@@ -46,6 +55,7 @@ impl QuerySelector {
         } else {
             self.selected_ix - 1
         };
+        self.emit_highlighted(self.selected_ix, cx);
         cx.notify();
     }
 
@@ -54,6 +64,7 @@ impl QuerySelector {
             return;
         }
         self.selected_ix = (self.selected_ix + 1) % self.queries.len();
+        self.emit_highlighted(self.selected_ix, cx);
         cx.notify();
     }
 
@@ -63,14 +74,18 @@ impl QuerySelector {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.emit_selected(self.selected_ix, cx);
+        self.emit_selected(self.selected_ix, true, cx);
     }
 
-    fn emit_selected(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(query) = self.queries.get(ix).cloned() else {
+    fn emit_highlighted(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.emit_selected(ix, false, cx);
+    }
+
+    fn emit_selected(&mut self, ix: usize, confirmed: bool, cx: &mut Context<Self>) {
+        let Some(choice) = self.queries.get(ix).cloned() else {
             return;
         };
-        cx.emit(QuerySelected { query });
+        cx.emit(QuerySelected { choice, confirmed });
     }
 }
 
@@ -84,9 +99,9 @@ impl Render for QuerySelector {
             .on_action(cx.listener(Self::confirm_selected))
             .w(px(620.))
             .gap_2()
-            .children(self.queries.iter().enumerate().map(|(ix, query)| {
+            .children(self.queries.iter().enumerate().map(|(ix, choice)| {
                 let selected = ix == self.selected_ix;
-                let preview = truncate_query(query, 140);
+                let preview = truncate_query(&choice.query, 140);
 
                 h_flex()
                     .id(format!("query-selector-row-{}", ix))
@@ -143,7 +158,7 @@ impl Render for QuerySelector {
                     )
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.selected_ix = ix;
-                        this.emit_selected(ix, cx);
+                        this.emit_selected(ix, true, cx);
                     }))
             }))
     }
