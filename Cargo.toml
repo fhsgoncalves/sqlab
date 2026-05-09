@@ -17,8 +17,8 @@ zql is a SQL editor written in Rust using GPUI.
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", features = ["tree-sitter-sql"] }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+gpui-component = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration", features = ["tree-sitter-sql"] }
+gpui-component-assets = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration" }
 anyhow = "1"
 image = "0.25.1"
 tree-sitter = "0.26"

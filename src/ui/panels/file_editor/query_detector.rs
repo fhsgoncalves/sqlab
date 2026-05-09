@@ -1,9 +1,19 @@
+use std::ops::Range;
+
 use tree_sitter::Parser;
 
-/// Detect SQL queries at the given cursor position using tree-sitter AST.
-/// Returns queries from least inclusive (innermost) to most inclusive (outermost).
-/// Falls back to semicolon-delimited scan if tree-sitter parsing fails.
-pub fn queries_at_cursor(text: &str, cursor: usize) -> Vec<String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryRange {
+    pub range: Range<usize>,
+    pub trimmed_range: Range<usize>,
+    pub text: String,
+}
+
+pub fn query_at_cursor(text: &str, cursor: usize) -> Option<QueryRange> {
+    query_ranges_at_cursor(text, cursor).pop()
+}
+
+pub fn query_ranges_at_cursor(text: &str, cursor: usize) -> Vec<QueryRange> {
     match parse_queries(text, cursor) {
         Some(queries) if !queries.is_empty() => queries,
         _ => fallback_query(text, cursor),
@@ -12,6 +22,14 @@ pub fn queries_at_cursor(text: &str, cursor: usize) -> Vec<String> {
 
 /// Detect top-level SQL queries in a block of selected text.
 pub fn queries_in_text(text: &str) -> Vec<String> {
+    query_ranges_in_text(text)
+        .into_iter()
+        .map(|query| query.text)
+        .collect()
+}
+
+/// Detect top-level SQL query ranges in a block of selected text.
+pub fn query_ranges_in_text(text: &str) -> Vec<QueryRange> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -23,13 +41,13 @@ pub fn queries_in_text(text: &str) -> Vec<String> {
     if fallback.len() > parsed.len() {
         fallback
     } else if parsed.is_empty() {
-        vec![trimmed.to_string()]
+        vec![trimmed_query_range(text, 0, text.len()).expect("trimmed text is not empty")]
     } else {
         parsed
     }
 }
 
-fn parse_queries(text: &str, cursor: usize) -> Option<Vec<String>> {
+fn parse_queries(text: &str, cursor: usize) -> Option<Vec<QueryRange>> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_sequel::LANGUAGE.into())
@@ -51,9 +69,8 @@ fn parse_queries(text: &str, cursor: usize) -> Option<Vec<String>> {
             let end = current.end_byte();
             if end > start && !seen_ranges.contains(&(start, end)) {
                 seen_ranges.insert((start, end));
-                let query_text = text.get(start..end).unwrap_or("").trim();
-                if !query_text.is_empty() {
-                    queries.push(query_text.to_string());
+                if let Some(query) = trimmed_query_range(text, start, end) {
+                    queries.push(query);
                 }
             }
         }
@@ -63,7 +80,7 @@ fn parse_queries(text: &str, cursor: usize) -> Option<Vec<String>> {
     Some(queries)
 }
 
-fn parse_top_level_queries(text: &str) -> Option<Vec<String>> {
+fn parse_top_level_queries(text: &str) -> Option<Vec<QueryRange>> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_sequel::LANGUAGE.into())
@@ -75,14 +92,10 @@ fn parse_top_level_queries(text: &str) -> Option<Vec<String>> {
     Some(queries)
 }
 
-fn collect_top_level_queries(text: &str, node: tree_sitter::Node, queries: &mut Vec<String>) {
+fn collect_top_level_queries(text: &str, node: tree_sitter::Node, queries: &mut Vec<QueryRange>) {
     if is_top_level_query_node(node.kind()) {
-        let query = text
-            .get(node.start_byte()..node.end_byte())
-            .unwrap_or("")
-            .trim();
-        if !query.is_empty() {
-            queries.push(query.to_string());
+        if let Some(query) = trimmed_query_range(text, node.start_byte(), node.end_byte()) {
+            queries.push(query);
         }
         return;
     }
@@ -127,16 +140,15 @@ fn is_top_level_query_node(kind: &str) -> bool {
     ) || kind.ends_with("_statement")
 }
 
-fn fallback_query(text: &str, cursor: usize) -> Vec<String> {
+fn fallback_query(text: &str, cursor: usize) -> Vec<QueryRange> {
     let start = text[..cursor].rfind(';').map(|i| i + 1).unwrap_or(0);
     let end = text[cursor..]
         .find(';')
         .map(|i| cursor + i + 1)
         .unwrap_or(text.len());
-    let query = text[start..end].trim();
 
-    if !query.is_empty() {
-        return vec![query.to_string()];
+    if let Some(query) = trimmed_query_range(text, start, end) {
+        return vec![query];
     }
 
     let line_start = text[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
@@ -144,32 +156,79 @@ fn fallback_query(text: &str, cursor: usize) -> Vec<String> {
         .find('\n')
         .map(|i| cursor + i)
         .unwrap_or(text.len());
-    let line = text[line_start..line_end].trim();
-    if !line.is_empty() {
-        vec![line.to_string()]
-    } else {
-        vec![]
-    }
+
+    trimmed_query_range(text, line_start, line_end)
+        .into_iter()
+        .collect()
 }
 
-fn fallback_queries_in_text(text: &str) -> Vec<String> {
+fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
     let mut queries = Vec::new();
     let mut start = 0;
 
     for (ix, ch) in text.char_indices() {
         if ch == ';' {
-            let query = text[start..=ix].trim();
-            if !query.is_empty() {
-                queries.push(query.to_string());
+            if let Some(query) = trimmed_query_range(text, start, ix + ch.len_utf8()) {
+                queries.push(query);
             }
             start = ix + ch.len_utf8();
         }
     }
 
-    let query = text[start..].trim();
-    if !query.is_empty() {
-        queries.push(query.to_string());
+    if let Some(query) = trimmed_query_range(text, start, text.len()) {
+        queries.push(query);
     }
 
     queries
+}
+
+fn trimmed_query_range(text: &str, start: usize, end: usize) -> Option<QueryRange> {
+    let raw = text.get(start..end)?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let leading = raw.len() - raw.trim_start().len();
+    let trailing = raw.len() - raw.trim_end().len();
+    let trimmed_start = start + leading;
+    let trimmed_end = end - trailing;
+
+    Some(QueryRange {
+        range: start..end,
+        trimmed_range: trimmed_start..trimmed_end,
+        text: trimmed.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn returns_statement_range_at_cursor() {
+        let text = "select 1;\n\nselect * from users;";
+        let query = query_at_cursor(text, text.find("users").unwrap()).unwrap();
+
+        assert_eq!(query.text, "select * from users");
+        assert_eq!(&text[query.trimmed_range], "select * from users");
+    }
+
+    #[test]
+    fn returns_outer_statement_for_nested_cursor() {
+        let text = "select * from (select id from users) u;";
+        let query = query_at_cursor(text, text.find("users").unwrap()).unwrap();
+
+        assert_eq!(query.text, "select * from (select id from users) u");
+    }
+
+    #[test]
+    fn splits_selected_text_into_query_ranges() {
+        let text = " select 1; \n select 2";
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0].text, "select 1");
+        assert_eq!(queries[1].text, "select 2");
+    }
 }

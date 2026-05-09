@@ -15,13 +15,12 @@ use gpui_component::{
 
 use crate::data_source::manager::DataSourceManager;
 use crate::data_source::{ConnectionStatus, DataSourceError, QueryResult, create_data_source};
-use crate::ui::panels::connection::ConnectionPanel;
-use crate::ui::panels::file_editor::query_detector::{queries_at_cursor, queries_in_text};
+use crate::ui::panels::file_editor::query_detector::queries_in_text;
 use crate::ui::panels::file_editor::{
     EditorTabs, ExecuteQuery, QuerySelected, QuerySelector, SaveFile,
 };
 use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
-use crate::ui::panels::result::ResultPanel;
+use crate::ui::panels::{connection::ConnectionPanel, result::ResultPanel};
 
 actions!(workspace, [OpenFolder]);
 
@@ -175,7 +174,7 @@ impl Workspace {
     }
 
     fn on_execute_query(&mut self, _: &ExecuteQuery, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((text, cursor, selected)) = self
+        let Some((selected, active_query)) = self
             .editor_tabs
             .read(cx)
             .active_editor()
@@ -192,7 +191,7 @@ impl Workspace {
         let queries = if !selected.trim().is_empty() {
             queries_in_text(&selected)
         } else {
-            queries_at_cursor(&text, cursor)
+            active_query.into_iter().collect()
         };
 
         if queries.is_empty() {

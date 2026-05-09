@@ -1090,47 +1090,19 @@
                         <section class="editor" aria-label="SQL editor">
                             <div class="code-line">
                                 <span class="line-no">1</span
-                                ><span class="code"
-                                    ><span class="kw">SELECT</span>
-                                    <span class="id">customer_id</span>,
-                                    <span class="fn">COUNT</span>(*)
-                                    <span class="kw">as</span>
-                                    <span class="id">orders</span></span
-                                >
+                                ><span class="code"><span class="kw">SELECT</span><span class="id"> customer_id</span>,<span class="fn"> COUNT</span>(*)<span class="kw"> as </span><span class="id">orders</span></span>
                             </div>
                             <div class="code-line">
-                                <span class="line-no">2</span
-                                ><span class="code">
-                                    <span class="kw">FROM</span>
-                                    <span class="fn">orders</span></span
-                                >
+                                <span class="line-no">2</span><span class="code"><span class="kw">FROM</span><span class="fn"> orders</span></span>
                             </div>
                             <div class="code-line">
-                                <span class="line-no">3</span
-                                ><span class="code">
-                                    <span class="kw">WHERE</span>
-                                    <span class="id">created_at</span> &gt;
-                                    <span class="fn">NOW</span>() -
-                                    <span class="fn">INTERVAL</span>
-                                    <span class="str">'7 days'</span></span
-                                >
+                                <span class="line-no">3</span><span class="code"><span class="kw">WHERE</span><span class="id"> created_at</span> &gt; <span class="fn">NOW</span>() - <span class="fn">INTERVAL</span> <span class="str">'7 days'</span></span>
                             </div>
                             <div class="code-line">
-                                <span class="line-no">4</span
-                                ><span class="code">
-                                    <span class="kw">GROUP BY</span>
-                                    <span class="id">customer_id</span></span
-                                >
+                                <span class="line-no">4</span><span class="code"><span class="kw">GROUP BY</span> <span class="id">customer_id</span></span>
                             </div>
                             <div class="code-line active">
-                                <span class="line-no">5</span
-                                ><span class="code">
-                                    <span class="kw">ORDER BY</span>
-                                    <span class="id">orders</span>
-                                    <span class="str">DESC</span>
-                                    <span class="kw">LIMIT</span>
-                                    <span class="num">5</span>;</span
-                                >
+                                <span class="line-no">5</span><span class="code"><span class="kw">ORDER BY</span> <span class="id">orders</span> <span class="str">DESC</span> <span class="kw">LIMIT</span> <span class="num">5</span>;</span>
                             </div>
                         </section>
 

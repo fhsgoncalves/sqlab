@@ -81,10 +81,10 @@ impl CompletionProvider for SqlCompletionProvider {
         _: &mut Window,
         cx: &mut Context<InputState>,
     ) -> Task<Result<CompletionResponse>> {
-        let query = trigger.trigger_character.unwrap_or_default();
+        let _ = trigger;
         let config = self.manager.read(cx).active_config().cloned();
         let cache = self.cache.clone();
-        let context = CompletionContextData::new(rope, offset, &query);
+        let context = CompletionContextData::new(rope, offset);
 
         if let Some(config) = config {
             let key = schema_cache::cache_key(&config);
@@ -127,9 +127,14 @@ impl CompletionProvider for SqlCompletionProvider {
         new_text: &str,
         _cx: &mut Context<InputState>,
     ) -> bool {
-        new_text
-            .chars()
-            .any(|ch| ch == '.' || ch == '_' || ch.is_ascii_alphanumeric() || ch.is_whitespace())
+        new_text.chars().any(|ch| {
+            ch == '.'
+                || ch == '_'
+                || ch == ','
+                || ch == '"'
+                || ch.is_ascii_alphanumeric()
+                || ch.is_whitespace()
+        })
     }
 }
 
@@ -145,7 +150,7 @@ struct CompletionContextData {
 }
 
 impl CompletionContextData {
-    fn new(rope: &Rope, offset: usize, query: &str) -> Self {
+    fn new(rope: &Rope, offset: usize) -> Self {
         let text = rope.to_string();
         let statement_start = text[..offset]
             .rfind(';')
@@ -155,11 +160,12 @@ impl CompletionContextData {
             .find(';')
             .map(|ix| offset + ix)
             .unwrap_or(text.len());
-        let mut replace_start = offset.saturating_sub(query.len());
-        let mut prefix = query.to_string();
+        let current_token = current_completion_token(rope, offset);
+        let mut replace_start = offset.saturating_sub(current_token.len());
+        let mut prefix = current_token.clone();
         let mut qualifier = None;
 
-        if let Some((before_dot, after_dot)) = query.rsplit_once('.') {
+        if let Some((before_dot, after_dot)) = current_token.rsplit_once('.') {
             prefix = after_dot.to_string();
             qualifier = (!before_dot.is_empty()).then(|| before_dot.to_string());
             replace_start = offset.saturating_sub(prefix.len());
@@ -220,6 +226,14 @@ fn cached_schema(
 
 fn build_items(context: &CompletionContextData, schema: &DatabaseSchema) -> Vec<CompletionItem> {
     if let Some(qualifier) = context.qualifier.as_deref() {
+        if context.scope == CompletionScope::TableReference {
+            let mut items = schema_table_items(context, schema, qualifier);
+            if !items.is_empty() {
+                items.extend(keyword_items(context, 60));
+                return limit_items(items);
+            }
+        }
+
         let mut items = qualified_column_items(context, schema, qualifier);
         if !items.is_empty() {
             items.extend(general_items(context, schema));
@@ -246,6 +260,22 @@ fn build_items(context: &CompletionContextData, schema: &DatabaseSchema) -> Vec<
     }
 
     limit_items(general_items(context, schema))
+}
+
+fn schema_table_items(
+    context: &CompletionContextData,
+    schema: &DatabaseSchema,
+    qualifier: &str,
+) -> Vec<ScoredCompletion> {
+    schema
+        .tables
+        .iter()
+        .filter(|table| {
+            table.schema.eq_ignore_ascii_case(qualifier)
+                && matches_prefix(&table.name, &context.prefix)
+        })
+        .map(|table| table_item(context, table, 0))
+        .collect()
 }
 
 fn qualified_column_items(
@@ -643,6 +673,21 @@ fn previous_identifier(rope: &Rope, before_offset: usize) -> Option<String> {
     (!identifier.is_empty()).then_some(identifier)
 }
 
+fn current_completion_token(rope: &Rope, offset: usize) -> String {
+    let text = rope.slice(0..offset).to_string();
+    text.chars()
+        .rev()
+        .take_while(|ch| is_completion_token_char(*ch))
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
+}
+
+fn is_completion_token_char(ch: char) -> bool {
+    ch == '_' || ch == '.' || ch == '"' || ch.is_ascii_alphanumeric()
+}
+
 fn matches_prefix(value: &str, prefix: &str) -> bool {
     prefix.is_empty()
         || value
@@ -721,5 +766,47 @@ mod tests {
             completion_scope(statement, cursor),
             CompletionScope::SelectList
         ));
+    }
+
+    #[test]
+    fn derives_completion_prefix_from_rope() {
+        let rope = Rope::from("select * from ord");
+        let context = CompletionContextData::new(&rope, rope.len());
+
+        assert_eq!(context.prefix, "ord");
+        assert_eq!(context.replace_start, "select * from ".len());
+        assert_eq!(context.qualifier, None);
+        assert!(matches!(context.scope, CompletionScope::TableReference));
+    }
+
+    #[test]
+    fn derives_qualifier_after_dot_from_rope() {
+        let rope = Rope::from("select u. from users u");
+        let offset = "select u.".len();
+        let context = CompletionContextData::new(&rope, offset);
+
+        assert_eq!(context.prefix, "");
+        assert_eq!(context.replace_start, offset);
+        assert_eq!(context.qualifier.as_deref(), Some("u"));
+    }
+
+    #[test]
+    fn suggests_tables_after_schema_qualifier_in_table_scope() {
+        let rope = Rope::from("select * from public.us");
+        let context = CompletionContextData::new(&rope, rope.len());
+        let schema = DatabaseSchema {
+            tables: vec![TableInfo {
+                schema: "public".to_string(),
+                name: "users".to_string(),
+                kind: TableKind::Table,
+                columns: Vec::new(),
+            }],
+            ..Default::default()
+        };
+
+        let items = schema_table_items(&context, &schema, "public");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].item.label, "users");
     }
 }

@@ -2,17 +2,18 @@ use std::path::PathBuf;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Window, actions,
+    IntoElement, ParentElement, Render, Styled, Subscription, Window, actions, hsla, px,
 };
 use gpui_component::{
     ActiveTheme,
     dock::{Panel, PanelEvent, PanelState},
-    input::{Input, InputState},
+    input::{Input, InputDecoration, InputState},
     v_flex,
 };
 
-use crate::data_source::manager::DataSourceManager;
+use super::query_detector::{QueryRange, query_at_cursor};
 use super::sql_completion::SqlCompletionProvider;
+use crate::data_source::manager::DataSourceManager;
 
 actions!(editor, [ExecuteQuery, SaveFile]);
 
@@ -20,6 +21,8 @@ pub struct EditorPanel {
     path: PathBuf,
     editor: Entity<InputState>,
     focus_handle: FocusHandle,
+    active_query: Option<QueryRange>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
@@ -57,18 +60,62 @@ impl EditorPanel {
             state
         });
 
-        Self {
+        let mut panel = Self {
             path,
-            editor,
+            editor: editor.clone(),
             focus_handle: cx.focus_handle(),
-        }
+            active_query: None,
+            _subscriptions: vec![cx.observe(&editor, |this, _, cx| {
+                this.refresh_active_query(cx);
+            })],
+        };
+        panel.refresh_active_query(cx);
+        panel
     }
-    pub fn query_context(&self, cx: &App) -> (String, usize, String) {
+    pub fn query_context(&self, cx: &App) -> (String, Option<String>) {
         let state = self.editor.read(cx);
         let text = state.value().to_string();
         let cursor = state.cursor();
         let selected = state.selected_value().to_string();
-        (text, cursor, selected)
+
+        if !selected.trim().is_empty() {
+            return (selected, None);
+        }
+
+        let active_query = query_at_cursor(&text, cursor).map(|query| query.text);
+        (String::new(), active_query)
+    }
+
+    fn refresh_active_query(&mut self, cx: &mut Context<Self>) {
+        let active_query = {
+            let state = self.editor.read(cx);
+            let text = state.value().to_string();
+            let selected = state.selected_value().to_string();
+            if selected.trim().is_empty() {
+                query_at_cursor(&text, state.cursor())
+            } else {
+                None
+            }
+        };
+
+        let decorations = active_query
+            .as_ref()
+            .map(|query| InputDecoration {
+                range: query.trimmed_range.clone(),
+                fill: None,
+                border: Some(hsla(0.76, 0.73, 0.72, 0.85)),
+                border_width: px(1.),
+            })
+            .into_iter()
+            .collect();
+        self.editor.update(cx, |state, cx| {
+            state.set_decorations(decorations, cx);
+        });
+
+        if self.active_query != active_query {
+            self.active_query = active_query;
+            cx.notify();
+        }
     }
 
     fn on_save_file(&mut self, _: &SaveFile, _window: &mut Window, cx: &mut Context<Self>) {
