@@ -101,6 +101,8 @@ pub struct ColumnInfo {
     pub data_type: String,
     pub nullable: bool,
     pub ordinal: i32,
+    pub is_pk: bool,
+    pub is_fk: bool,
 }
 
 #[derive(Debug, Clone)]

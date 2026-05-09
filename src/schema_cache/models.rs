@@ -51,6 +51,8 @@ pub fn schema_to_rows(
                 data_type: c.data_type.clone(),
                 nullable: if c.nullable { 1 } else { 0 },
                 ordinal: c.ordinal,
+                is_pk: if c.is_pk { 1 } else { 0 },
+                is_fk: if c.is_fk { 1 } else { 0 },
             });
         }
     }
@@ -155,6 +157,8 @@ pub fn rows_to_schema(
                 data_type: c.data_type,
                 nullable: c.nullable != 0,
                 ordinal: c.ordinal,
+                is_pk: c.is_pk != 0,
+                is_fk: c.is_fk != 0,
             });
         }
     }
@@ -240,6 +244,8 @@ pub struct ColumnRow {
     pub data_type: String,
     pub nullable: i32,
     pub ordinal: i32,
+    pub is_pk: i32,
+    pub is_fk: i32,
 }
 
 #[derive(Debug, Clone)]

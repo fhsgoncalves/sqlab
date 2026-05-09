@@ -162,7 +162,7 @@ impl PostgresDataSource {
         let client = self.client.as_ref().ok_or(DataSourceError::NotConnected)?;
         let configured_schema = self.config.schema.clone();
 
-        let (schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows) = self
+        let (schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows) = self
             .runtime
             .block_on(async {
                 let schema_rows = client
@@ -299,7 +299,47 @@ impl PostgresDataSource {
                     )
                     .await?;
 
-                Ok::<_, tokio_postgres::Error>((schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows))
+                let pk_rows = client
+                    .query(
+                        "
+                        select
+                            n.nspname as schema_name,
+                            c.relname as table_name,
+                            a.attname as column_name
+                        from pg_index ix
+                        join pg_class c on c.oid = ix.indrelid
+                        join pg_namespace n on n.oid = c.relnamespace
+                        join pg_attribute a on a.attrelid = c.oid and a.attnum = any(ix.indkey)
+                        where ix.indisprimary
+                          and n.nspname !~ '^pg_'
+                          and n.nspname <> 'information_schema'
+                          and ($1 = '' or n.nspname = $1)
+                        ",
+                        &[&configured_schema],
+                    )
+                    .await?;
+
+                let fk_rows = client
+                    .query(
+                        "
+                        select
+                            n.nspname as schema_name,
+                            c.relname as table_name,
+                            a.attname as column_name
+                        from pg_constraint con
+                        join pg_class c on c.oid = con.conrelid
+                        join pg_namespace n on n.oid = c.relnamespace
+                        join pg_attribute a on a.attrelid = c.oid and a.attnum = any(con.conkey)
+                        where con.contype = 'f'
+                          and n.nspname !~ '^pg_'
+                          and n.nspname <> 'information_schema'
+                          and ($1 = '' or n.nspname = $1)
+                        ",
+                        &[&configured_schema],
+                    )
+                    .await?;
+
+                Ok::<_, tokio_postgres::Error>((schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows))
             })
             .map_err(|e| DataSourceError::QueryFailed(format_postgres_error(e)))?;
 
@@ -311,16 +351,33 @@ impl PostgresDataSource {
             })
             .collect::<Vec<_>>();
 
+        use std::collections::HashSet;
+        let pk_set: HashSet<(String, String, String)> = pk_rows
+            .iter()
+            .map(|row| (row.get("schema_name"), row.get("table_name"), row.get("column_name")))
+            .collect();
+        let fk_set: HashSet<(String, String, String)> = fk_rows
+            .iter()
+            .map(|row| (row.get("schema_name"), row.get("table_name"), row.get("column_name")))
+            .collect();
+
         let mut tables = Vec::<TableInfo>::new();
         for row in column_rows {
             let schema = row.get::<_, String>("schema_name");
             let table_name = row.get::<_, String>("table_name");
+            let column_name = row.get::<_, String>("column_name");
             let relkind = row.get::<_, String>("relkind");
+
+            let is_pk = pk_set.contains(&(schema.clone(), table_name.clone(), column_name.clone()));
+            let is_fk = fk_set.contains(&(schema.clone(), table_name.clone(), column_name.clone()));
+
             let column = ColumnInfo {
-                name: row.get("column_name"),
+                name: column_name,
                 data_type: row.get("data_type"),
                 nullable: !row.get::<_, bool>("attnotnull"),
                 ordinal: i32::from(row.get::<_, i16>("attnum")),
+                is_pk,
+                is_fk,
             };
 
             if let Some(table) = tables

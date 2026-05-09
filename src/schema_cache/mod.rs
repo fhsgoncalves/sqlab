@@ -72,8 +72,8 @@ pub fn save(
 
         for c in &columns {
             conn.execute(
-                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, nullable, ordinal) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.nullable, c.ordinal],
+                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.nullable, c.ordinal, c.is_pk, c.is_fk],
             )?;
         }
 
@@ -172,7 +172,7 @@ fn load_columns(
     key: &str,
 ) -> Result<Vec<ColumnRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT connection_key, schema_name, table_name, name, data_type, nullable, ordinal FROM columns WHERE connection_key = ?1",
+        "SELECT connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk FROM columns WHERE connection_key = ?1",
     )?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(ColumnRow {
@@ -183,6 +183,8 @@ fn load_columns(
             data_type: row.get(4)?,
             nullable: row.get(5)?,
             ordinal: row.get(6)?,
+            is_pk: row.get(7)?,
+            is_fk: row.get(8)?,
         })
     })?;
     rows.collect()

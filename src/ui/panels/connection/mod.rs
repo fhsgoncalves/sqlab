@@ -28,6 +28,7 @@ pub struct ConnectionPanel {
     expanded_connections: HashSet<String>,
     expanded_nodes: HashSet<String>,
     selected_node: Option<String>,
+    selected_connection: Option<String>,
     shown_errors: HashSet<String>,
 }
 
@@ -50,6 +51,7 @@ impl ConnectionPanel {
             expanded_connections: HashSet::new(),
             expanded_nodes: HashSet::new(),
             selected_node: None,
+            selected_connection: None,
             shown_errors: HashSet::new(),
         }
     }
@@ -247,7 +249,10 @@ impl ConnectionPanel {
             cx.update_entity(&manager, |manager, cx| {
                 match result {
                     Ok(_) => manager.set_introspection_status(&name, IntrospectionStatus::Cached),
-                    Err(_) => manager.set_introspection_status(&name, IntrospectionStatus::Failed),
+                    Err(e) => {
+                        eprintln!("Schema introspection failed for {}: {}", name, e);
+                        manager.set_introspection_status(&name, IntrospectionStatus::Failed);
+                    }
                 }
                 cx.notify();
             });
@@ -308,19 +313,6 @@ impl ConnectionPanel {
         else { return; };
 
         self.introspect_schema(config, cx);
-    }
-
-    fn show_error_dialog(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
-        let error = self.manager.read(cx).last_error(&name).map(String::from);
-        if let Some(error) = error {
-            self.shown_errors.insert(name.clone());
-            let error = error.clone();
-            window.open_alert_dialog(cx, move |alert, _, _| {
-                alert
-                    .title(format!("Connection Error: {}", name))
-                    .description(error.clone())
-            });
-        }
     }
 
     fn toggle_connection_expanded(&mut self, name: &str) {
@@ -395,8 +387,14 @@ impl ConnectionPanel {
                     let table_id = format!("{}:table:{}", schema_id, table.name);
                     let mut table_item = TreeItem::new(table_id.clone(), SharedString::from(table.name.clone()));
                     for col in &table.columns {
-                        let col_id = format!("{}:col:{}", table_id, col.name);
-                        let label = format!("{} {}{}", col.name, col.data_type, if col.nullable { "" } else { " not null" });
+                        let mut col_id = format!("{}:col:{}", table_id, col.name);
+                        if col.is_pk {
+                            col_id.push_str(":pk");
+                        }
+                        if col.is_fk {
+                            col_id.push_str(":fk");
+                        }
+                        let label = format!("{} : {}{}", col.name, col.data_type, if col.nullable { "" } else { " NOT NULL" });
                         table_item = table_item.child(TreeItem::new(col_id, SharedString::from(label)));
                     }
                     if expanded.contains(&table_id) {
@@ -516,7 +514,13 @@ impl ConnectionPanel {
 
     fn node_icon(id: &str) -> IconName {
         if id.contains(":col:") {
-            IconName::CircleCheck
+            if id.contains(":pk") {
+                IconName::CircleCheck
+            } else if id.contains(":fk") {
+                IconName::ArrowRight
+            } else {
+                IconName::CircleCheck
+            }
         } else if id.contains(":table:") || id.contains(":view:") {
             IconName::File
         } else if id.contains(":func:") {
@@ -645,6 +649,7 @@ impl Render for ConnectionPanel {
 
         for config in &configs {
             let is_active = active_name.as_deref() == Some(config.name.as_str());
+            let is_selected = self.selected_connection.as_deref() == Some(config.name.as_str());
             let status = manager.read(cx).status(&config.name);
             let status_color = if is_active {
                 match status {
@@ -669,122 +674,76 @@ impl Render for ConnectionPanel {
             // Connection row
             let row_name_for_active = row_name.clone();
             let row_name_for_expand = row_name.clone();
-            let row_name_for_icon = row_name.clone();
             children.push(
                 h_flex()
                     .id(format!("connection-row-{}", row_name))
                     .w_full()
-                    .px_2()
+                    .px_1()
                     .py_0p5()
-                    .gap_2()
+                    .gap_1()
                     .rounded(cx.theme().radius)
                     .hover(|style| style.bg(cx.theme().accent.opacity(0.1)))
-                    .when(is_active, |this| this.bg(cx.theme().accent.opacity(0.05)))
+                    .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.15)))
                     .child(
                         div()
-                            .id(format!("connection-status-{}", row_name))
-                            .size(px(10.))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(status_color)
-                            .bg(status_color)
+                            .id(format!("connection-expand-icon-{}", row_name))
+                            .size(px(14.))
                             .flex_none()
+                            .child(
+                                Icon::new(if is_expanded {
+                                    IconName::ArrowDown
+                                } else {
+                                    IconName::ArrowRight
+                                })
+                                .size(px(12.))
+                                .text_color(cx.theme().muted_foreground),
+                            )
                             .cursor_pointer()
                             .on_click(cx.listener({
-                                let row_manager = row_manager.clone();
-                                let row_name = row_name_for_active;
-                                move |this, _, window, cx| {
-                                    let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
-                                    if current_active.as_deref() == Some(row_name.as_str()) {
-                                        match row_manager.read(cx).status(&row_name) {
-                                            ConnectionStatus::Connected => {
-                                                row_manager.update(cx, |manager, cx| {
-                                                    manager.set_active(None);
-                                                    cx.notify();
-                                                });
-                                            }
-                                            ConnectionStatus::Failed => {
-                                                this.show_error_dialog(row_name.clone(), window, cx);
-                                                this.test_connection(row_name.clone(), cx);
-                                            }
-                                            ConnectionStatus::Idle => {
-                                                this.test_connection(row_name.clone(), cx);
-                                            }
-                                        }
-                                    } else {
-                                        this.test_connection(row_name.clone(), cx);
-                                    }
+                                let row_name = row_name_for_expand.clone();
+                                move |this, _, _, cx| {
+                                    this.toggle_connection_expanded(&row_name);
                                     cx.stop_propagation();
+                                    cx.notify();
                                 }
                             })),
                     )
                     .child(
                         div()
                             .id(format!("connection-icon-{}", row_name))
-                            .cursor_pointer()
-                            .on_click(cx.listener({
-                                let row_manager = row_manager.clone();
-                                let row_name = row_name_for_icon;
-                                move |this, _, _, cx| {
-                                    let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
-                                    if current_active.as_deref() == Some(row_name.as_str()) {
-                                        if row_manager.read(cx).status(&row_name) == ConnectionStatus::Connected {
-                                            row_manager.update(cx, |manager, cx| {
-                                                manager.set_active(None);
-                                                cx.notify();
-                                            });
-                                        } else {
-                                            this.test_connection(row_name.clone(), cx);
-                                        }
-                                    } else {
-                                        this.test_connection(row_name.clone(), cx);
-                                    }
-                                    cx.stop_propagation();
-                                }
-                            }))
-                            .child(Icon::new(IconName::HardDrive).text_color(status_color)),
+                            .child(
+                                Icon::new(IconName::HardDrive)
+                                    .size(px(14.))
+                                    .text_color(status_color),
+                            ),
                     )
                     .child(
                         h_flex()
                             .flex_1()
-                            .gap_1()
                             .items_center()
                             .overflow_hidden()
-                            .id(format!("connection-expand-{}", row_name))
+                            .id(format!("connection-label-{}", row_name))
                             .child(
-                                v_flex()
-                                    .flex_1()
-                                    .gap_0p5()
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .truncate()
-                                            .child(config.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .truncate()
-                                            .child(format!(
-                                                "{}:{} / {}",
-                                                config.host, config.port, config.db_type
-                                            )),
-                                    ),
+                                div()
+                                    .text_xs()
+                                    .truncate()
+                                    .when(is_active, |this| this.font_weight(gpui::FontWeight::BOLD))
+                                    .child(config.name.clone()),
                             )
                             .on_click(cx.listener({
                                 let row_manager = row_manager.clone();
-                                let row_name = row_name_for_expand;
-                                move |this, _, _, cx| {
-                                    let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
-                                    let status = row_manager.read(cx).status(&row_name);
-                                    if current_active.as_deref() != Some(row_name.as_str())
-                                        || status != ConnectionStatus::Connected
-                                    {
-                                        this.test_connection(row_name.clone(), cx);
+                                let row_name = row_name_for_active;
+                                move |this, event: &gpui::ClickEvent, _, cx| {
+                                    this.selected_connection = Some(row_name.clone());
+                                    this.selected_node = None;
+                                    
+                                    // GPUI ClickEvent has click_count() method
+                                    if event.click_count() == 2 {
+                                        let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
+                                        if current_active.as_deref() != Some(row_name.as_str()) {
+                                            this.test_connection(row_name.clone(), cx);
+                                        }
                                     }
-                                    this.toggle_connection_expanded(&row_name);
                                     cx.notify();
                                 }
                             })),
@@ -889,29 +848,86 @@ impl Render for ConnectionPanel {
                         let is_selected = self.selected_node.as_deref() == Some(&id);
                         let icon = Self::node_icon(&id);
                         let is_leaf = Self::is_leaf_node(&id);
+                        let is_node_expanded = item.is_expanded();
                         let id_click = id.clone();
                         let id_toggle = id.clone();
+
+                        let (name, data_type) = if id.contains(":col:") {
+                            if let Some(pos) = label.find(" : ") {
+                                (label[..pos].to_string(), Some(label[pos + 3..].to_string()))
+                            } else {
+                                (label.clone(), None)
+                            }
+                        } else {
+                            (label.clone(), None)
+                        };
 
                         children.push(
                             div()
                                 .id(id.clone())
                                 .w_full()
                                 .py_0p5()
-                                .px_2()
-                                .pl(px(16.) * depth as f32 + px(8.))
+                                .px_1()
+                                .pl(px(12.) * depth as f32 + px(4.))
                                 .rounded(cx.theme().radius)
                                 .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.15)))
                                 .child(
                                     h_flex()
-                                        .gap_2()
-                                        .child(icon)
-                                        .child(div().text_sm().child(label.clone())),
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .id(format!("expand-{}", id_toggle))
+                                                .size(px(14.))
+                                                .flex_none()
+                                                .child(
+                                                    if !is_leaf {
+                                                        Icon::new(if is_node_expanded {
+                                                            IconName::ArrowDown
+                                                        } else {
+                                                            IconName::ArrowRight
+                                                        })
+                                                        .size(px(12.))
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .into_any_element()
+                                                    } else {
+                                                        div().size_full().into_any_element()
+                                                    }
+                                                )
+                                                .cursor_pointer()
+                                                .on_click(cx.listener({
+                                                    let id_toggle = id_toggle.clone();
+                                                    move |this, _, _, cx| {
+                                                        if !is_leaf {
+                                                            this.toggle_node_expanded(&id_toggle);
+                                                            cx.stop_propagation();
+                                                            cx.notify();
+                                                        }
+                                                    }
+                                                })),
+                                        )
+                                        .child(
+                                            Icon::new(icon)
+                                                .size(px(14.))
+                                                .flex_none()
+                                                .text_color(cx.theme().muted_foreground),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .child(div().text_base().child(name))
+                                                .when_some(data_type, |this, dt| {
+                                                    this.child(
+                                                        div()
+                                                            .text_base()
+                                                            .text_color(cx.theme().muted_foreground.opacity(0.6))
+                                                            .child(dt),
+                                                    )
+                                                }),
+                                        ),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.selected_node = Some(id_click.clone());
-                                    if !is_leaf {
-                                        this.toggle_node_expanded(&id_toggle);
-                                    }
+                                    this.selected_connection = None;
                                     if is_leaf {
                                         if let Some(name) = Self::copyable_name(&id_click, &label) {
                                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(name));
@@ -971,6 +987,38 @@ impl Render for ConnectionPanel {
             .size_full()
             .overflow_y_scroll()
             .overflow_x_scroll()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                match event.keystroke.key.as_str() {
+                    "right" => {
+                        if let Some(id) = &this.selected_node {
+                            if !this.expanded_nodes.contains(id) {
+                                this.expanded_nodes.insert(id.clone());
+                                cx.notify();
+                            }
+                        } else if let Some(id) = &this.selected_connection {
+                            if !this.expanded_connections.contains(id) {
+                                this.expanded_connections.insert(id.clone());
+                                cx.notify();
+                            }
+                        }
+                    }
+                    "left" => {
+                        if let Some(id) = &this.selected_node {
+                            if this.expanded_nodes.contains(id) {
+                                this.expanded_nodes.remove(id);
+                                cx.notify();
+                            }
+                        } else if let Some(id) = &this.selected_connection {
+                            if this.expanded_connections.contains(id) {
+                                this.expanded_connections.remove(id);
+                                cx.notify();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }))
             .child(
                 v_flex()
                     .children(children)

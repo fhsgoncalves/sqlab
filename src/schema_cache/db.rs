@@ -58,6 +58,8 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             data_type TEXT NOT NULL,
             nullable INTEGER NOT NULL,
             ordinal INTEGER NOT NULL,
+            is_pk INTEGER NOT NULL DEFAULT 0,
+            is_fk INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (connection_key, schema_name, table_name, name)
         );
 
@@ -67,7 +69,7 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             name TEXT NOT NULL,
             arguments TEXT,
             return_type TEXT,
-            PRIMARY KEY (connection_key, schema_name, name)
+            PRIMARY KEY (connection_key, schema_name, name, arguments)
         );
 
         CREATE TABLE IF NOT EXISTS sequences (
@@ -104,7 +106,18 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             PRIMARY KEY (connection_key, schema_name, name)
         );
         ",
-    )
+    )?;
+
+    conn.execute(
+        "ALTER TABLE columns ADD COLUMN is_pk INTEGER NOT NULL DEFAULT 0",
+        [],
+    ).ok();
+    conn.execute(
+        "ALTER TABLE columns ADD COLUMN is_fk INTEGER NOT NULL DEFAULT 0",
+        [],
+    ).ok();
+
+    Ok(())
 }
 
 pub fn clear_connection(conn: &Connection, key: &str) -> Result<(), rusqlite::Error> {
