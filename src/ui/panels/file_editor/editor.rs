@@ -21,6 +21,7 @@ pub struct EditorPanel {
     path: PathBuf,
     editor: Entity<InputState>,
     focus_handle: FocusHandle,
+    last_saved_content: String,
     active_query: Option<QueryRange>,
     query_decoration_override: Option<QueryRange>,
     query_decoration_override_snapshot: Option<EditorSnapshot>,
@@ -60,7 +61,7 @@ impl EditorPanel {
                 .code_editor(language)
                 .line_number(true)
                 .indent_guides(true)
-                .default_value(content)
+                .default_value(content.clone())
                 .placeholder("");
             if is_sql_file {
                 state.lsp.completion_provider =
@@ -69,16 +70,23 @@ impl EditorPanel {
             state
         });
 
+        let editor_focus_handle = editor.read(cx).focus_handle(cx);
         let mut panel = Self {
             path,
             editor: editor.clone(),
             focus_handle: cx.focus_handle(),
+            last_saved_content: content,
             active_query: None,
             query_decoration_override: None,
             query_decoration_override_snapshot: None,
-            _subscriptions: vec![cx.observe(&editor, |this, _, cx| {
-                this.refresh_active_query(cx);
-            })],
+            _subscriptions: vec![
+                cx.observe(&editor, |this, _, cx| {
+                    this.refresh_active_query(cx);
+                }),
+                cx.on_focus_out(&editor_focus_handle, window, |this, _, _, cx| {
+                    this.save(cx);
+                }),
+            ],
         };
         panel.refresh_active_query(cx);
         panel
@@ -177,8 +185,14 @@ impl EditorPanel {
 
     pub fn save(&mut self, cx: &mut Context<Self>) {
         let content = self.editor.read(cx).value().to_string();
-        if let Err(e) = std::fs::write(&self.path, content) {
+        if content == self.last_saved_content {
+            return;
+        }
+
+        if let Err(e) = std::fs::write(&self.path, &content) {
             println!("Failed to save file: {}", e);
+        } else {
+            self.last_saved_content = content;
         }
     }
 }

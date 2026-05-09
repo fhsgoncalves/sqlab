@@ -79,6 +79,14 @@ impl EditorTabs {
     pub fn active_editor(&self) -> Option<&Entity<EditorPanel>> {
         self.editors.get(self.active_ix)
     }
+
+    pub fn save_all(&mut self, cx: &mut Context<Self>) {
+        for editor in &self.editors {
+            editor.update(cx, |editor, cx| {
+                editor.save(cx);
+            });
+        }
+    }
 }
 
 impl EventEmitter<PanelEvent> for EditorTabs {}

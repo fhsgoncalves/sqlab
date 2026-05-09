@@ -31,6 +31,8 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 | Autocompletion | ✅ |
 | Highlight active query selection | ✅ |
 | Passwords stored securely | ✅ |
+| Auto save on focus lost | ✅ |
+
 
 ## Supported Databases
 
@@ -40,9 +42,8 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 
 ## Roadmap
 
-- [ ] Refactor connection panel layout (IntelliJ-style)
-- [ ] Autosave when window or panel focus is lost
 - [ ] Improve autocompletion reliability
+- [ ] Refactor connection panel layout (IntelliJ-style)
 - [ ] Generate DDL for tables, functions, indexes, and triggers from the connections panel
 - [ ] Show type information on data table columns
 - [ ] Cycle between open tabs

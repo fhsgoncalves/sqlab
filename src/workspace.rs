@@ -61,6 +61,13 @@ impl Workspace {
         })
         .detach();
 
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                this.save_open_editors(cx);
+            }
+        })
+        .detach();
+
         // Subscribe to file open events from the file tree
         cx.subscribe_in(
             &file_tree_panel,
@@ -181,12 +188,22 @@ impl Workspace {
     }
 
     fn on_save_file(&mut self, _: &SaveFile, _window: &mut Window, cx: &mut Context<Self>) {
+        self.save_active_editor(cx);
+    }
+
+    fn save_active_editor(&mut self, cx: &mut Context<Self>) {
         self.editor_tabs.update(cx, |tabs, cx| {
             if let Some(editor) = tabs.active_editor() {
                 editor.update(cx, |editor, cx| {
                     editor.save(cx);
                 });
             }
+        });
+    }
+
+    fn save_open_editors(&mut self, cx: &mut Context<Self>) {
+        self.editor_tabs.update(cx, |tabs, cx| {
+            tabs.save_all(cx);
         });
     }
 
