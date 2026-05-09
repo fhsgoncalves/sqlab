@@ -9,8 +9,20 @@ pub struct QueryRange {
     pub text: String,
 }
 
-pub fn query_at_cursor(text: &str, cursor: usize) -> Option<QueryRange> {
-    query_ranges_at_cursor(text, cursor).pop()
+pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> {
+    let mut ranges = query_ranges_at_cursor(text, cursor);
+    let line_ranges = query_ranges_on_line(text, cursor);
+
+    for range in line_ranges {
+        if !ranges
+            .iter()
+            .any(|existing| existing.trimmed_range == range.trimmed_range)
+        {
+            ranges.push(range);
+        }
+    }
+
+    ranges
 }
 
 pub fn query_ranges_at_cursor(text: &str, cursor: usize) -> Vec<QueryRange> {
@@ -67,10 +79,12 @@ fn parse_queries(text: &str, cursor: usize) -> Option<Vec<QueryRange>> {
         if is_query_node(kind) {
             let start = current.start_byte();
             let end = current.end_byte();
-            if end > start && !seen_ranges.contains(&(start, end)) {
-                seen_ranges.insert((start, end));
-                if let Some(query) = trimmed_query_range(text, start, end) {
-                    queries.push(query);
+            if end > start {
+                if let Some(query) = query_range_for_node(text, start, end, kind) {
+                    let key = (query.trimmed_range.start, query.trimmed_range.end);
+                    if seen_ranges.insert(key) {
+                        queries.push(query);
+                    }
                 }
             }
         }
@@ -90,6 +104,60 @@ fn parse_top_level_queries(text: &str) -> Option<Vec<QueryRange>> {
     let mut queries = Vec::new();
     collect_top_level_queries(text, root, &mut queries);
     Some(queries)
+}
+
+fn query_range_for_node(text: &str, start: usize, end: usize, kind: &str) -> Option<QueryRange> {
+    if kind == "subquery" {
+        let raw = text.get(start..end)?;
+        let leading = raw.len() - raw.trim_start().len();
+        let trailing = raw.len() - raw.trim_end().len();
+        let trimmed_start = start + leading;
+        let trimmed_end = end - trailing;
+        let trimmed = text.get(trimmed_start..trimmed_end)?;
+
+        if trimmed.starts_with('(') && trimmed.ends_with(')') {
+            return trimmed_query_range(text, trimmed_start + 1, trimmed_end - 1);
+        }
+    }
+
+    trimmed_query_range(text, start, end)
+}
+
+fn query_ranges_on_line(text: &str, cursor: usize) -> Vec<QueryRange> {
+    let cursor = cursor.min(text.len());
+    let line_start = text[..cursor].rfind('\n').map(|ix| ix + 1).unwrap_or(0);
+    let line_end = text[cursor..]
+        .find('\n')
+        .map(|ix| cursor + ix)
+        .unwrap_or(text.len());
+    let line_range = line_start..line_end;
+
+    let mut ranges = query_ranges_in_text(text)
+        .into_iter()
+        .filter(|query| ranges_intersect(&query.trimmed_range, &line_range))
+        .collect::<Vec<_>>();
+
+    ranges.sort_by_key(|query| {
+        let distance = if cursor < query.trimmed_range.start {
+            query.trimmed_range.start - cursor
+        } else if cursor > query.trimmed_range.end {
+            cursor - query.trimmed_range.end
+        } else {
+            0
+        };
+
+        (
+            distance,
+            query.trimmed_range.end - query.trimmed_range.start,
+            query.trimmed_range.start,
+        )
+    });
+
+    ranges
+}
+
+fn ranges_intersect(left: &Range<usize>, right: &Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
 }
 
 fn collect_top_level_queries(text: &str, node: tree_sitter::Node, queries: &mut Vec<QueryRange>) {
@@ -208,7 +276,10 @@ mod tests {
     #[test]
     fn returns_statement_range_at_cursor() {
         let text = "select 1;\n\nselect * from users;";
-        let query = query_at_cursor(text, text.find("users").unwrap()).unwrap();
+        let query = query_ranges_at_cursor(text, text.find("users").unwrap())
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(query.text, "select * from users");
         assert_eq!(&text[query.trimmed_range], "select * from users");
@@ -217,9 +288,48 @@ mod tests {
     #[test]
     fn returns_outer_statement_for_nested_cursor() {
         let text = "select * from (select id from users) u;";
-        let query = query_at_cursor(text, text.find("users").unwrap()).unwrap();
+        let query = query_ranges_at_cursor(text, text.find("users").unwrap())
+            .into_iter()
+            .last()
+            .unwrap();
 
         assert_eq!(query.text, "select * from (select id from users) u");
+    }
+
+    #[test]
+    fn returns_nested_queries_for_execution_nearest_first() {
+        let text = "select * from (select id from users) u;";
+        let queries = query_ranges_for_execution(text, text.find("users").unwrap());
+
+        assert!(queries.len() >= 2);
+        assert_eq!(queries[0].text, "select id from users");
+        assert_eq!(
+            queries.last().unwrap().text,
+            "select * from (select id from users) u"
+        );
+    }
+
+    #[test]
+    fn returns_cte_queries_for_execution_nearest_first() {
+        let text = "with t as (select 1) select 2;";
+        let queries = query_ranges_for_execution(text, text.find('1').unwrap());
+
+        assert!(queries.len() >= 2);
+        assert_eq!(queries[0].text, "select 1");
+        assert_eq!(
+            queries.last().unwrap().text,
+            "with t as (select 1) select 2"
+        );
+    }
+
+    #[test]
+    fn returns_same_line_queries_for_execution_nearest_first() {
+        let text = "select 1; select 2;";
+        let queries = query_ranges_for_execution(text, text.find('2').unwrap());
+
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0].text, "select 2");
+        assert_eq!(queries[1].text, "select 1");
     }
 
     #[test]

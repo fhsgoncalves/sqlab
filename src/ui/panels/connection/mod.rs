@@ -759,6 +759,7 @@ impl Panel for ConnectionPanel {
             .w_full()
             .items_center()
             .justify_between()
+            .pl(px(4.))
             .child("Connections")
             .child(
                 Button::new("add-connection-title")
@@ -795,6 +796,7 @@ impl Render for ConnectionPanel {
                 .w_full()
                 .items_center()
                 .justify_between()
+                .pl(px(4.))
                 .pb_1()
                 .child(
                     div()

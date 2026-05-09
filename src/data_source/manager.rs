@@ -27,7 +27,6 @@ pub struct DataSourceManager {
 impl DataSourceManager {
     pub fn load() -> anyhow::Result<Self> {
         let config = Config::load()?;
-        let global_credential_error = config.credential_error;
         Ok(Self {
             configs: config.data_sources,
             active_name: None,
@@ -35,7 +34,7 @@ impl DataSourceManager {
             introspection_statuses: HashMap::new(),
             last_errors: HashMap::new(),
             credential_errors: HashMap::new(),
-            global_credential_error,
+            global_credential_error: None,
         })
     }
 
@@ -54,7 +53,6 @@ impl DataSourceManager {
     pub fn save(&self) -> anyhow::Result<()> {
         Config {
             data_sources: self.configs.clone(),
-            credential_error: None,
         }
         .save()
     }

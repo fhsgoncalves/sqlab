@@ -11,7 +11,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::query_detector::{QueryRange, query_at_cursor};
+use super::query_detector::{QueryRange, query_ranges_for_execution};
 use super::sql_completion::SqlCompletionProvider;
 use crate::data_source::manager::DataSourceManager;
 
@@ -72,18 +72,21 @@ impl EditorPanel {
         panel.refresh_active_query(cx);
         panel
     }
-    pub fn query_context(&self, cx: &App) -> (String, Option<String>) {
+    pub fn query_context(&self, cx: &App) -> (String, Vec<String>) {
         let state = self.editor.read(cx);
         let text = state.value().to_string();
         let cursor = state.cursor();
         let selected = state.selected_value().to_string();
 
         if !selected.trim().is_empty() {
-            return (selected, None);
+            return (selected, Vec::new());
         }
 
-        let active_query = query_at_cursor(&text, cursor).map(|query| query.text);
-        (String::new(), active_query)
+        let queries = query_ranges_for_execution(&text, cursor)
+            .into_iter()
+            .map(|query| query.text)
+            .collect();
+        (String::new(), queries)
     }
 
     fn refresh_active_query(&mut self, cx: &mut Context<Self>) {
@@ -92,7 +95,9 @@ impl EditorPanel {
             let text = state.value().to_string();
             let selected = state.selected_value().to_string();
             if selected.trim().is_empty() {
-                query_at_cursor(&text, state.cursor())
+                query_ranges_for_execution(&text, state.cursor())
+                    .into_iter()
+                    .next()
             } else {
                 None
             }

@@ -191,7 +191,7 @@ impl Workspace {
     }
 
     fn on_execute_query(&mut self, _: &ExecuteQuery, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((selected, active_query)) = self
+        let Some((selected, active_queries)) = self
             .editor_tabs
             .read(cx)
             .active_editor()
@@ -208,7 +208,7 @@ impl Workspace {
         let queries = if !selected.trim().is_empty() {
             queries_in_text(&selected)
         } else {
-            active_query.into_iter().collect()
+            active_queries
         };
 
         if queries.is_empty() {
