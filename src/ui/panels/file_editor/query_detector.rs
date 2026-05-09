@@ -20,7 +20,7 @@ pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> 
     if !line_ranges.is_empty()
         && !ranges
             .iter()
-            .any(|query| range_contains_cursor(&query.trimmed_range, cursor))
+            .any(|query| parser_query_should_stay_first(query, &line_ranges, cursor))
     {
         let mut prioritized_ranges = line_ranges;
         append_missing_ranges(&mut prioritized_ranges, ranges);
@@ -67,7 +67,10 @@ pub fn query_ranges_in_text(text: &str) -> Vec<QueryRange> {
     let parsed = parse_top_level_queries(text).unwrap_or_default();
     let fallback = fallback_queries_in_text(text);
 
-    if fallback.len() > parsed.len() {
+    if fallback.len() > parsed.len()
+        || fallback_ranges_cover_more_text(&fallback, &parsed)
+        || fallback_ranges_group_parsed_ranges(&fallback, &parsed)
+    {
         fallback
     } else if parsed.is_empty() {
         vec![trimmed_query_range(text, 0, text.len()).expect("text is not empty")]
@@ -194,6 +197,10 @@ fn range_contains_cursor(range: &Range<usize>, cursor: usize) -> bool {
     range.start <= cursor && cursor < range.end
 }
 
+fn range_contains_cursor_inclusive_end(range: &Range<usize>, cursor: usize) -> bool {
+    range.start <= cursor && cursor <= range.end
+}
+
 fn append_missing_ranges(ranges: &mut Vec<QueryRange>, candidates: Vec<QueryRange>) {
     for candidate in candidates {
         if !ranges
@@ -278,13 +285,45 @@ fn fallback_query(text: &str, cursor: usize) -> Vec<QueryRange> {
 fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
     let mut queries = Vec::new();
     let mut start = 0;
+    let mut paren_depth = 0usize;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
 
     for (ix, ch) in text.char_indices() {
-        if ch == ';' {
-            if let Some(query) = trimmed_query_range(text, start, ix + ch.len_utf8()) {
+        let at_top_level = paren_depth == 0 && !in_single_quote && !in_double_quote;
+
+        if at_top_level && ch == ';' {
+            if let Some(query) = trimmed_query_range(text, start, ix) {
                 queries.push(query);
             }
             start = ix + ch.len_utf8();
+        } else if at_top_level
+            && ch == '\n'
+            && text[start..ix].trim().is_empty()
+            && line_starts_statement(text, ix + ch.len_utf8())
+        {
+            start = ix + ch.len_utf8();
+        } else if at_top_level && ch == '\n' && !text[start..ix].trim().is_empty() {
+            let next_start = ix + ch.len_utf8();
+            let should_split = line_starts_statement(text, next_start)
+                && !cte_continues_with_main_select(text, start, ix, next_start);
+            if !should_split {
+                continue;
+            }
+            if let Some(query) = trimmed_query_range(text, start, ix) {
+                queries.push(query);
+            }
+            start = next_start;
+        }
+
+        match ch {
+            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
+            '"' if !in_single_quote => in_double_quote = !in_double_quote,
+            '(' if !in_single_quote && !in_double_quote => paren_depth += 1,
+            ')' if !in_single_quote && !in_double_quote => {
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+            _ => {}
         }
     }
 
@@ -293,6 +332,132 @@ fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
     }
 
     queries
+}
+
+fn fallback_ranges_cover_more_text(fallback: &[QueryRange], parsed: &[QueryRange]) -> bool {
+    if fallback.is_empty() || fallback.len() != parsed.len() {
+        return false;
+    }
+
+    fallback.iter().zip(parsed).any(|(fallback, parsed)| {
+        fallback.trimmed_range.start == parsed.trimmed_range.start
+            && fallback.trimmed_range.end > parsed.trimmed_range.end
+    })
+}
+
+fn fallback_ranges_group_parsed_ranges(fallback: &[QueryRange], parsed: &[QueryRange]) -> bool {
+    if fallback.is_empty() || parsed.is_empty() || fallback.len() >= parsed.len() {
+        return false;
+    }
+
+    parsed.iter().all(|parsed| {
+        fallback
+            .iter()
+            .any(|fallback| range_contains_range(&fallback.trimmed_range, &parsed.trimmed_range))
+    })
+}
+
+fn range_contains_range(outer: &Range<usize>, inner: &Range<usize>) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+fn line_query_extends_query(line_query: &QueryRange, query: &QueryRange) -> bool {
+    line_query.trimmed_range.start == query.trimmed_range.start
+        && line_query.trimmed_range.end > query.trimmed_range.end
+}
+
+fn line_query_splits_overbroad_query(line_query: &QueryRange, query: &QueryRange) -> bool {
+    line_query.trimmed_range.start == query.trimmed_range.start
+        && line_query.trimmed_range.end < query.trimmed_range.end
+}
+
+fn line_query_is_narrower_current_query(
+    line_query: &QueryRange,
+    query: &QueryRange,
+    cursor: usize,
+) -> bool {
+    range_contains_cursor_inclusive_end(&line_query.trimmed_range, cursor)
+        && query.trimmed_range.start < line_query.trimmed_range.start
+        && line_query.trimmed_range.end <= query.trimmed_range.end
+}
+
+fn parser_query_should_stay_first(
+    query: &QueryRange,
+    line_ranges: &[QueryRange],
+    cursor: usize,
+) -> bool {
+    range_contains_cursor(&query.trimmed_range, cursor)
+        && !line_ranges.iter().any(|line_query| {
+            line_query_extends_query(line_query, query)
+                || line_query_splits_overbroad_query(line_query, query)
+                || line_query_is_narrower_current_query(line_query, query, cursor)
+        })
+}
+
+fn cte_continues_with_main_select(text: &str, start: usize, end: usize, next_start: usize) -> bool {
+    let current = &text[start..end];
+    first_keyword(current) == Some("with")
+        && cte_prefix_can_continue(current)
+        && first_keyword(text.get(next_start..).unwrap_or_default()) == Some("select")
+}
+
+fn cte_prefix_can_continue(text: &str) -> bool {
+    let trimmed = text.trim_end();
+    trimmed.ends_with(')') || trimmed.ends_with(',')
+}
+
+fn line_starts_statement(text: &str, start: usize) -> bool {
+    let Some(rest) = text.get(start..) else {
+        return false;
+    };
+    let Some(keyword) = first_keyword(rest) else {
+        return false;
+    };
+
+    matches!(
+        keyword,
+        "select"
+            | "with"
+            | "insert"
+            | "update"
+            | "delete"
+            | "create"
+            | "drop"
+            | "alter"
+            | "truncate"
+            | "grant"
+            | "begin"
+            | "commit"
+            | "rollback"
+    )
+}
+
+fn first_keyword(text: &str) -> Option<&str> {
+    let line = text
+        .split_once('\n')
+        .map(|(line, _)| line)
+        .unwrap_or(text)
+        .trim_start();
+    let keyword = line
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .next()?;
+
+    Some(match keyword {
+        keyword if keyword.eq_ignore_ascii_case("select") => "select",
+        keyword if keyword.eq_ignore_ascii_case("with") => "with",
+        keyword if keyword.eq_ignore_ascii_case("insert") => "insert",
+        keyword if keyword.eq_ignore_ascii_case("update") => "update",
+        keyword if keyword.eq_ignore_ascii_case("delete") => "delete",
+        keyword if keyword.eq_ignore_ascii_case("create") => "create",
+        keyword if keyword.eq_ignore_ascii_case("drop") => "drop",
+        keyword if keyword.eq_ignore_ascii_case("alter") => "alter",
+        keyword if keyword.eq_ignore_ascii_case("truncate") => "truncate",
+        keyword if keyword.eq_ignore_ascii_case("grant") => "grant",
+        keyword if keyword.eq_ignore_ascii_case("begin") => "begin",
+        keyword if keyword.eq_ignore_ascii_case("commit") => "commit",
+        keyword if keyword.eq_ignore_ascii_case("rollback") => "rollback",
+        _ => return None,
+    })
 }
 
 fn trimmed_query_range(text: &str, start: usize, end: usize) -> Option<QueryRange> {
@@ -412,6 +577,99 @@ mod tests {
         assert_eq!(queries[0].text, "select 1");
         assert_eq!(queries[0].trimmed_range.start, 1);
         assert_eq!(&text[queries[0].trimmed_range.clone()], "select 1");
+    }
+
+    #[test]
+    fn extends_unterminated_query_to_end_of_line() {
+        let text = "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id";
+        let queries = query_ranges_for_execution(text, text.len());
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, text);
+        assert_eq!(queries[0].trimmed_range, 0..text.len());
+    }
+
+    #[test]
+    fn extends_unterminated_query_to_end_of_line_when_cursor_is_inside_query() {
+        let first_query =
+            "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id";
+        let text = format!("{}\n\nselect 1", first_query);
+        let queries = query_ranges_for_execution(&text, text.find("select").unwrap());
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, first_query);
+        assert_eq!(queries[0].trimmed_range, 0..first_query.len());
+    }
+
+    #[test]
+    fn splits_new_statement_line_without_semicolon() {
+        let text =
+            "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1";
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 2);
+        assert_eq!(
+            queries[0].text,
+            "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id"
+        );
+        assert_eq!(queries[1].text, "select 1");
+    }
+
+    #[test]
+    fn returns_current_line_query_when_previous_query_has_no_semicolon() {
+        let text =
+            "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1";
+        let queries = query_ranges_for_execution(text, text.rfind('1').unwrap());
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, "select 1");
+    }
+
+    #[test]
+    fn does_not_split_statement_keyword_inside_parentheses() {
+        let text = "with t as (\nselect 1\n)\nselect * from t";
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].text, text);
+    }
+
+    #[test]
+    fn stops_cte_query_before_next_statement_after_blank_lines() {
+        let expected = "with t as (\n  select 1\n)\nselect \n  c.id, \n  o.status \nfrom customers c \n  inner join orders o on o.customer_id = c.id";
+        let text = format!(
+            "{}\n\n\nselect c.customer_id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1",
+            expected
+        );
+        let queries = query_ranges_for_execution(&text, 0);
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, expected);
+        assert_eq!(queries[0].trimmed_range, 0..expected.len());
+    }
+
+    #[test]
+    fn stops_single_line_query_before_later_multiline_statements() {
+        let text = "select 1\n\nwith t as (\n  select 1\n)\nselect \n  c.id, \n  o.status \nfrom customers c \n  inner join orders o on o.customer_id = c.id\n\n\nselect c.customer_id, o.status from customers c inner join orders o on o.customer_id = c.id";
+        let queries = query_ranges_for_execution(text, text.find('1').unwrap() + 1);
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, "select 1");
+        assert_eq!(queries[0].trimmed_range, 0.."select 1".len());
+    }
+
+    #[test]
+    fn stops_query_with_cte_after_unfinished_select_before_later_statements() {
+        let expected = "with t as (\n  select c.customer_id, o.status from customers c inner join orders o on o.customer_id = c.id\n)\nselect bla";
+        let text = format!(
+            "select bla\n{}\n\nselect c.id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1;",
+            expected
+        );
+        let cursor = text.find("select bla\nwith").unwrap() + "select bla\n".len() + expected.len();
+        let queries = query_ranges_for_execution(&text, cursor);
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, expected);
     }
 
     #[test]
