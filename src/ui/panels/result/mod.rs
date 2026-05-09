@@ -468,11 +468,7 @@ impl Render for ResultPanel {
                     .bg(cx.theme().tab_bar)
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .p_1()
-                            .children(bottom_btn),
-                    )
+                    .child(div().p_1().children(bottom_btn))
                     .child(tab_bar),
             )
             .child(

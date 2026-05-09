@@ -11,8 +11,8 @@ use gpui_component::{
     h_flex, v_flex,
 };
 
-use crate::data_source::manager::DataSourceManager;
 use super::editor::EditorPanel;
+use crate::data_source::manager::DataSourceManager;
 use crate::ui::components::tab::{Tab, TabBar};
 
 pub struct EditorTabs {

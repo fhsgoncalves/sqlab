@@ -90,7 +90,8 @@ impl ConnectionPanel {
         });
         let database = cx.new(|cx| InputState::new(window, cx).default_value(config.database));
         let schema = cx.new(|cx| InputState::new(window, cx).default_value(config.schema));
-        let query_string = cx.new(|cx| InputState::new(window, cx).default_value(config.query_string));
+        let query_string =
+            cx.new(|cx| InputState::new(window, cx).default_value(config.query_string));
 
         let title = if old_name.is_some() {
             "Edit Data Source"
@@ -237,14 +238,17 @@ impl ConnectionPanel {
         cx.notify();
 
         cx.spawn(async move |_this, cx| {
-            let result = cx.background_executor().spawn(async move {
-                let mut source = create_data_source(&config)?;
-                source.connect().await?;
-                let schema = source.introspect_schema().await?;
-                source.disconnect().await?;
-                schema_cache::save(&cache_key, &name_for_cache, &schema)?;
-                Ok::<_, anyhow::Error>(())
-            }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut source = create_data_source(&config)?;
+                    source.connect().await?;
+                    let schema = source.introspect_schema().await?;
+                    source.disconnect().await?;
+                    schema_cache::save(&cache_key, &name_for_cache, &schema)?;
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await;
 
             cx.update_entity(&manager, |manager, cx| {
                 match result {
@@ -256,15 +260,21 @@ impl ConnectionPanel {
                 }
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
     }
 
     fn test_connection(&mut self, name: String, cx: &mut Context<Self>) {
-        let Some(config) = self.manager.read(cx).configs()
+        let Some(config) = self
+            .manager
+            .read(cx)
+            .configs()
             .iter()
             .find(|config| config.name == name)
             .cloned()
-        else { return; };
+        else {
+            return;
+        };
 
         let manager = self.manager.clone();
         let config_name = config.name.clone();
@@ -306,11 +316,16 @@ impl ConnectionPanel {
     }
 
     fn refresh_schema(&mut self, name: String, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(config) = self.manager.read(cx).configs()
+        let Some(config) = self
+            .manager
+            .read(cx)
+            .configs()
             .iter()
             .find(|c| c.name == name)
             .cloned()
-        else { return; };
+        else {
+            return;
+        };
 
         self.introspect_schema(config, cx);
     }
@@ -340,34 +355,70 @@ impl ConnectionPanel {
         let mut root_items = Vec::new();
 
         // Group tables by schema and by kind
-        let mut schema_tables: std::collections::HashMap<String, Vec<&crate::data_source::TableInfo>> = std::collections::HashMap::new();
-        let mut schema_views: std::collections::HashMap<String, Vec<&crate::data_source::TableInfo>> = std::collections::HashMap::new();
+        let mut schema_tables: std::collections::HashMap<
+            String,
+            Vec<&crate::data_source::TableInfo>,
+        > = std::collections::HashMap::new();
+        let mut schema_views: std::collections::HashMap<
+            String,
+            Vec<&crate::data_source::TableInfo>,
+        > = std::collections::HashMap::new();
         for table in &schema.tables {
             if matches!(table.kind, TableKind::View | TableKind::MaterializedView) {
-                schema_views.entry(table.schema.clone()).or_default().push(table);
+                schema_views
+                    .entry(table.schema.clone())
+                    .or_default()
+                    .push(table);
             } else {
-                schema_tables.entry(table.schema.clone()).or_default().push(table);
+                schema_tables
+                    .entry(table.schema.clone())
+                    .or_default()
+                    .push(table);
             }
         }
 
-        let mut schema_functions: std::collections::HashMap<String, Vec<&crate::data_source::FunctionInfo>> = std::collections::HashMap::new();
+        let mut schema_functions: std::collections::HashMap<
+            String,
+            Vec<&crate::data_source::FunctionInfo>,
+        > = std::collections::HashMap::new();
         for func in &schema.functions {
-            schema_functions.entry(func.schema.clone()).or_default().push(func);
+            schema_functions
+                .entry(func.schema.clone())
+                .or_default()
+                .push(func);
         }
 
-        let mut schema_sequences: std::collections::HashMap<String, Vec<&crate::data_source::SequenceInfo>> = std::collections::HashMap::new();
+        let mut schema_sequences: std::collections::HashMap<
+            String,
+            Vec<&crate::data_source::SequenceInfo>,
+        > = std::collections::HashMap::new();
         for seq in &schema.sequences {
-            schema_sequences.entry(seq.schema.clone()).or_default().push(seq);
+            schema_sequences
+                .entry(seq.schema.clone())
+                .or_default()
+                .push(seq);
         }
 
-        let mut schema_indexes: std::collections::HashMap<String, Vec<&crate::data_source::IndexInfo>> = std::collections::HashMap::new();
+        let mut schema_indexes: std::collections::HashMap<
+            String,
+            Vec<&crate::data_source::IndexInfo>,
+        > = std::collections::HashMap::new();
         for idx in &schema.indexes {
-            schema_indexes.entry(idx.schema.clone()).or_default().push(idx);
+            schema_indexes
+                .entry(idx.schema.clone())
+                .or_default()
+                .push(idx);
         }
 
-        let mut schema_triggers: std::collections::HashMap<String, Vec<&crate::data_source::TriggerInfo>> = std::collections::HashMap::new();
+        let mut schema_triggers: std::collections::HashMap<
+            String,
+            Vec<&crate::data_source::TriggerInfo>,
+        > = std::collections::HashMap::new();
         for trig in &schema.triggers {
-            schema_triggers.entry(trig.schema.clone()).or_default().push(trig);
+            schema_triggers
+                .entry(trig.schema.clone())
+                .or_default()
+                .push(trig);
         }
 
         // Schemas folder
@@ -377,15 +428,18 @@ impl ConnectionPanel {
         for schema_info in &schema.schemas {
             let schema_name = &schema_info.name;
             let schema_id = format!("conn:{}:schema:{}", connection_name, schema_name);
-            let mut schema_item = TreeItem::new(schema_id.clone(), SharedString::from(schema_name.clone()));
+            let mut schema_item =
+                TreeItem::new(schema_id.clone(), SharedString::from(schema_name.clone()));
 
             // Tables folder
             if let Some(tables) = schema_tables.get(schema_name) {
                 let tables_id = format!("{}:tables", schema_id);
-                let mut tables_item = TreeItem::new(tables_id.clone(), SharedString::from("Tables"));
+                let mut tables_item =
+                    TreeItem::new(tables_id.clone(), SharedString::from("Tables"));
                 for table in tables {
                     let table_id = format!("{}:table:{}", schema_id, table.name);
-                    let mut table_item = TreeItem::new(table_id.clone(), SharedString::from(table.name.clone()));
+                    let mut table_item =
+                        TreeItem::new(table_id.clone(), SharedString::from(table.name.clone()));
                     for col in &table.columns {
                         let mut col_id = format!("{}:col:{}", table_id, col.name);
                         if col.is_pk {
@@ -394,8 +448,14 @@ impl ConnectionPanel {
                         if col.is_fk {
                             col_id.push_str(":fk");
                         }
-                        let label = format!("{} : {}{}", col.name, col.data_type, if col.nullable { "" } else { " NOT NULL" });
-                        table_item = table_item.child(TreeItem::new(col_id, SharedString::from(label)));
+                        let label = format!(
+                            "{} : {}{}",
+                            col.name,
+                            col.data_type,
+                            if col.nullable { "" } else { " NOT NULL" }
+                        );
+                        table_item =
+                            table_item.child(TreeItem::new(col_id, SharedString::from(label)));
                     }
                     if expanded.contains(&table_id) {
                         table_item = table_item.expanded(true);
@@ -415,7 +475,8 @@ impl ConnectionPanel {
                 for view in views {
                     let view_id = format!("{}:view:{}", schema_id, view.name);
                     let label = format!("{} ({})", view.name, table_kind_label(&view.kind));
-                    views_item = views_item.child(TreeItem::new(view_id, SharedString::from(label)));
+                    views_item =
+                        views_item.child(TreeItem::new(view_id, SharedString::from(label)));
                 }
                 if expanded.contains(&views_id) {
                     views_item = views_item.expanded(true);
@@ -429,7 +490,8 @@ impl ConnectionPanel {
                 let mut seqs_item = TreeItem::new(seqs_id.clone(), SharedString::from("Sequences"));
                 for seq in sequences {
                     let seq_id = format!("{}:seq:{}", schema_id, seq.name);
-                    seqs_item = seqs_item.child(TreeItem::new(seq_id, SharedString::from(seq.name.clone())));
+                    seqs_item = seqs_item
+                        .child(TreeItem::new(seq_id, SharedString::from(seq.name.clone())));
                 }
                 if expanded.contains(&seqs_id) {
                     seqs_item = seqs_item.expanded(true);
@@ -465,10 +527,14 @@ impl ConnectionPanel {
             // Triggers folder
             if let Some(triggers) = schema_triggers.get(schema_name) {
                 let trigs_id = format!("{}:triggers", schema_id);
-                let mut trigs_item = TreeItem::new(trigs_id.clone(), SharedString::from("Triggers"));
+                let mut trigs_item =
+                    TreeItem::new(trigs_id.clone(), SharedString::from("Triggers"));
                 for trig in triggers {
                     let trig_id = format!("{}:trig:{}", schema_id, trig.name);
-                    trigs_item = trigs_item.child(TreeItem::new(trig_id, SharedString::from(trig.name.clone())));
+                    trigs_item = trigs_item.child(TreeItem::new(
+                        trig_id,
+                        SharedString::from(trig.name.clone()),
+                    ));
                 }
                 if expanded.contains(&trigs_id) {
                     trigs_item = trigs_item.expanded(true);
@@ -479,11 +545,14 @@ impl ConnectionPanel {
             // Functions folder
             if let Some(functions) = schema_functions.get(schema_name) {
                 let funcs_id = format!("{}:functions", schema_id);
-                let mut funcs_item = TreeItem::new(funcs_id.clone(), SharedString::from("Functions"));
+                let mut funcs_item =
+                    TreeItem::new(funcs_id.clone(), SharedString::from("Functions"));
                 for func in functions {
                     let func_id = format!("{}:func:{}", schema_id, func.name);
-                    let label = format!("{}({}) -> {}", func.name, func.arguments, func.return_type);
-                    funcs_item = funcs_item.child(TreeItem::new(func_id, SharedString::from(label)));
+                    let label =
+                        format!("{}({}) -> {}", func.name, func.arguments, func.return_type);
+                    funcs_item =
+                        funcs_item.child(TreeItem::new(func_id, SharedString::from(label)));
                 }
                 if expanded.contains(&funcs_id) {
                     funcs_item = funcs_item.expanded(true);
@@ -535,8 +604,12 @@ impl ConnectionPanel {
             IconName::Bell
         } else if id.contains(":schema:") {
             IconName::FolderOpen
-        } else if id.contains(":schemas") || id.ends_with(":tables") || id.ends_with(":views")
-            || id.ends_with(":sequences") || id.ends_with(":indexes") || id.ends_with(":triggers")
+        } else if id.contains(":schemas")
+            || id.ends_with(":tables")
+            || id.ends_with(":views")
+            || id.ends_with(":sequences")
+            || id.ends_with(":indexes")
+            || id.ends_with(":triggers")
             || id.ends_with(":functions")
         {
             IconName::Folder
@@ -560,8 +633,12 @@ impl ConnectionPanel {
             Some("icons/table.svg")
         } else if id.contains(":schema:") {
             Some("icons/schema.svg")
-        } else if id.contains(":schemas") || id.ends_with(":tables") || id.ends_with(":views")
-            || id.ends_with(":sequences") || id.ends_with(":indexes") || id.ends_with(":triggers")
+        } else if id.contains(":schemas")
+            || id.ends_with(":tables")
+            || id.ends_with(":views")
+            || id.ends_with(":sequences")
+            || id.ends_with(":indexes")
+            || id.ends_with(":triggers")
             || id.ends_with(":functions")
         {
             Some("icons/schema.svg")
@@ -571,8 +648,12 @@ impl ConnectionPanel {
     }
 
     fn is_leaf_node(id: &str) -> bool {
-        id.contains(":col:") || id.contains(":seq:") || id.contains(":idx:") || id.contains(":trig:")
-            || id.contains(":func:") || id.contains(":view:")
+        id.contains(":col:")
+            || id.contains(":seq:")
+            || id.contains(":idx:")
+            || id.contains(":trig:")
+            || id.contains(":func:")
+            || id.contains(":view:")
     }
 
     fn copyable_name(id: &str, label: &str) -> Option<String> {
@@ -582,7 +663,9 @@ impl ConnectionPanel {
         } else if id.contains(":table:") {
             id.split(":table:").nth(1).map(|s| s.to_string())
         } else if id.contains(":view:") {
-            id.split(":view:").nth(1).map(|s| s.split_whitespace().next().unwrap_or(s).to_string())
+            id.split(":view:")
+                .nth(1)
+                .map(|s| s.split_whitespace().next().unwrap_or(s).to_string())
         } else if id.contains(":seq:") {
             id.split(":seq:").nth(1).map(|s| s.to_string())
         } else if id.contains(":idx:") {
@@ -735,24 +818,20 @@ impl Render for ConnectionPanel {
                                 }
                             })),
                     )
-                    .child(
-                        div()
-                            .id(format!("connection-icon-{}", row_name))
-                            .child(
-                                if config.db_type == "postgres" {
-                                    Icon::new(IconName::File)
-                                        .path("icons/pg.svg")
-                                        .size(px(28.))
-                                        .text_color(rgb(0x336791))
-                                        .into_any_element()
-                                } else {
-                                    Icon::new(IconName::HardDrive)
-                                        .size(px(26.))
-                                        .text_color(status_color)
-                                        .into_any_element()
-                                },
-                            ),
-                    )
+                    .child(div().id(format!("connection-icon-{}", row_name)).child(
+                        if config.db_type == "postgres" {
+                            Icon::new(IconName::File)
+                                .path("icons/pg.svg")
+                                .size(px(28.))
+                                .text_color(rgb(0x336791))
+                                .into_any_element()
+                        } else {
+                            Icon::new(IconName::HardDrive)
+                                .size(px(26.))
+                                .text_color(status_color)
+                                .into_any_element()
+                        },
+                    ))
                     .child(
                         h_flex()
                             .flex_1()
@@ -763,7 +842,9 @@ impl Render for ConnectionPanel {
                                 div()
                                     .text_base()
                                     .truncate()
-                                    .when(is_active, |this| this.font_weight(gpui::FontWeight::BOLD))
+                                    .when(is_active, |this| {
+                                        this.font_weight(gpui::FontWeight::BOLD)
+                                    })
                                     .child(config.name.clone()),
                             )
                             .on_click(cx.listener({
@@ -772,10 +853,13 @@ impl Render for ConnectionPanel {
                                 move |this, event: &gpui::ClickEvent, _, cx| {
                                     this.selected_connection = Some(row_name.clone());
                                     this.selected_node = None;
-                                    
+
                                     // GPUI ClickEvent has click_count() method
                                     if event.click_count() == 2 {
-                                        let current_active = row_manager.read(cx).active_name().map(|n| n.to_string());
+                                        let current_active = row_manager
+                                            .read(cx)
+                                            .active_name()
+                                            .map(|n| n.to_string());
                                         if current_active.as_deref() != Some(row_name.as_str()) {
                                             this.test_connection(row_name.clone(), cx);
                                         }
@@ -809,7 +893,11 @@ impl Render for ConnectionPanel {
                                             .on_click(window.listener_for(&view_for_refresh, {
                                                 let menu_name = menu_name_for_refresh.clone();
                                                 move |this, _, window, cx| {
-                                                    this.refresh_schema(menu_name.clone(), window, cx);
+                                                    this.refresh_schema(
+                                                        menu_name.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
                                                 }
                                             })),
                                     )
@@ -874,7 +962,12 @@ impl Render for ConnectionPanel {
                 let schema_opt = schema_cache::load(&cache_key).ok().flatten();
 
                 if let Some(schema) = schema_opt {
-                    let tree_items = Self::build_schema_tree_items(&config.name, &config.database, &schema, &self.expanded_nodes);
+                    let tree_items = Self::build_schema_tree_items(
+                        &config.name,
+                        &config.database,
+                        &schema,
+                        &self.expanded_nodes,
+                    );
                     let mut entries = Vec::new();
                     Self::flatten_items(&tree_items, &mut entries, 1);
 
@@ -916,20 +1009,18 @@ impl Render for ConnectionPanel {
                                                 .id(format!("expand-{}", id_toggle))
                                                 .size(px(14.))
                                                 .flex_none()
-                                                .child(
-                                                    if !is_leaf {
-                                                        Icon::new(if is_node_expanded {
-                                                            IconName::ArrowDown
-                                                        } else {
-                                                            IconName::ArrowRight
-                                                        })
-                                                        .size(px(14.))
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .into_any_element()
+                                                .child(if !is_leaf {
+                                                    Icon::new(if is_node_expanded {
+                                                        IconName::ArrowDown
                                                     } else {
-                                                        div().size_full().into_any_element()
-                                                    }
-                                                )
+                                                        IconName::ArrowRight
+                                                    })
+                                                    .size(px(14.))
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .into_any_element()
+                                                } else {
+                                                    div().size_full().into_any_element()
+                                                })
                                                 .cursor_pointer()
                                                 .on_click(cx.listener({
                                                     let id_toggle = id_toggle.clone();
@@ -942,27 +1033,25 @@ impl Render for ConnectionPanel {
                                                     }
                                                 })),
                                         )
-                                        .child(
-                                            if let Some(path) = icon_path {
-                                                let icon_color = if cx.theme().is_dark() {
-                                                    cx.theme().muted_foreground
-                                                } else {
-                                                    cx.theme().foreground
-                                                };
-                                                Icon::new(IconName::File)
-                                                    .path(path)
-                                                    .size(px(16.))
-                                                    .flex_none()
-                                                    .text_color(icon_color)
-                                                    .into_any_element()
+                                        .child(if let Some(path) = icon_path {
+                                            let icon_color = if cx.theme().is_dark() {
+                                                cx.theme().muted_foreground
                                             } else {
-                                                Icon::new(icon)
-                                                    .size(px(16.))
-                                                    .flex_none()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .into_any_element()
-                                            },
-                                        )
+                                                cx.theme().foreground
+                                            };
+                                            Icon::new(IconName::File)
+                                                .path(path)
+                                                .size(px(16.))
+                                                .flex_none()
+                                                .text_color(icon_color)
+                                                .into_any_element()
+                                        } else {
+                                            Icon::new(icon)
+                                                .size(px(16.))
+                                                .flex_none()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .into_any_element()
+                                        })
                                         .child(
                                             h_flex()
                                                 .gap_1()
@@ -971,7 +1060,11 @@ impl Render for ConnectionPanel {
                                                     this.child(
                                                         div()
                                                             .text_base()
-                                                            .text_color(cx.theme().muted_foreground.opacity(0.6))
+                                                            .text_color(
+                                                                cx.theme()
+                                                                    .muted_foreground
+                                                                    .opacity(0.6),
+                                                            )
                                                             .child(dt),
                                                     )
                                                 }),
@@ -982,7 +1075,9 @@ impl Render for ConnectionPanel {
                                     this.selected_connection = None;
                                     if is_leaf {
                                         if let Some(name) = Self::copyable_name(&id_click, &label) {
-                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(name));
+                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                                name,
+                                            ));
                                         }
                                     }
                                     cx.notify();
@@ -993,7 +1088,9 @@ impl Render for ConnectionPanel {
                 } else {
                     let msg = match introspection_status {
                         IntrospectionStatus::Running => "Refreshing schema...",
-                        IntrospectionStatus::Failed => "Schema refresh failed. Click Refresh to retry.",
+                        IntrospectionStatus::Failed => {
+                            "Schema refresh failed. Click Refresh to retry."
+                        }
                         _ => "Schema not cached. Click Refresh to load.",
                     };
                     children.push(
@@ -1071,13 +1168,7 @@ impl Render for ConnectionPanel {
                     _ => {}
                 }
             }))
-            .child(
-                v_flex()
-                    .children(children)
-                    .text_sm()
-                    .p_1()
-                    .h_full(),
-            )
+            .child(v_flex().children(children).text_sm().p_1().h_full())
     }
 }
 
