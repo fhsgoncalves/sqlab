@@ -10,8 +10,22 @@ pub struct QueryRange {
 }
 
 pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> {
+    if current_line(text, cursor).trim().is_empty() {
+        return Vec::new();
+    }
+
     let mut ranges = query_ranges_at_cursor(text, cursor);
     let line_ranges = query_ranges_on_line(text, cursor);
+
+    if !line_ranges.is_empty()
+        && !ranges
+            .iter()
+            .any(|query| range_contains_cursor(&query.trimmed_range, cursor))
+    {
+        let mut prioritized_ranges = line_ranges;
+        append_missing_ranges(&mut prioritized_ranges, ranges);
+        return prioritized_ranges;
+    }
 
     for range in line_ranges {
         if !ranges
@@ -26,6 +40,10 @@ pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> 
 }
 
 pub fn query_ranges_at_cursor(text: &str, cursor: usize) -> Vec<QueryRange> {
+    if current_line(text, cursor).trim().is_empty() {
+        return Vec::new();
+    }
+
     match parse_queries(text, cursor) {
         Some(queries) if !queries.is_empty() => queries,
         _ => fallback_query(text, cursor),
@@ -42,18 +60,17 @@ pub fn queries_in_text(text: &str) -> Vec<String> {
 
 /// Detect top-level SQL query ranges in a block of selected text.
 pub fn query_ranges_in_text(text: &str) -> Vec<QueryRange> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    if text.trim().is_empty() {
         return Vec::new();
     }
 
-    let parsed = parse_top_level_queries(trimmed).unwrap_or_default();
-    let fallback = fallback_queries_in_text(trimmed);
+    let parsed = parse_top_level_queries(text).unwrap_or_default();
+    let fallback = fallback_queries_in_text(text);
 
     if fallback.len() > parsed.len() {
         fallback
     } else if parsed.is_empty() {
-        vec![trimmed_query_range(text, 0, text.len()).expect("trimmed text is not empty")]
+        vec![trimmed_query_range(text, 0, text.len()).expect("text is not empty")]
     } else {
         parsed
     }
@@ -125,11 +142,8 @@ fn query_range_for_node(text: &str, start: usize, end: usize, kind: &str) -> Opt
 
 fn query_ranges_on_line(text: &str, cursor: usize) -> Vec<QueryRange> {
     let cursor = cursor.min(text.len());
-    let line_start = text[..cursor].rfind('\n').map(|ix| ix + 1).unwrap_or(0);
-    let line_end = text[cursor..]
-        .find('\n')
-        .map(|ix| cursor + ix)
-        .unwrap_or(text.len());
+    let line_start = line_start(text, cursor);
+    let line_end = line_end(text, cursor);
     let line_range = line_start..line_end;
 
     let mut ranges = query_ranges_in_text(text)
@@ -156,8 +170,39 @@ fn query_ranges_on_line(text: &str, cursor: usize) -> Vec<QueryRange> {
     ranges
 }
 
+fn current_line(text: &str, cursor: usize) -> &str {
+    let cursor = cursor.min(text.len());
+    &text[line_start(text, cursor)..line_end(text, cursor)]
+}
+
+fn line_start(text: &str, cursor: usize) -> usize {
+    text[..cursor].rfind('\n').map(|ix| ix + 1).unwrap_or(0)
+}
+
+fn line_end(text: &str, cursor: usize) -> usize {
+    text[cursor..]
+        .find('\n')
+        .map(|ix| cursor + ix)
+        .unwrap_or(text.len())
+}
+
 fn ranges_intersect(left: &Range<usize>, right: &Range<usize>) -> bool {
     left.start < right.end && right.start < left.end
+}
+
+fn range_contains_cursor(range: &Range<usize>, cursor: usize) -> bool {
+    range.start <= cursor && cursor < range.end
+}
+
+fn append_missing_ranges(ranges: &mut Vec<QueryRange>, candidates: Vec<QueryRange>) {
+    for candidate in candidates {
+        if !ranges
+            .iter()
+            .any(|existing| existing.trimmed_range == candidate.trimmed_range)
+        {
+            ranges.push(candidate);
+        }
+    }
 }
 
 fn collect_top_level_queries(text: &str, node: tree_sitter::Node, queries: &mut Vec<QueryRange>) {
@@ -323,6 +368,22 @@ mod tests {
     }
 
     #[test]
+    fn returns_no_query_when_cursor_is_on_empty_line() {
+        let text = "select 1;\n\nselect 2;";
+        let queries = query_ranges_for_execution(text, text.find("\n\n").unwrap() + 1);
+
+        assert!(queries.is_empty());
+    }
+
+    #[test]
+    fn returns_no_query_when_cursor_is_on_whitespace_only_line() {
+        let text = "select 1;\n   \nselect 2;";
+        let queries = query_ranges_for_execution(text, text.find("   ").unwrap() + 1);
+
+        assert!(queries.is_empty());
+    }
+
+    #[test]
     fn returns_same_line_queries_for_execution_nearest_first() {
         let text = "select 1; select 2;";
         let queries = query_ranges_for_execution(text, text.find('2').unwrap());
@@ -330,6 +391,27 @@ mod tests {
         assert_eq!(queries.len(), 2);
         assert_eq!(queries[0].text, "select 2");
         assert_eq!(queries[1].text, "select 1");
+    }
+
+    #[test]
+    fn returns_same_line_query_when_cursor_is_after_semicolon() {
+        let text =
+            "select bla;\n\nselect c.id, o.status from customers c inner join orders o on o.customer_id = c.id";
+        let queries = query_ranges_for_execution(text, text.find('\n').unwrap());
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, "select bla");
+    }
+
+    #[test]
+    fn keeps_query_range_offsets_when_file_starts_with_empty_line() {
+        let text = "\nselect 1;";
+        let queries = query_ranges_for_execution(text, text.len());
+
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0].text, "select 1");
+        assert_eq!(queries[0].trimmed_range.start, 1);
+        assert_eq!(&text[queries[0].trimmed_range.clone()], "select 1");
     }
 
     #[test]
