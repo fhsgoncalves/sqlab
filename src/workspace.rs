@@ -10,11 +10,14 @@ use gpui_component::{
     IconName, Root, Sizable, TitleBar, WindowExt,
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockItem},
-    h_flex, v_flex,
+    h_flex,
+    spinner::Spinner,
+    v_flex,
 };
 
 use crate::data_source::manager::DataSourceManager;
 use crate::data_source::{ConnectionStatus, DataSourceError, QueryResult, create_data_source};
+use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::file_editor::query_detector::queries_in_text;
 use crate::ui::panels::file_editor::{
     EditorTabs, ExecuteQuery, QuerySelected, QuerySelector, SaveFile,
@@ -31,6 +34,7 @@ pub struct Workspace {
     editor_tabs: Entity<EditorTabs>,
     results_panel: Entity<ResultPanel>,
     data_source_manager: Entity<DataSourceManager>,
+    activity_tracker: Entity<ActivityTracker>,
     focus_handle: FocusHandle,
 }
 
@@ -50,6 +54,12 @@ impl Workspace {
                 DataSourceManager::empty()
             })
         });
+        let activity_tracker = cx.new(|_cx| ActivityTracker::new());
+
+        cx.observe(&activity_tracker, |_, _, cx| {
+            cx.notify();
+        })
+        .detach();
 
         // Subscribe to file open events from the file tree
         cx.subscribe_in(
@@ -90,12 +100,18 @@ impl Workspace {
         let center_panels = DockItem::panel(Arc::new(editor_tabs.clone()));
 
         // Set up right dock: database connections
-        let database_panel =
-            cx.new(|cx| ConnectionPanel::new(data_source_manager.clone(), window, cx));
+        let database_panel = cx.new(|cx| {
+            ConnectionPanel::new(
+                data_source_manager.clone(),
+                activity_tracker.clone(),
+                window,
+                cx,
+            )
+        });
         let right_panels = DockItem::panel(Arc::new(database_panel));
 
         let results_panel = cx.new(|cx| {
-            let mut panel = ResultPanel::new(window, cx);
+            let mut panel = ResultPanel::new(activity_tracker.clone(), window, cx);
             panel.set_dock_area(weak_dock_area.clone());
             panel
         });
@@ -126,6 +142,7 @@ impl Workspace {
             editor_tabs,
             results_panel,
             data_source_manager: data_source_manager.clone(),
+            activity_tracker,
             focus_handle,
         };
 
@@ -244,8 +261,12 @@ impl Workspace {
 
         let results_panel = self.results_panel.clone();
         let data_source_manager = self.data_source_manager.clone();
+        let activity_tracker = self.activity_tracker.clone();
         let config_for_result = config.clone();
         let config_name = config.name.clone();
+        let activity_id = self
+            .activity_tracker
+            .update(cx, |tracker, cx| tracker.begin("Running query", cx));
 
         cx.spawn(async move |_this, cx| {
             let query_for_task = query.clone();
@@ -272,6 +293,10 @@ impl Workspace {
                 panel.set_result(query, result, succeeded, Some(config_for_result), cx);
             });
 
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
+            });
+
             cx.update_entity(&data_source_manager, move |manager, cx| {
                 if connection_failed {
                     manager.set_status(&config_name, ConnectionStatus::Failed);
@@ -282,6 +307,66 @@ impl Workspace {
             });
         })
         .detach();
+    }
+
+    fn render_bottom_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let active_connection = self
+            .data_source_manager
+            .read(cx)
+            .active_name()
+            .map(|name| {
+                let status = self.data_source_manager.read(cx).status(name);
+                let status = match status {
+                    ConnectionStatus::Idle => "idle",
+                    ConnectionStatus::Connected => "connected",
+                    ConnectionStatus::Failed => "failed",
+                };
+                format!("{} ({})", name, status)
+            })
+            .unwrap_or_else(|| "No active connection".into());
+
+        let (is_busy, activity_label, activity_count) = {
+            let tracker = self.activity_tracker.read(cx);
+            (
+                tracker.is_busy(),
+                tracker.label().to_string(),
+                tracker.count(),
+            )
+        };
+        let activity_label = if activity_count > 1 {
+            format!("{} (+{})", activity_label, activity_count - 1)
+        } else {
+            activity_label
+        };
+
+        h_flex()
+            .id("workspace-bottom-bar")
+            .h(px(24.))
+            .flex_none()
+            .items_center()
+            .justify_between()
+            .px_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().tab_bar)
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child(div().truncate().child(active_connection))
+            .child(div().flex_1())
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().child(activity_label))
+                    .child(if is_busy {
+                        Spinner::new()
+                            .xsmall()
+                            .color(cx.theme().muted_foreground)
+                            .into_any_element()
+                    } else {
+                        div().size(px(12.)).into_any_element()
+                    }),
+            )
     }
 }
 
@@ -339,7 +424,13 @@ impl Render for Workspace {
                         ),
                 ),
             )
-            .child(self.dock_area.clone())
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(self.dock_area.clone()),
+            )
+            .child(self.render_bottom_bar(cx))
             .children(Root::render_dialog_layer(window, cx))
     }
 }

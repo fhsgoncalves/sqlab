@@ -21,9 +21,11 @@ use crate::data_source::{
     ConnectionStatus, DataSourceConfig, DataSourceError, TableKind, create_data_source,
 };
 use crate::schema_cache;
+use crate::ui::activity::ActivityTracker;
 
 pub struct ConnectionPanel {
     manager: Entity<DataSourceManager>,
+    activity_tracker: Entity<ActivityTracker>,
     focus_handle: FocusHandle,
     expanded_connections: HashSet<String>,
     expanded_nodes: HashSet<String>,
@@ -39,6 +41,7 @@ impl EventEmitter<PanelEvent> for ConnectionPanel {}
 impl ConnectionPanel {
     pub fn new(
         manager: Entity<DataSourceManager>,
+        activity_tracker: Entity<ActivityTracker>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -49,6 +52,7 @@ impl ConnectionPanel {
 
         Self {
             manager,
+            activity_tracker,
             focus_handle: cx.focus_handle(),
             expanded_connections: HashSet::new(),
             expanded_nodes: HashSet::new(),
@@ -271,9 +275,14 @@ impl ConnectionPanel {
 
     fn introspect_schema(&mut self, config: DataSourceConfig, cx: &mut Context<Self>) {
         let manager = self.manager.clone();
+        let activity_tracker = self.activity_tracker.clone();
         let cache_key = schema_cache::cache_key(&config);
         let name = config.name.clone();
         let name_for_cache = name.clone();
+        let activity_label = format!("Refreshing schema: {}", name);
+        let activity_id = self
+            .activity_tracker
+            .update(cx, |tracker, cx| tracker.begin(activity_label, cx));
 
         manager.update(cx, |m, _cx| {
             m.set_introspection_status(&name, IntrospectionStatus::Running);
@@ -303,12 +312,17 @@ impl ConnectionPanel {
                 }
                 cx.notify();
             });
+
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
+            });
         })
         .detach();
     }
 
     fn test_connection(&mut self, name: String, cx: &mut Context<Self>) {
         let manager = self.manager.clone();
+        let activity_tracker = self.activity_tracker.clone();
         let config_name = name.clone();
 
         let Some(config) = manager.update(cx, |manager, cx| {
@@ -331,6 +345,11 @@ impl ConnectionPanel {
         }) else {
             return;
         };
+
+        let activity_label = format!("Connecting: {}", config_name);
+        let activity_id = self
+            .activity_tracker
+            .update(cx, |tracker, cx| tracker.begin(activity_label, cx));
 
         cx.spawn(async move |_this, cx| {
             let result = cx
@@ -356,6 +375,10 @@ impl ConnectionPanel {
                     }
                 }
                 cx.notify();
+            });
+
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
             });
         })
         .detach();

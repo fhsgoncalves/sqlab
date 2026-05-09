@@ -18,12 +18,14 @@ use gpui_component::{
 
 use crate::data_source::postgres::PostgresDataSource;
 use crate::data_source::{DataSourceConfig, QueryResult};
+use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 
 actions!(results_panel, [CopyResultSelection]);
 
 pub struct ResultPanel {
     focus_handle: FocusHandle,
+    activity_tracker: gpui::Entity<ActivityTracker>,
     table_state: gpui::Entity<TableState<ResultsTableDelegate>>,
     export_counter: usize,
     next_result_id: usize,
@@ -107,7 +109,11 @@ struct QueryExecution {
 impl EventEmitter<PanelEvent> for ResultPanel {}
 
 impl ResultPanel {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        activity_tracker: gpui::Entity<ActivityTracker>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let delegate = ResultsTableDelegate {
             columns: Vec::new(),
             rows: Vec::new(),
@@ -123,6 +129,7 @@ impl ResultPanel {
 
         Self {
             focus_handle: cx.focus_handle(),
+            activity_tracker,
             table_state,
             export_counter: 0,
             next_result_id: 1,
@@ -254,6 +261,7 @@ impl ResultPanel {
 
         let input_state = cx.new(|cx| InputState::new(window, cx).default_value(default_path));
         let input_state_for_ok = input_state.clone();
+        let activity_tracker = self.activity_tracker.clone();
 
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             alert
@@ -263,22 +271,35 @@ impl ResultPanel {
                 .on_ok({
                     let input_state_for_ok = input_state_for_ok.clone();
                     let execution = execution.clone();
+                    let activity_tracker = activity_tracker.clone();
                     move |_, _window, cx| {
                         let path = input_state_for_ok.read(cx).value().to_string();
                         if let Some(config) = execution.config.clone() {
                             let query = execution.query.clone();
-                            std::thread::spawn(move || {
-                                let result = (|| {
-                                    let mut source = PostgresDataSource::new(config)?;
-                                    source.connect_blocking()?;
-                                    let result = source.export_query_to_csv(&query, path);
-                                    let _ = source.disconnect_blocking();
-                                    result
-                                })();
+                            let activity_id = activity_tracker
+                                .update(cx, |tracker, cx| tracker.begin("Downloading results", cx));
+                            let activity_tracker = activity_tracker.clone();
+                            cx.spawn(async move |cx| {
+                                let result = cx
+                                    .background_executor()
+                                    .spawn(async move {
+                                        let mut source = PostgresDataSource::new(config)?;
+                                        source.connect_blocking()?;
+                                        let result = source.export_query_to_csv(&query, path);
+                                        let _ = source.disconnect_blocking();
+                                        result
+                                    })
+                                    .await;
+
                                 if let Err(e) = result {
                                     eprintln!("failed to export CSV: {}", e);
                                 }
-                            });
+
+                                activity_tracker.update(cx, |tracker, cx| {
+                                    tracker.finish(activity_id, cx);
+                                });
+                            })
+                            .detach();
                         } else {
                             eprintln!("cannot export CSV without a data source config");
                         }
