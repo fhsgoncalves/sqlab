@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::config::Config;
+use crate::credentials;
 use crate::data_source::postgres::PostgresDataSource;
 use crate::data_source::{ConnectionStatus, DataSource, DataSourceConfig, DataSourceError};
 use crate::schema_cache::{self, cache_key};
@@ -19,17 +20,22 @@ pub struct DataSourceManager {
     statuses: HashMap<String, ConnectionStatus>,
     introspection_statuses: HashMap<String, IntrospectionStatus>,
     last_errors: HashMap<String, String>,
+    credential_errors: HashMap<String, String>,
+    global_credential_error: Option<String>,
 }
 
 impl DataSourceManager {
     pub fn load() -> anyhow::Result<Self> {
         let config = Config::load()?;
+        let global_credential_error = config.credential_error;
         Ok(Self {
             configs: config.data_sources,
             active_name: None,
             statuses: HashMap::new(),
             introspection_statuses: HashMap::new(),
             last_errors: HashMap::new(),
+            credential_errors: HashMap::new(),
+            global_credential_error,
         })
     }
 
@@ -40,12 +46,15 @@ impl DataSourceManager {
             statuses: HashMap::new(),
             introspection_statuses: HashMap::new(),
             last_errors: HashMap::new(),
+            credential_errors: HashMap::new(),
+            global_credential_error: None,
         }
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
         Config {
             data_sources: self.configs.clone(),
+            credential_error: None,
         }
         .save()
     }
@@ -93,6 +102,56 @@ impl DataSourceManager {
         self.last_errors.remove(name);
     }
 
+    pub fn credential_error(&self, name: &str) -> Option<&str> {
+        self.credential_errors.get(name).map(|s| s.as_str())
+    }
+
+    pub fn set_credential_error(&mut self, name: &str, error: String) {
+        self.credential_errors.insert(name.to_string(), error);
+    }
+
+    pub fn clear_credential_error(&mut self, name: &str) {
+        self.credential_errors.remove(name);
+    }
+
+    pub fn global_credential_error(&self) -> Option<&str> {
+        self.global_credential_error.as_deref()
+    }
+
+    pub fn clear_global_credential_error(&mut self) {
+        self.global_credential_error = None;
+    }
+
+    pub fn ensure_password_loaded(&mut self, name: &str) -> Result<(), String> {
+        let Some(config) = self.configs.iter_mut().find(|config| config.name == name) else {
+            return Ok(());
+        };
+
+        if !config.password.is_empty() {
+            self.clear_credential_error(name);
+            return Ok(());
+        }
+
+        match credentials::load_password(name) {
+            Ok(Some(password)) => {
+                config.password = password;
+                self.clear_credential_error(name);
+                self.clear_global_credential_error();
+                Ok(())
+            }
+            Ok(None) => {
+                self.clear_credential_error(name);
+                self.clear_global_credential_error();
+                Ok(())
+            }
+            Err(error) => {
+                let message = credentials::recovery_error_message(&error);
+                self.set_credential_error(name, message.clone());
+                Err(message)
+            }
+        }
+    }
+
     pub fn introspection_status(&self, name: &str) -> IntrospectionStatus {
         self.introspection_statuses
             .get(name)
@@ -133,6 +192,10 @@ impl DataSourceManager {
         self.statuses.remove(name);
         self.introspection_statuses.remove(name);
         self.last_errors.remove(name);
+        self.credential_errors.remove(name);
+        if let Err(e) = credentials::delete_password(name) {
+            eprintln!("failed to delete keychain password for {}: {}", name, e);
+        }
         if self.active_name.as_deref() == Some(name) {
             self.active_name = None;
         }

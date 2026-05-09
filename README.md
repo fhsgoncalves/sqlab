@@ -30,6 +30,7 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 | PostgreSQL driver | ✅ |
 | Autocompletion | ✅ |
 | Highlight active query selection | ✅ |
+| Passwords stored securely | ✅ |
 
 ## Supported Databases
 

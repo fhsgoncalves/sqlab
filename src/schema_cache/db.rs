@@ -111,11 +111,13 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "ALTER TABLE columns ADD COLUMN is_pk INTEGER NOT NULL DEFAULT 0",
         [],
-    ).ok();
+    )
+    .ok();
     conn.execute(
         "ALTER TABLE columns ADD COLUMN is_fk INTEGER NOT NULL DEFAULT 0",
         [],
-    ).ok();
+    )
+    .ok();
 
     Ok(())
 }

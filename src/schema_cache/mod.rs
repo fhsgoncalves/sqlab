@@ -10,8 +10,8 @@ use crate::data_source::DataSourceConfig;
 use crate::data_source::DatabaseSchema;
 use crate::schema_cache::db::with_conn;
 use crate::schema_cache::models::{
-    ColumnRow, FunctionRow, IndexRow, SchemaRow, SequenceRow, TableRow, TriggerRow,
-    rows_to_schema, schema_to_rows,
+    ColumnRow, FunctionRow, IndexRow, SchemaRow, SequenceRow, TableRow, TriggerRow, rows_to_schema,
+    schema_to_rows,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -136,11 +136,9 @@ pub fn clear(connection_key: &str) -> Result<(), SchemaCacheError> {
     })
 }
 
-fn load_schemas(
-    conn: &rusqlite::Connection,
-    key: &str,
-) -> Result<Vec<SchemaRow>, rusqlite::Error> {
-    let mut stmt = conn.prepare("SELECT connection_key, name, owner FROM schemas WHERE connection_key = ?1")?;
+fn load_schemas(conn: &rusqlite::Connection, key: &str) -> Result<Vec<SchemaRow>, rusqlite::Error> {
+    let mut stmt =
+        conn.prepare("SELECT connection_key, name, owner FROM schemas WHERE connection_key = ?1")?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(SchemaRow {
             connection_key: row.get(0)?,
@@ -151,11 +149,10 @@ fn load_schemas(
     rows.collect()
 }
 
-fn load_tables(
-    conn: &rusqlite::Connection,
-    key: &str,
-) -> Result<Vec<TableRow>, rusqlite::Error> {
-    let mut stmt = conn.prepare("SELECT connection_key, schema_name, name, kind FROM tables WHERE connection_key = ?1")?;
+fn load_tables(conn: &rusqlite::Connection, key: &str) -> Result<Vec<TableRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT connection_key, schema_name, name, kind FROM tables WHERE connection_key = ?1",
+    )?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(TableRow {
             connection_key: row.get(0)?,
@@ -167,10 +164,7 @@ fn load_tables(
     rows.collect()
 }
 
-fn load_columns(
-    conn: &rusqlite::Connection,
-    key: &str,
-) -> Result<Vec<ColumnRow>, rusqlite::Error> {
+fn load_columns(conn: &rusqlite::Connection, key: &str) -> Result<Vec<ColumnRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk FROM columns WHERE connection_key = ?1",
     )?;
@@ -231,10 +225,7 @@ fn load_sequences(
     rows.collect()
 }
 
-fn load_indexes(
-    conn: &rusqlite::Connection,
-    key: &str,
-) -> Result<Vec<IndexRow>, rusqlite::Error> {
+fn load_indexes(conn: &rusqlite::Connection, key: &str) -> Result<Vec<IndexRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT connection_key, schema_name, table_name, name, is_unique, is_primary, columns FROM indexes WHERE connection_key = ?1",
     )?;

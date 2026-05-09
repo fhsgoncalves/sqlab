@@ -112,7 +112,9 @@ pub fn schema_to_rows(
         })
         .collect();
 
-    (schemas, tables, columns, functions, sequences, indexes, triggers)
+    (
+        schemas, tables, columns, functions, sequences, indexes, triggers,
+    )
 }
 
 pub fn rows_to_schema(
@@ -149,9 +151,10 @@ pub fn rows_to_schema(
     }
 
     for c in columns {
-        if let Some(table) = table_infos.iter_mut().find(|t| {
-            t.schema == c.schema_name && t.name == c.table_name
-        }) {
+        if let Some(table) = table_infos
+            .iter_mut()
+            .find(|t| t.schema == c.schema_name && t.name == c.table_name)
+        {
             table.columns.push(ColumnInfo {
                 name: c.name,
                 data_type: c.data_type,

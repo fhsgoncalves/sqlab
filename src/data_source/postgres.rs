@@ -7,11 +7,11 @@ use std::{fs::File, io::Write, path::Path};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat};
+use postgres_rustls::MakeTlsConnector;
+use rustls::ClientConfig;
 use tokio::runtime::Runtime;
 use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Client, Row};
-use rustls::ClientConfig;
-use postgres_rustls::MakeTlsConnector;
 
 use crate::data_source::{
     ColumnInfo, DataSource, DataSourceConfig, DataSourceError, DatabaseSchema, FunctionInfo,
@@ -354,11 +354,23 @@ impl PostgresDataSource {
         use std::collections::HashSet;
         let pk_set: HashSet<(String, String, String)> = pk_rows
             .iter()
-            .map(|row| (row.get("schema_name"), row.get("table_name"), row.get("column_name")))
+            .map(|row| {
+                (
+                    row.get("schema_name"),
+                    row.get("table_name"),
+                    row.get("column_name"),
+                )
+            })
             .collect();
         let fk_set: HashSet<(String, String, String)> = fk_rows
             .iter()
-            .map(|row| (row.get("schema_name"), row.get("table_name"), row.get("column_name")))
+            .map(|row| {
+                (
+                    row.get("schema_name"),
+                    row.get("table_name"),
+                    row.get("column_name"),
+                )
+            })
             .collect();
 
         let mut tables = Vec::<TableInfo>::new();
@@ -489,8 +501,9 @@ impl DataSource for PostgresDataSource {
 }
 
 fn make_rustls_connector() -> Result<MakeTlsConnector, DataSourceError> {
-    let certs = rustls_native_certs::load_native_certs()
-        .map_err(|e| DataSourceError::ConnectionFailed(format!("Failed to load root certs: {}", e)))?;
+    let certs = rustls_native_certs::load_native_certs().map_err(|e| {
+        DataSourceError::ConnectionFailed(format!("Failed to load root certs: {}", e))
+    })?;
     let mut root_store = rustls::RootCertStore::empty();
     for cert in certs {
         let _ = root_store.add(cert);

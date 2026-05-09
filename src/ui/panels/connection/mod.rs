@@ -30,6 +30,8 @@ pub struct ConnectionPanel {
     selected_node: Option<String>,
     selected_connection: Option<String>,
     shown_errors: HashSet<String>,
+    shown_credential_errors: HashSet<String>,
+    shown_global_credential_error: bool,
 }
 
 impl EventEmitter<PanelEvent> for ConnectionPanel {}
@@ -53,6 +55,8 @@ impl ConnectionPanel {
             selected_node: None,
             selected_connection: None,
             shown_errors: HashSet::new(),
+            shown_credential_errors: HashSet::new(),
+            shown_global_credential_error: false,
         }
     }
 
@@ -67,6 +71,26 @@ impl ConnectionPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let recovery_error = self.manager.update(cx, |manager, cx| {
+            let error = manager.ensure_password_loaded(&old_name).err();
+            cx.notify();
+            error
+        });
+        if let Some(error) = recovery_error {
+            let title = format!("Keychain Access Error: {}", old_name);
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                alert.title(title.clone()).description(error.clone())
+            });
+        }
+
+        let config = self
+            .manager
+            .read(cx)
+            .configs()
+            .iter()
+            .find(|config| config.name == old_name)
+            .cloned()
+            .unwrap_or(config);
         self.open_config_dialog(Some(old_name), config, window, cx);
     }
 
@@ -132,7 +156,7 @@ impl ConnectionPanel {
                     let schema_for_ok = schema.clone();
                     let query_string_for_ok = query_string.clone();
                     let view = view.clone();
-                    move |_, _window: &mut Window, cx: &mut App| {
+                    move |_, window: &mut Window, cx: &mut App| {
                         let name = name_for_ok.read(cx).value().trim().to_string();
                         let db_type = db_type_for_ok.read(cx).value().trim().to_string();
                         let host = host_for_ok.read(cx).value().trim().to_string();
@@ -177,17 +201,29 @@ impl ConnectionPanel {
                         };
 
                         let is_new = old_name.is_none();
-                        manager.update(cx, |manager, cx| {
+                        let save_result = manager.update(cx, |manager, cx| {
                             if let Some(old_name) = old_name.as_deref() {
                                 manager.update(old_name, config.clone());
                             } else {
                                 manager.add(config.clone());
                             }
-                            if let Err(e) = manager.save() {
-                                eprintln!("failed to save data source config: {}", e);
+                            let save_result = manager.save();
+                            match &save_result {
+                                Ok(()) => manager.clear_credential_error(&name),
+                                Err(error) => {
+                                    manager.set_credential_error(&name, error.to_string());
+                                }
                             }
                             cx.notify();
+                            save_result.map_err(|error| error.to_string())
                         });
+                        if let Err(error) = save_result {
+                            let title = format!("Keychain Access Error: {}", name);
+                            window.open_alert_dialog(cx, move |alert, _, _| {
+                                alert.title(title.clone()).description(error.clone())
+                            });
+                            return false;
+                        }
 
                         if is_new {
                             let _ = view.update(cx, |panel, cx| {
@@ -212,14 +248,21 @@ impl ConnectionPanel {
                 .on_ok({
                     let manager = manager.clone();
                     let name = name.clone();
-                    move |_, _window: &mut Window, cx: &mut App| {
-                        manager.update(cx, |manager, cx| {
+                    move |_, window: &mut Window, cx: &mut App| {
+                        let save_result = manager.update(cx, |manager, cx| {
                             manager.remove(&name);
-                            if let Err(e) = manager.save() {
-                                eprintln!("failed to save data source config: {}", e);
-                            }
+                            let save_result = manager.save();
                             cx.notify();
+                            save_result.map_err(|error| error.to_string())
                         });
+                        if let Err(error) = save_result {
+                            window.open_alert_dialog(cx, move |alert, _, _| {
+                                alert
+                                    .title("Keychain Access Error")
+                                    .description(error.clone())
+                            });
+                            return false;
+                        }
                         true
                     }
                 })
@@ -265,26 +308,29 @@ impl ConnectionPanel {
     }
 
     fn test_connection(&mut self, name: String, cx: &mut Context<Self>) {
-        let Some(config) = self
-            .manager
-            .read(cx)
-            .configs()
-            .iter()
-            .find(|config| config.name == name)
-            .cloned()
-        else {
-            return;
-        };
-
         let manager = self.manager.clone();
-        let config_name = config.name.clone();
+        let config_name = name.clone();
 
-        manager.update(cx, |manager, cx| {
+        let Some(config) = manager.update(cx, |manager, cx| {
             manager.set_active(Some(config_name.clone()));
             manager.set_status(&config_name, ConnectionStatus::Idle);
             manager.clear_last_error(&config_name);
+            if let Err(error) = manager.ensure_password_loaded(&config_name) {
+                manager.set_status(&config_name, ConnectionStatus::Failed);
+                manager.set_last_error(&config_name, error);
+                cx.notify();
+                return None;
+            }
+            let config = manager
+                .configs()
+                .iter()
+                .find(|config| config.name == config_name)
+                .cloned();
             cx.notify();
-        });
+            config
+        }) else {
+            return;
+        };
 
         cx.spawn(async move |_this, cx| {
             let result = cx
@@ -907,17 +953,31 @@ impl Render for ConnectionPanel {
                                             .on_click(window.listener_for(&view_for_duplicate, {
                                                 let manager = manager.clone();
                                                 let menu_name = menu_name_for_duplicate.clone();
-                                                move |_this, _, _window, cx| {
-                                                    manager.update(cx, |manager, cx| {
-                                                    manager.duplicate(&menu_name);
-                                                    if let Err(e) = manager.save() {
-                                                        eprintln!(
-                                                            "failed to save data source config: {}",
-                                                            e
+                                                move |_this, _, window, cx| {
+                                                    let save_result =
+                                                        manager.update(cx, |manager, cx| {
+                                                            manager.duplicate(&menu_name);
+                                                            let save_result = manager.save();
+                                                            if let Err(error) = &save_result {
+                                                                manager.set_credential_error(
+                                                                    &menu_name,
+                                                                    error.to_string(),
+                                                                );
+                                                            }
+                                                            cx.notify();
+                                                            save_result
+                                                                .map_err(|error| error.to_string())
+                                                        });
+                                                    if let Err(error) = save_result {
+                                                        window.open_alert_dialog(
+                                                            cx,
+                                                            move |alert, _, _| {
+                                                                alert
+                                                                    .title("Keychain Access Error")
+                                                                    .description(error.clone())
+                                                            },
                                                         );
                                                     }
-                                                    cx.notify();
-                                                });
                                                 }
                                             })),
                                     )
@@ -1106,6 +1166,43 @@ impl Render for ConnectionPanel {
             }
         }
 
+        if let Some(error) = manager.read(cx).global_credential_error() {
+            if !self.shown_global_credential_error {
+                self.shown_global_credential_error = true;
+                let error = error.to_string();
+                window.open_alert_dialog(cx, move |alert, _, _| {
+                    alert
+                        .title("Keychain Access Error")
+                        .description(error.clone())
+                });
+            }
+        } else {
+            self.shown_global_credential_error = false;
+        }
+
+        let credential_error_names: HashSet<String> = configs
+            .iter()
+            .filter(|config| manager.read(cx).credential_error(&config.name).is_some())
+            .map(|config| config.name.clone())
+            .collect();
+        self.shown_credential_errors
+            .retain(|name| credential_error_names.contains(name));
+
+        for config in &configs {
+            if let Some(error) = manager.read(cx).credential_error(&config.name) {
+                if !self.shown_credential_errors.contains(&config.name) {
+                    self.shown_credential_errors.insert(config.name.clone());
+                    let name = config.name.clone();
+                    let error = error.to_string();
+                    window.open_alert_dialog(cx, move |alert, _, _| {
+                        alert
+                            .title(format!("Keychain Access Error: {}", name))
+                            .description(error.clone())
+                    });
+                }
+            }
+        }
+
         // Auto-show connection errors for newly failed connections
         let failed_names: HashSet<String> = configs
             .iter()
@@ -1116,6 +1213,9 @@ impl Render for ConnectionPanel {
 
         for config in &configs {
             if manager.read(cx).status(&config.name) == ConnectionStatus::Failed {
+                if manager.read(cx).credential_error(&config.name).is_some() {
+                    continue;
+                }
                 if let Some(error) = manager.read(cx).last_error(&config.name) {
                     if !self.shown_errors.contains(&config.name) {
                         self.shown_errors.insert(config.name.clone());

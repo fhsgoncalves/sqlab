@@ -15,6 +15,7 @@ pub struct DataSourceConfig {
     #[serde(default = "default_postgres_port")]
     pub port: u16,
     pub user: String,
+    #[serde(skip)]
     pub password: String,
     pub database: String,
     #[serde(default = "default_postgres_schema")]
@@ -176,4 +177,45 @@ pub trait DataSource: Send + Sync {
     async fn disconnect(&mut self) -> Result<(), DataSourceError>;
     async fn execute_query(&self, query: &str) -> Result<QueryResult, DataSourceError>;
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_source_config_does_not_serialize_password() {
+        let config = DataSourceConfig {
+            name: "local".into(),
+            user: "postgres".into(),
+            password: "secret".into(),
+            database: "app".into(),
+            ..Default::default()
+        };
+
+        let toml = toml::to_string(&config).expect("serialize data source config");
+
+        assert!(!toml.contains("password"));
+        assert!(!toml.contains("secret"));
+    }
+
+    #[test]
+    fn data_source_config_ignores_toml_password() {
+        let toml = r#"
+name = "local"
+db_type = "postgres"
+host = "localhost"
+port = 5432
+user = "postgres"
+password = "legacy-secret"
+database = "app"
+schema = "public"
+query_string = ""
+"#;
+
+        let config: DataSourceConfig =
+            toml::from_str(toml).expect("deserialize data source config");
+
+        assert!(config.password.is_empty());
+    }
 }
