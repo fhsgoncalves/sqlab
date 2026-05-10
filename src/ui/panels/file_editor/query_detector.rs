@@ -23,14 +23,14 @@ pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> 
             .any(|query| parser_query_should_stay_first(query, &line_ranges, cursor))
     {
         let mut prioritized_ranges = line_ranges;
-        append_missing_ranges(&mut prioritized_ranges, ranges);
+        append_missing_ranges(text, cursor, &mut prioritized_ranges, ranges);
         return prioritized_ranges;
     }
 
     for range in line_ranges {
         if !ranges
             .iter()
-            .any(|existing| existing.trimmed_range == range.trimmed_range)
+            .any(|existing| same_query_ignoring_trailing_semicolon(existing, &range))
         {
             ranges.push(range);
         }
@@ -101,7 +101,7 @@ fn parse_queries(text: &str, cursor: usize) -> Option<Vec<QueryRange>> {
             let end = current.end_byte();
             if end > start {
                 if let Some(query) = query_range_for_node(text, start, end, kind) {
-                    let key = (query.trimmed_range.start, query.trimmed_range.end);
+                    let key = canonical_query_key(text, &query.trimmed_range);
                     if seen_ranges.insert(key) {
                         queries.push(query);
                     }
@@ -201,15 +201,58 @@ fn range_contains_cursor_inclusive_end(range: &Range<usize>, cursor: usize) -> b
     range.start <= cursor && cursor <= range.end
 }
 
-fn append_missing_ranges(ranges: &mut Vec<QueryRange>, candidates: Vec<QueryRange>) {
+fn append_missing_ranges(
+    text: &str,
+    cursor: usize,
+    ranges: &mut Vec<QueryRange>,
+    candidates: Vec<QueryRange>,
+) {
     for candidate in candidates {
-        if !ranges
-            .iter()
-            .any(|existing| existing.trimmed_range == candidate.trimmed_range)
-        {
+        if !range_contains_cursor_inclusive_end(&candidate.trimmed_range, cursor) {
+            continue;
+        }
+
+        if !ranges.iter().any(|existing| {
+            same_query_ignoring_trailing_semicolon(existing, &candidate)
+                || candidate_continues_after_terminated_query(text, existing, &candidate)
+        }) {
             ranges.push(candidate);
         }
     }
+}
+
+fn candidate_continues_after_terminated_query(
+    text: &str,
+    query: &QueryRange,
+    candidate: &QueryRange,
+) -> bool {
+    query.trimmed_range.start == candidate.trimmed_range.start
+        && query.trimmed_range.end < candidate.trimmed_range.end
+        && text
+            .get(query.trimmed_range.end..candidate.trimmed_range.end)
+            .is_some_and(|rest| rest.trim_start().starts_with(';'))
+}
+
+fn same_query_ignoring_trailing_semicolon(left: &QueryRange, right: &QueryRange) -> bool {
+    left.trimmed_range.start == right.trimmed_range.start
+        && canonical_query_text(&left.text) == canonical_query_text(&right.text)
+}
+
+fn canonical_query_key(text: &str, range: &Range<usize>) -> (usize, usize) {
+    (range.start, canonical_query_end(text, range))
+}
+
+fn canonical_query_end(text: &str, range: &Range<usize>) -> usize {
+    let Some(raw) = text.get(range.clone()) else {
+        return range.end;
+    };
+
+    let canonical = raw.trim_end().trim_end_matches(';').trim_end();
+    range.start + canonical.len()
+}
+
+fn canonical_query_text(text: &str) -> &str {
+    text.trim_end().trim_end_matches(';').trim_end()
 }
 
 fn collect_top_level_queries(text: &str, node: tree_sitter::Node, queries: &mut Vec<QueryRange>) {
@@ -364,6 +407,7 @@ fn range_contains_range(outer: &Range<usize>, inner: &Range<usize>) -> bool {
 fn line_query_extends_query(line_query: &QueryRange, query: &QueryRange) -> bool {
     line_query.trimmed_range.start == query.trimmed_range.start
         && line_query.trimmed_range.end > query.trimmed_range.end
+        && canonical_query_text(&line_query.text) != canonical_query_text(&query.text)
 }
 
 fn line_query_splits_overbroad_query(line_query: &QueryRange, query: &QueryRange) -> bool {
@@ -560,12 +604,42 @@ mod tests {
 
     #[test]
     fn returns_same_line_query_when_cursor_is_after_semicolon() {
-        let text =
-            "select bla;\n\nselect c.id, o.status from customers c inner join orders o on o.customer_id = c.id";
+        let text = "select bla;\n\nselect c.id, o.status from customers c inner join orders o on o.customer_id = c.id";
         let queries = query_ranges_for_execution(text, text.find('\n').unwrap());
 
         assert!(!queries.is_empty());
         assert_eq!(queries[0].text, "select bla");
+    }
+
+    #[test]
+    fn does_not_duplicate_single_query_that_only_differs_by_trailing_semicolon() {
+        let text = "select * from customers c where c.city <> 'a';";
+        let queries = query_ranges_for_execution(text, text.find("city").unwrap());
+
+        assert_eq!(queries.len(), 1);
+        assert_eq!(
+            queries[0].text,
+            "select * from customers c where c.city <> 'a'"
+        );
+    }
+
+    #[test]
+    fn stops_query_at_semicolon_when_cursor_is_after_terminator() {
+        let text = "select 2;\n\nselect o.created_at from customers c inner join orders o on o.customer_id = c.id where c.city <> 'S';";
+        let queries = query_ranges_for_execution(text, "select 2;".len());
+
+        assert_eq!(queries.len(), 1, "{queries:?}");
+        assert_eq!(queries[0].text, "select 2");
+    }
+
+    #[test]
+    fn keeps_same_line_queries_distinct_when_text_is_equal() {
+        let text = "select 1; select 1;";
+        let queries = query_ranges_for_execution(text, text.rfind('1').unwrap());
+
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0].trimmed_range.start, "select 1; ".len());
+        assert_eq!(queries[1].trimmed_range.start, 0);
     }
 
     #[test]
@@ -581,7 +655,8 @@ mod tests {
 
     #[test]
     fn extends_unterminated_query_to_end_of_line() {
-        let text = "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id";
+        let text =
+            "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id";
         let queries = query_ranges_for_execution(text, text.len());
 
         assert!(!queries.is_empty());
@@ -603,8 +678,7 @@ mod tests {
 
     #[test]
     fn splits_new_statement_line_without_semicolon() {
-        let text =
-            "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1";
+        let text = "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1";
         let queries = query_ranges_in_text(text);
 
         assert_eq!(queries.len(), 2);
@@ -617,8 +691,7 @@ mod tests {
 
     #[test]
     fn returns_current_line_query_when_previous_query_has_no_semicolon() {
-        let text =
-            "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1";
+        let text = "select c.id, o.status from customers c inner join orders o on o.customer_id = c.id\n\nselect 1";
         let queries = query_ranges_for_execution(text, text.rfind('1').unwrap());
 
         assert!(!queries.is_empty());

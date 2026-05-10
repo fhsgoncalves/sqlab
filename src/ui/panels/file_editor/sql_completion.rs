@@ -1121,7 +1121,9 @@ fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
                 let mut text = ch.to_string();
                 let mut end = ix + ch.len_utf8();
                 if matches!(ch, '<' | '>' | '!')
-                    && chars.peek().is_some_and(|(_, next)| matches!(next, '=' | '>'))
+                    && chars
+                        .peek()
+                        .is_some_and(|(_, next)| matches!(next, '=' | '>'))
                 {
                     let (next_ix, next) = chars.next().unwrap();
                     text.push(next);
@@ -1339,7 +1341,8 @@ mod tests {
     #[test]
     fn diagnostics_ignore_current_incomplete_qualified_column() {
         let schema = test_schema();
-        let text = "select name, c.city, o. from customers c inner join orders o on o.customer_id = c.id;";
+        let text =
+            "select name, c.city, o. from customers c inner join orders o on o.customer_id = c.id;";
         let cursor = text.find("o. from").unwrap() + "o.".len();
 
         let diagnostics = sql_diagnostics_at(text, &schema, Some(cursor));
