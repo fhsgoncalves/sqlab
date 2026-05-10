@@ -12,6 +12,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    scroll::ScrollableElement,
     tree::TreeItem,
     v_flex,
 };
@@ -318,7 +319,9 @@ impl ConnectionPanel {
                             });
                             if let Err(error) = save_result {
                                 window.open_alert_dialog(cx, move |alert, _, _| {
-                                    alert.title("Keychain Access Error").description(error.clone())
+                                    alert
+                                        .title("Keychain Access Error")
+                                        .description(error.clone())
                                 });
                             }
                         }
@@ -807,14 +810,15 @@ impl ConnectionPanel {
 
     fn copyable_name(id: &str, label: &str) -> Option<String> {
         if id.contains(":col:") {
-            // label is like "id bigint not null", extract first word
-            label.split_whitespace().next().map(|s| s.to_string())
+            // Column labels include the data type, like "id : bigint NOT NULL".
+            label
+                .split_once(" : ")
+                .map(|(name, _)| name.to_string())
+                .or_else(|| label.split_whitespace().next().map(|s| s.to_string()))
         } else if id.contains(":table:") {
             id.split(":table:").nth(1).map(|s| s.to_string())
         } else if id.contains(":view:") {
-            id.split(":view:")
-                .nth(1)
-                .map(|s| s.split_whitespace().next().unwrap_or(s).to_string())
+            id.split(":view:").nth(1).map(|s| s.to_string())
         } else if id.contains(":seq:") {
             id.split(":seq:").nth(1).map(|s| s.to_string())
         } else if id.contains(":idx:") {
@@ -823,8 +827,19 @@ impl ConnectionPanel {
             id.split(":trig:").nth(1).map(|s| s.to_string())
         } else if id.contains(":func:") {
             id.split(":func:").nth(1).map(|s| s.to_string())
+        } else if id.ends_with(":tables")
+            || id.ends_with(":views")
+            || id.ends_with(":sequences")
+            || id.ends_with(":indexes")
+            || id.ends_with(":triggers")
+            || id.ends_with(":functions")
+            || id.contains(":schemas")
+        {
+            Some(label.to_string())
+        } else if id.contains(":schema:") {
+            id.split(":schema:").nth(1).map(|s| s.to_string())
         } else {
-            None
+            Some(label.to_string())
         }
     }
 }
@@ -1065,11 +1080,12 @@ impl Render for ConnectionPanel {
                         children.push(
                             div()
                                 .id(id.clone())
-                                .w_full()
+                                .min_w_full()
                                 .py_0p5()
                                 .px_1()
                                 .pl(px(12.) * depth as f32 + px(4.))
                                 .rounded(cx.theme().radius)
+                                .whitespace_nowrap()
                                 .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.15)))
                                 .child(
                                     h_flex()
@@ -1143,12 +1159,10 @@ impl Render for ConnectionPanel {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.selected_node = Some(id_click.clone());
                                     this.selected_connection = None;
-                                    if is_leaf {
-                                        if let Some(name) = Self::copyable_name(&id_click, &label) {
-                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                                name,
-                                            ));
-                                        }
+                                    if let Some(name) = Self::copyable_name(&id_click, &label) {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            name,
+                                        ));
                                     }
                                     cx.notify();
                                 }))
@@ -1244,8 +1258,7 @@ impl Render for ConnectionPanel {
         v_flex()
             .id("database-panel")
             .size_full()
-            .overflow_y_scroll()
-            .overflow_x_scroll()
+            .items_start()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 match event.keystroke.key.as_str() {
@@ -1278,7 +1291,8 @@ impl Render for ConnectionPanel {
                     _ => {}
                 }
             }))
-            .child(v_flex().children(children).text_sm().p_1().w_full())
+            .child(v_flex().children(children).text_sm().p_1().min_w_full())
+            .overflow_scrollbar()
     }
 }
 
