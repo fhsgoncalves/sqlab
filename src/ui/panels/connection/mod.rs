@@ -11,7 +11,7 @@ use gpui_component::{
     dock::{Panel, PanelEvent, PanelState},
     h_flex,
     input::{Input, InputState},
-    menu::{DropdownMenu as _, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     tree::TreeItem,
     v_flex,
 };
@@ -271,6 +271,86 @@ impl ConnectionPanel {
                     }
                 })
         });
+    }
+
+    fn connection_context_menu(
+        manager: Entity<DataSourceManager>,
+        menu_name: String,
+        menu_config: DataSourceConfig,
+        view: Entity<Self>,
+    ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
+        move |menu, window, _cx| {
+            let menu_name_for_refresh = menu_name.clone();
+            let menu_name_for_duplicate = menu_name.clone();
+            let menu_name_for_delete = menu_name.clone();
+            let menu_name_for_configure = menu_name.clone();
+            let menu_config_for_configure = menu_config.clone();
+            let view_for_refresh = view.clone();
+            let view_for_duplicate = view.clone();
+            let view_for_delete = view.clone();
+            let view_for_configure = view.clone();
+
+            menu.item(
+                PopupMenuItem::new("Refresh Schema")
+                    .icon(IconName::Redo)
+                    .on_click(window.listener_for(&view_for_refresh, {
+                        let menu_name = menu_name_for_refresh.clone();
+                        move |this, _, window, cx| {
+                            this.refresh_schema(menu_name.clone(), window, cx);
+                        }
+                    })),
+            )
+            .item(
+                PopupMenuItem::new("Duplicate")
+                    .icon(IconName::Copy)
+                    .on_click(window.listener_for(&view_for_duplicate, {
+                        let manager = manager.clone();
+                        let menu_name = menu_name_for_duplicate.clone();
+                        move |_this, _, window, cx| {
+                            let save_result = manager.update(cx, |manager, cx| {
+                                manager.duplicate(&menu_name);
+                                let save_result = manager.save();
+                                if let Err(error) = &save_result {
+                                    manager.set_credential_error(&menu_name, error.to_string());
+                                }
+                                cx.notify();
+                                save_result.map_err(|error| error.to_string())
+                            });
+                            if let Err(error) = save_result {
+                                window.open_alert_dialog(cx, move |alert, _, _| {
+                                    alert.title("Keychain Access Error").description(error.clone())
+                                });
+                            }
+                        }
+                    })),
+            )
+            .item(
+                PopupMenuItem::new("Delete")
+                    .icon(IconName::Delete)
+                    .on_click(window.listener_for(&view_for_delete, {
+                        let menu_name = menu_name_for_delete.clone();
+                        move |this, _, window, cx| {
+                            this.delete_connection(menu_name.clone(), window, cx);
+                        }
+                    })),
+            )
+            .item(
+                PopupMenuItem::new("Configure")
+                    .icon(IconName::Settings)
+                    .on_click(window.listener_for(&view_for_configure, {
+                        let menu_name = menu_name_for_configure.clone();
+                        let menu_config = menu_config_for_configure.clone();
+                        move |this, _, window, cx| {
+                            this.open_edit_dialog(
+                                menu_name.clone(),
+                                menu_config.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    })),
+            )
+        }
     }
 
     fn introspect_schema(&mut self, config: DataSourceConfig, cx: &mut Context<Self>) {
@@ -905,7 +985,6 @@ impl Render for ConnectionPanel {
                     ))
                     .child(
                         h_flex()
-                            .flex_1()
                             .items_center()
                             .overflow_hidden()
                             .id(format!("connection-label-{}", row_name))
@@ -937,107 +1016,13 @@ impl Render for ConnectionPanel {
                                     }
                                     cx.notify();
                                 }
-                            })),
-                    )
-                    .child(
-                        Button::new(format!("connection-menu-{}", menu_name))
-                            .icon(IconName::Ellipsis)
-                            .xsmall()
-                            .ghost()
-                            .flex_none()
-                            .tooltip("Connection Actions")
-                            .dropdown_menu({
-                                let manager = manager.clone();
-                                let menu_name_for_refresh = menu_name.clone();
-                                let menu_name_for_duplicate = menu_name.clone();
-                                let menu_name_for_delete = menu_name.clone();
-                                let menu_name_for_configure = menu_name.clone();
-                                let menu_config_for_configure = menu_config.clone();
-                                let view_for_refresh = view.clone();
-                                let view_for_duplicate = view.clone();
-                                let view_for_delete = view.clone();
-                                let view_for_configure = view.clone();
-                                move |menu, window, _cx| {
-                                    menu.item(
-                                        PopupMenuItem::new("Refresh Schema")
-                                            .icon(IconName::Redo)
-                                            .on_click(window.listener_for(&view_for_refresh, {
-                                                let menu_name = menu_name_for_refresh.clone();
-                                                move |this, _, window, cx| {
-                                                    this.refresh_schema(
-                                                        menu_name.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            })),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new("Duplicate")
-                                            .icon(IconName::Copy)
-                                            .on_click(window.listener_for(&view_for_duplicate, {
-                                                let manager = manager.clone();
-                                                let menu_name = menu_name_for_duplicate.clone();
-                                                move |_this, _, window, cx| {
-                                                    let save_result =
-                                                        manager.update(cx, |manager, cx| {
-                                                            manager.duplicate(&menu_name);
-                                                            let save_result = manager.save();
-                                                            if let Err(error) = &save_result {
-                                                                manager.set_credential_error(
-                                                                    &menu_name,
-                                                                    error.to_string(),
-                                                                );
-                                                            }
-                                                            cx.notify();
-                                                            save_result
-                                                                .map_err(|error| error.to_string())
-                                                        });
-                                                    if let Err(error) = save_result {
-                                                        window.open_alert_dialog(
-                                                            cx,
-                                                            move |alert, _, _| {
-                                                                alert
-                                                                    .title("Keychain Access Error")
-                                                                    .description(error.clone())
-                                                            },
-                                                        );
-                                                    }
-                                                }
-                                            })),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new("Delete")
-                                            .icon(IconName::Delete)
-                                            .on_click(window.listener_for(&view_for_delete, {
-                                                let menu_name = menu_name_for_delete.clone();
-                                                move |this, _, window, cx| {
-                                                    this.delete_connection(
-                                                        menu_name.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            })),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new("Configure")
-                                            .icon(IconName::Settings)
-                                            .on_click(window.listener_for(&view_for_configure, {
-                                                let menu_name = menu_name_for_configure.clone();
-                                                let menu_config = menu_config_for_configure.clone();
-                                                move |this, _, window, cx| {
-                                                    this.open_edit_dialog(
-                                                        menu_name.clone(),
-                                                        menu_config.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            })),
-                                    )
-                                }
-                            }),
+                            }))
+                            .context_menu(Self::connection_context_menu(
+                                manager.clone(),
+                                menu_name.clone(),
+                                menu_config.clone(),
+                                view.clone(),
+                            )),
                     )
                     .into_any_element(),
             );
@@ -1293,7 +1278,7 @@ impl Render for ConnectionPanel {
                     _ => {}
                 }
             }))
-            .child(v_flex().children(children).text_sm().p_1().h_full())
+            .child(v_flex().children(children).text_sm().p_1().w_full())
     }
 }
 
