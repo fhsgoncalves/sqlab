@@ -2,6 +2,8 @@
 
 A fast, native SQL editor built in Rust using [GPUI](https://www.gpui.rs) — the same GPU-accelerated UI framework that powers the Zed editor.
 
+> **Note:** This is a hobby project and it is actively being built using **Spec-Driven Development** powered by coding agents.
+
 ## Install
 
 ```bash

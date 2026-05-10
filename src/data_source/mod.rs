@@ -72,6 +72,7 @@ pub struct DatabaseSchema {
     pub sequences: Vec<SequenceInfo>,
     pub indexes: Vec<IndexInfo>,
     pub triggers: Vec<TriggerInfo>,
+    pub foreign_keys: Vec<ForeignKeyInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +144,17 @@ pub struct TriggerInfo {
     pub event: String,
     pub timing: String,
     pub definition: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForeignKeyInfo {
+    pub name: String,
+    pub source_schema: String,
+    pub source_table: String,
+    pub source_columns: Vec<String>,
+    pub target_schema: String,
+    pub target_table: String,
+    pub target_columns: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

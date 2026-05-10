@@ -12,14 +12,16 @@ use gpui_component::{
 };
 
 use super::query_detector::{QueryRange, query_ranges_for_execution};
-use super::sql_completion::SqlCompletionProvider;
+use super::sql_completion::{SqlCompletionProvider, sql_diagnostics};
 use crate::data_source::manager::DataSourceManager;
+use crate::schema_cache;
 
 actions!(editor, [ExecuteQuery, SaveFile]);
 
 pub struct EditorPanel {
     path: PathBuf,
     editor: Entity<InputState>,
+    data_source_manager: Entity<DataSourceManager>,
     focus_handle: FocusHandle,
     last_saved_content: String,
     active_query: Option<QueryRange>,
@@ -74,6 +76,7 @@ impl EditorPanel {
         let mut panel = Self {
             path,
             editor: editor.clone(),
+            data_source_manager,
             focus_handle: cx.focus_handle(),
             last_saved_content: content,
             active_query: None,
@@ -158,16 +161,47 @@ impl EditorPanel {
     }
 
     fn apply_query_decoration(&mut self, active_query: Option<QueryRange>, cx: &mut Context<Self>) {
-        let decorations = active_query
+        let mut decorations = active_query
             .as_ref()
             .map(|query| InputDecoration {
                 range: query.trimmed_range.clone(),
                 fill: None,
                 border: Some(hsla(0.76, 0.73, 0.72, 0.85)),
                 border_width: px(1.),
+                underline: None,
+                underline_wavy: false,
             })
             .into_iter()
-            .collect();
+            .collect::<Vec<_>>();
+
+        let (text, schema) = {
+            let text = self.editor.read(cx).value().to_string();
+            let schema = self
+                .data_source_manager
+                .read(cx)
+                .active_config()
+                .and_then(|config| {
+                    schema_cache::load(&schema_cache::cache_key(config))
+                        .ok()
+                        .flatten()
+                });
+            (text, schema)
+        };
+
+        if let Some(schema) = schema {
+            decorations.extend(
+                sql_diagnostics(&text, &schema)
+                    .into_iter()
+                    .map(|diagnostic| InputDecoration {
+                        range: diagnostic.range,
+                        fill: None,
+                        border: None,
+                        border_width: px(1.),
+                        underline: Some(hsla(0.0, 0.76, 0.62, 0.95)),
+                        underline_wavy: true,
+                    }),
+            );
+        }
 
         self.editor.update(cx, |state, cx| {
             state.set_decorations(decorations, cx);

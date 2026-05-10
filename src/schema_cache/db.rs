@@ -105,6 +105,18 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             definition TEXT NOT NULL,
             PRIMARY KEY (connection_key, schema_name, name)
         );
+
+        CREATE TABLE IF NOT EXISTS foreign_keys (
+            connection_key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            source_schema TEXT NOT NULL,
+            source_table TEXT NOT NULL,
+            source_columns TEXT NOT NULL,
+            target_schema TEXT NOT NULL,
+            target_table TEXT NOT NULL,
+            target_columns TEXT NOT NULL,
+            PRIMARY KEY (connection_key, source_schema, source_table, name)
+        );
         ",
     )?;
 
@@ -132,6 +144,7 @@ pub fn clear_connection(conn: &Connection, key: &str) -> Result<(), rusqlite::Er
         "sequences",
         "indexes",
         "triggers",
+        "foreign_keys",
     ];
     for table in &tables {
         conn.execute(

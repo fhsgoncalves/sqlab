@@ -6,12 +6,13 @@ use anyhow::Result;
 use gpui::{Context, Entity, Task, Window};
 use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
 use lsp_types::{
-    CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
-    Documentation, TextEdit,
+    CompletionContext, CompletionItem, CompletionItemKind, CompletionItemLabelDetails,
+    CompletionResponse, CompletionTextEdit, Documentation, TextEdit,
 };
+use serde_json::json;
 
 use crate::data_source::manager::DataSourceManager;
-use crate::data_source::{DatabaseSchema, TableInfo, TableKind};
+use crate::data_source::{DataSourceConfig, DatabaseSchema, TableInfo};
 use crate::schema_cache;
 
 const SQL_KEYWORDS: &[&str] = &[
@@ -94,6 +95,7 @@ impl CompletionProvider for SqlCompletionProvider {
                 return Task::ready(Ok(CompletionResponse::Array(build_items(
                     &context,
                     schema.as_ref(),
+                    &config,
                 ))));
             }
 
@@ -110,6 +112,7 @@ impl CompletionProvider for SqlCompletionProvider {
                     return Task::ready(Ok(CompletionResponse::Array(build_items(
                         &context,
                         schema.as_ref(),
+                        &config,
                     ))));
                 }
                 _ => {}
@@ -202,6 +205,7 @@ impl CompletionContextData {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CompletionScope {
     TableReference,
+    JoinReference,
     SelectList,
     General,
 }
@@ -211,6 +215,27 @@ struct TableRef {
     table_name: String,
     schema_name: Option<String>,
     alias: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SqlDiagnostic {
+    pub range: std::ops::Range<usize>,
+    pub message: String,
+}
+
+pub fn sql_diagnostics(text: &str, schema: &DatabaseSchema) -> Vec<SqlDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut statement_start = 0;
+    for statement in text.split_inclusive(';') {
+        let statement_text = statement.trim_end_matches(';');
+        diagnostics.extend(sql_diagnostics_for_statement(
+            statement_text,
+            statement_start,
+            schema,
+        ));
+        statement_start += statement.len();
+    }
+    diagnostics
 }
 
 fn cached_schema(
@@ -224,25 +249,32 @@ fn cached_schema(
         .map(|cache| cache.schema)
 }
 
-fn build_items(context: &CompletionContextData, schema: &DatabaseSchema) -> Vec<CompletionItem> {
+fn build_items(
+    context: &CompletionContextData,
+    schema: &DatabaseSchema,
+    config: &DataSourceConfig,
+) -> Vec<CompletionItem> {
     if let Some(qualifier) = context.qualifier.as_deref() {
-        if context.scope == CompletionScope::TableReference {
-            let mut items = schema_table_items(context, schema, qualifier);
+        if matches!(
+            context.scope,
+            CompletionScope::TableReference | CompletionScope::JoinReference
+        ) {
+            let mut items = schema_table_items(context, schema, qualifier, config);
             if !items.is_empty() {
                 items.extend(keyword_items(context, 60));
                 return limit_items(items);
             }
         }
 
-        let mut items = qualified_column_items(context, schema, qualifier);
-        if !items.is_empty() {
-            items.extend(general_items(context, schema));
-            return limit_items(items);
-        }
+        let items = qualified_column_items(context, schema, qualifier);
+        return limit_items(items);
     }
 
-    if context.scope == CompletionScope::TableReference {
-        let mut items = table_reference_items(context, schema);
+    if matches!(
+        context.scope,
+        CompletionScope::TableReference | CompletionScope::JoinReference
+    ) {
+        let mut items = table_reference_items(context, schema, config);
         items.extend(keyword_items(context, 60));
         return limit_items(items);
     }
@@ -250,7 +282,7 @@ fn build_items(context: &CompletionContextData, schema: &DatabaseSchema) -> Vec<
     if context.scope == CompletionScope::SelectList {
         let mut items = involved_column_items(context, schema);
         if !items.is_empty() {
-            items.extend(general_items(context, schema));
+            items.extend(keyword_items(context, 50));
             return limit_items(items);
         }
     }
@@ -259,13 +291,14 @@ fn build_items(context: &CompletionContextData, schema: &DatabaseSchema) -> Vec<
         return Vec::new();
     }
 
-    limit_items(general_items(context, schema))
+    limit_items(general_items(context, schema, config))
 }
 
 fn schema_table_items(
     context: &CompletionContextData,
     schema: &DatabaseSchema,
     qualifier: &str,
+    config: &DataSourceConfig,
 ) -> Vec<ScoredCompletion> {
     schema
         .tables
@@ -274,7 +307,7 @@ fn schema_table_items(
             table.schema.eq_ignore_ascii_case(qualifier)
                 && matches_prefix(&table.name, &context.prefix)
         })
-        .map(|table| table_item(context, table, 0))
+        .map(|table| table_item(context, table, config, 0))
         .collect()
 }
 
@@ -289,7 +322,7 @@ fn qualified_column_items(
         table.name.eq_ignore_ascii_case(qualifier)
             || format!("{}.{}", table.schema, table.name).eq_ignore_ascii_case(qualifier)
     }) {
-        items.extend(column_items_for_table(context, table, 0));
+        items.extend(column_items_for_table(context, table, qualifier, 0));
     }
 
     for table_ref in context
@@ -298,7 +331,8 @@ fn qualified_column_items(
         .filter(|table_ref| table_ref.alias_matches(qualifier))
     {
         if let Some(table) = table_for_ref(schema, table_ref) {
-            items.extend(column_items_for_table(context, table, 0));
+            let owner = table_ref.alias.as_deref().unwrap_or(&table.name);
+            items.extend(column_items_for_table(context, table, owner, 0));
         }
     }
 
@@ -308,8 +342,13 @@ fn qualified_column_items(
 fn table_reference_items(
     context: &CompletionContextData,
     schema: &DatabaseSchema,
+    config: &DataSourceConfig,
 ) -> Vec<ScoredCompletion> {
     let mut items = Vec::new();
+
+    if context.scope == CompletionScope::JoinReference {
+        items.extend(join_items(context, schema, config));
+    }
 
     for table_ref in &context.table_refs {
         if let Some(alias) = table_ref.alias.as_deref() {
@@ -319,6 +358,8 @@ fn table_reference_items(
                     alias,
                     CompletionItemKind::VARIABLE,
                     Some(format!("alias for {}", table_ref.display_name())),
+                    None,
+                    None,
                     0,
                 ));
             }
@@ -327,7 +368,7 @@ fn table_reference_items(
 
     for table in &schema.tables {
         if matches_prefix(&table.name, &context.prefix) {
-            items.push(table_item(context, table, 10));
+            items.push(table_item(context, table, config, 10));
         }
     }
 
@@ -338,12 +379,139 @@ fn table_reference_items(
                 &schema_name.name,
                 CompletionItemKind::MODULE,
                 Some("schema".to_string()),
+                None,
+                Some(config.name.clone()),
                 20,
             ));
         }
     }
 
     items
+}
+
+fn join_items(
+    context: &CompletionContextData,
+    schema: &DatabaseSchema,
+    config: &DataSourceConfig,
+) -> Vec<ScoredCompletion> {
+    let mut items = Vec::new();
+    for existing_ref in &context.table_refs {
+        let Some(existing_table) = table_for_ref(schema, existing_ref) else {
+            continue;
+        };
+        let existing_alias = existing_ref
+            .alias
+            .as_deref()
+            .unwrap_or(&existing_table.name);
+
+        for fk in &schema.foreign_keys {
+            let candidate =
+                if table_identity_matches(existing_table, &fk.source_schema, &fk.source_table) {
+                    schema.tables.iter().find(|table| {
+                        table_identity_matches(table, &fk.target_schema, &fk.target_table)
+                    })
+                } else if table_identity_matches(
+                    existing_table,
+                    &fk.target_schema,
+                    &fk.target_table,
+                ) {
+                    schema.tables.iter().find(|table| {
+                        table_identity_matches(table, &fk.source_schema, &fk.source_table)
+                    })
+                } else {
+                    None
+                };
+
+            let Some(candidate) = candidate else {
+                continue;
+            };
+            if context.table_refs.iter().any(|table_ref| {
+                table_for_ref(schema, table_ref).is_some_and(|table| {
+                    table.schema.eq_ignore_ascii_case(&candidate.schema)
+                        && table.name.eq_ignore_ascii_case(&candidate.name)
+                })
+            }) {
+                continue;
+            }
+            if !matches_prefix(&candidate.name, &context.prefix) {
+                continue;
+            }
+
+            let candidate_alias = unique_alias(&candidate.name, &context.table_refs);
+            let conditions =
+                if table_identity_matches(existing_table, &fk.source_schema, &fk.source_table) {
+                    join_conditions(
+                        existing_alias,
+                        &fk.source_columns,
+                        &candidate_alias,
+                        &fk.target_columns,
+                    )
+                } else {
+                    join_conditions(
+                        existing_alias,
+                        &fk.target_columns,
+                        &candidate_alias,
+                        &fk.source_columns,
+                    )
+                };
+            let insert_text = format!(
+                "{}.{} {} on {}",
+                candidate.schema, candidate.name, candidate_alias, conditions
+            );
+            let label = format!("{} {} on {}", candidate.name, candidate_alias, conditions);
+            items.push(scored_completion_item(
+                context,
+                &label,
+                CompletionItemKind::CLASS,
+                Some(format!("({}.{})", config.database, candidate.schema)),
+                Some(insert_text),
+                Some(config.name.clone()),
+                0,
+            ));
+        }
+    }
+    items
+}
+
+fn table_identity_matches(table: &TableInfo, schema: &str, name: &str) -> bool {
+    table.schema.eq_ignore_ascii_case(schema) && table.name.eq_ignore_ascii_case(name)
+}
+
+fn join_conditions(
+    left_alias: &str,
+    left_columns: &[String],
+    right_alias: &str,
+    right_columns: &[String],
+) -> String {
+    left_columns
+        .iter()
+        .zip(right_columns.iter())
+        .map(|(left, right)| format!("{left_alias}.{left} = {right_alias}.{right}"))
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
+fn unique_alias(table_name: &str, refs: &[TableRef]) -> String {
+    let mut alias = table_name
+        .split('_')
+        .filter_map(|part| part.chars().next())
+        .collect::<String>();
+    if alias.is_empty() {
+        alias = table_name.chars().next().unwrap_or('t').to_string();
+    }
+    let base = alias.clone();
+    for ix in 2.. {
+        if !refs.iter().any(|table_ref| {
+            table_ref
+                .alias
+                .as_deref()
+                .is_some_and(|existing| existing.eq_ignore_ascii_case(&alias))
+        }) {
+            return alias;
+        }
+        alias = format!("{base}{ix}");
+    }
+    unreachable!()
 }
 
 fn involved_column_items(
@@ -353,7 +521,8 @@ fn involved_column_items(
     let mut items = Vec::new();
     for table_ref in &context.table_refs {
         if let Some(table) = table_for_ref(schema, table_ref) {
-            items.extend(column_items_for_table(context, table, 0));
+            let owner = table_ref.alias.as_deref().unwrap_or(&table.name);
+            items.extend(column_items_for_table(context, table, owner, 0));
         }
     }
     items
@@ -362,8 +531,17 @@ fn involved_column_items(
 fn general_items(
     context: &CompletionContextData,
     schema: &DatabaseSchema,
+    config: &DataSourceConfig,
 ) -> Vec<ScoredCompletion> {
     let mut items = keyword_items(context, 50);
+
+    let scoped_columns = involved_column_items(context, schema);
+    if !scoped_columns.is_empty() {
+        items.extend(scoped_columns.into_iter().map(|mut item| {
+            item.score = item.score.min(20);
+            item
+        }));
+    }
 
     for schema_name in &schema.schemas {
         if matches_prefix(&schema_name.name, &context.prefix) {
@@ -372,6 +550,8 @@ fn general_items(
                 &schema_name.name,
                 CompletionItemKind::MODULE,
                 Some("schema".to_string()),
+                None,
+                Some(config.name.clone()),
                 40,
             ));
         }
@@ -379,10 +559,8 @@ fn general_items(
 
     for table in &schema.tables {
         if matches_prefix(&table.name, &context.prefix) {
-            items.push(table_item(context, table, 30));
+            items.push(table_item(context, table, config, 30));
         }
-
-        items.extend(column_items_for_table(context, table, 20));
     }
 
     for function in &schema.functions {
@@ -395,6 +573,8 @@ fn general_items(
                     "{}.{}({}) -> {}",
                     function.schema, function.name, function.arguments, function.return_type
                 )),
+                None,
+                Some(function.return_type.clone()),
                 45,
             ));
         }
@@ -406,6 +586,7 @@ fn general_items(
 fn column_items_for_table(
     context: &CompletionContextData,
     table: &TableInfo,
+    owner: &str,
     score: usize,
 ) -> Vec<ScoredCompletion> {
     table
@@ -417,14 +598,9 @@ fn column_items_for_table(
                 context,
                 &column.name,
                 CompletionItemKind::FIELD,
-                Some(format!(
-                    "{}.{} {}{} #{}",
-                    table.name,
-                    column.name,
-                    column.data_type,
-                    if column.nullable { "" } else { " not null" },
-                    column.ordinal
-                )),
+                Some(format!("({})", owner)),
+                None,
+                Some(column.data_type.clone()),
                 score,
             )
         })
@@ -434,17 +610,16 @@ fn column_items_for_table(
 fn table_item(
     context: &CompletionContextData,
     table: &TableInfo,
+    config: &DataSourceConfig,
     score: usize,
 ) -> ScoredCompletion {
     scored_completion_item(
         context,
         &table.name,
         CompletionItemKind::CLASS,
-        Some(format!(
-            "{} {}",
-            table.schema,
-            table_kind_label(&table.kind)
-        )),
+        Some(format!("({}.{})", config.database, table.schema)),
+        None,
+        Some(config.name.clone()),
         score,
     )
 }
@@ -459,6 +634,8 @@ fn keyword_items(context: &CompletionContextData, score: usize) -> Vec<ScoredCom
                 keyword,
                 CompletionItemKind::KEYWORD,
                 Some("SQL keyword".to_string()),
+                None,
+                None,
                 score,
             )
         })
@@ -476,18 +653,26 @@ fn scored_completion_item(
     label: &str,
     kind: CompletionItemKind,
     documentation: Option<String>,
+    insert_text: Option<String>,
+    right: Option<String>,
     score: usize,
 ) -> ScoredCompletion {
+    let new_text = insert_text.unwrap_or_else(|| label.to_string());
     ScoredCompletion {
         score,
         item: CompletionItem {
             label: label.to_string(),
             kind: Some(kind),
+            label_details: Some(CompletionItemLabelDetails {
+                detail: documentation.clone(),
+                description: right.clone(),
+            }),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                 range: context.replace_range(),
-                new_text: label.to_string(),
+                new_text,
             })),
             documentation: documentation.map(Documentation::String),
+            data: Some(json!({ "right": right })),
             ..Default::default()
         },
     }
@@ -518,11 +703,192 @@ fn table_for_ref<'a>(schema: &'a DatabaseSchema, table_ref: &TableRef) -> Option
     })
 }
 
+fn sql_diagnostics_for_statement(
+    statement: &str,
+    statement_start: usize,
+    schema: &DatabaseSchema,
+) -> Vec<SqlDiagnostic> {
+    let tokens = positioned_sql_tokens(statement);
+    let refs = table_refs_for_statement(statement);
+    let mut diagnostics = syntax_diagnostics_for_statement(statement, statement_start);
+
+    for ix in 0..tokens.len() {
+        if !is_table_reference_keyword(
+            &tokens.iter().map(|t| t.text.clone()).collect::<Vec<_>>(),
+            ix,
+        ) {
+            continue;
+        }
+        let Some(table_token) = tokens.get(ix + 1) else {
+            continue;
+        };
+        if is_reserved_token(&table_token.text) {
+            continue;
+        }
+        let (schema_name, table_name) = split_table_name(&table_token.text);
+        if !schema.tables.iter().any(|table| {
+            table.name.eq_ignore_ascii_case(&table_name)
+                && schema_name
+                    .as_deref()
+                    .is_none_or(|schema_name| table.schema.eq_ignore_ascii_case(schema_name))
+        }) {
+            diagnostics.push(SqlDiagnostic {
+                range: statement_start + table_token.start..statement_start + table_token.end,
+                message: format!("Unknown table `{}`", table_token.text),
+            });
+        }
+    }
+
+    let token_texts = tokens
+        .iter()
+        .map(|token| token.text.clone())
+        .collect::<Vec<_>>();
+    for (ix, token) in tokens.iter().enumerate() {
+        if is_reserved_token(&token.text) || is_numeric_token(&token.text) {
+            continue;
+        }
+        if ix > 0 && is_table_reference_keyword(&token_texts, ix - 1) {
+            continue;
+        }
+        if let Some((qualifier, column)) = token.text.rsplit_once('.') {
+            if schema.tables.iter().any(|table| {
+                table.schema.eq_ignore_ascii_case(qualifier)
+                    && table.name.eq_ignore_ascii_case(column)
+            }) {
+                continue;
+            }
+            if let Some(table) = table_for_qualifier(schema, &refs, qualifier) {
+                if !table
+                    .columns
+                    .iter()
+                    .any(|candidate| candidate.name.eq_ignore_ascii_case(column))
+                {
+                    diagnostics.push(SqlDiagnostic {
+                        range: statement_start + token.start..statement_start + token.end,
+                        message: format!("Unknown column `{}` on `{}`", column, qualifier),
+                    });
+                }
+            } else if !schema
+                .schemas
+                .iter()
+                .any(|schema_info| schema_info.name.eq_ignore_ascii_case(qualifier))
+            {
+                diagnostics.push(SqlDiagnostic {
+                    range: statement_start + token.start..statement_start + token.end,
+                    message: format!("Unknown qualifier `{}`", qualifier),
+                });
+            }
+        } else if refs.len() > 0
+            && is_expression_position(&token_texts, ix)
+            && !refs.iter().any(|table_ref| {
+                table_ref
+                    .alias
+                    .as_deref()
+                    .is_some_and(|alias| alias.eq_ignore_ascii_case(&token.text))
+                    || table_ref.table_name.eq_ignore_ascii_case(&token.text)
+            })
+            && !schema
+                .functions
+                .iter()
+                .any(|function| function.name.eq_ignore_ascii_case(&token.text))
+            && !refs
+                .iter()
+                .filter_map(|table_ref| table_for_ref(schema, table_ref))
+                .any(|table| {
+                    table
+                        .columns
+                        .iter()
+                        .any(|column| column.name.eq_ignore_ascii_case(&token.text))
+                })
+        {
+            diagnostics.push(SqlDiagnostic {
+                range: statement_start + token.start..statement_start + token.end,
+                message: format!("Unknown column `{}`", token.text),
+            });
+        }
+    }
+
+    diagnostics
+}
+
+fn syntax_diagnostics_for_statement(statement: &str, statement_start: usize) -> Vec<SqlDiagnostic> {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_sequel::LANGUAGE.into())
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(statement, None) else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    collect_syntax_diagnostics(tree.root_node(), statement_start, &mut diagnostics);
+    diagnostics
+}
+
+fn collect_syntax_diagnostics(
+    node: tree_sitter::Node,
+    statement_start: usize,
+    diagnostics: &mut Vec<SqlDiagnostic>,
+) {
+    if node.is_error() || node.is_missing() {
+        let start = statement_start + node.start_byte();
+        let end = statement_start + node.end_byte().max(node.start_byte() + 1);
+        diagnostics.push(SqlDiagnostic {
+            range: start..end,
+            message: "SQL syntax error".to_string(),
+        });
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_syntax_diagnostics(child, statement_start, diagnostics);
+    }
+}
+
+fn table_for_qualifier<'a>(
+    schema: &'a DatabaseSchema,
+    refs: &[TableRef],
+    qualifier: &str,
+) -> Option<&'a TableInfo> {
+    refs.iter()
+        .find(|table_ref| table_ref.alias_matches(qualifier))
+        .and_then(|table_ref| table_for_ref(schema, table_ref))
+        .or_else(|| {
+            refs.iter()
+                .find(|table_ref| table_ref.table_name.eq_ignore_ascii_case(qualifier))
+                .and_then(|table_ref| table_for_ref(schema, table_ref))
+        })
+}
+
+fn is_numeric_token(token: &str) -> bool {
+    token.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_expression_position(tokens: &[String], ix: usize) -> bool {
+    tokens[..ix]
+        .iter()
+        .rev()
+        .find(|token| token.as_str() != "," && token.as_str() != ".")
+        .is_some_and(|token| {
+            matches!(
+                token.as_str(),
+                "select" | "where" | "and" | "or" | "on" | "=" | "<" | ">" | "by"
+            )
+        })
+}
+
 fn completion_scope(statement: &str, cursor: usize) -> CompletionScope {
     let before_cursor = &statement[..cursor.min(statement.len())];
     let tokens = sql_tokens(before_cursor);
-    if is_after_table_keyword(&tokens) {
-        return CompletionScope::TableReference;
+    if let Some(keyword) = table_keyword_before_cursor(&tokens) {
+        return if keyword == "join" {
+            CompletionScope::JoinReference
+        } else {
+            CompletionScope::TableReference
+        };
     }
 
     let all_tokens = sql_tokens(statement);
@@ -576,7 +942,7 @@ fn table_refs_for_statement(statement: &str) -> Vec<TableRef> {
     refs
 }
 
-fn is_after_table_keyword(tokens: &[String]) -> bool {
+fn table_keyword_before_cursor(tokens: &[String]) -> Option<&str> {
     let mut ix = tokens.len();
     while ix > 0 {
         ix -= 1;
@@ -584,9 +950,12 @@ fn is_after_table_keyword(tokens: &[String]) -> bool {
         if token == "," {
             continue;
         }
-        return token == "from" || token == "join";
+        if token == "from" || token == "join" {
+            return Some(token);
+        }
+        return None;
     }
-    false
+    None
 }
 
 fn is_table_reference_keyword(tokens: &[String], ix: usize) -> bool {
@@ -621,7 +990,7 @@ fn sql_tokens(text: &str) -> Vec<String> {
             if !token.is_empty() {
                 tokens.push(std::mem::take(&mut token));
             }
-            if ch == ',' {
+            if matches!(ch, ',' | '=' | '<' | '>') {
                 tokens.push(ch.to_string());
             }
         }
@@ -629,6 +998,53 @@ fn sql_tokens(text: &str) -> Vec<String> {
 
     if !token.is_empty() {
         tokens.push(token);
+    }
+
+    tokens
+}
+
+#[derive(Clone)]
+struct PositionedToken {
+    text: String,
+    start: usize,
+    end: usize,
+}
+
+fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut token_start = 0;
+
+    for (ix, ch) in text.char_indices() {
+        if ch == '_' || ch == '.' || ch.is_ascii_alphanumeric() {
+            if token.is_empty() {
+                token_start = ix;
+            }
+            token.push(ch.to_ascii_lowercase());
+        } else {
+            if !token.is_empty() {
+                tokens.push(PositionedToken {
+                    text: std::mem::take(&mut token),
+                    start: token_start,
+                    end: ix,
+                });
+            }
+            if matches!(ch, ',' | '=' | '<' | '>') {
+                tokens.push(PositionedToken {
+                    text: ch.to_string(),
+                    start: ix,
+                    end: ix + ch.len_utf8(),
+                });
+            }
+        }
+    }
+
+    if !token.is_empty() {
+        tokens.push(PositionedToken {
+            text: token,
+            start: token_start,
+            end: text.len(),
+        });
     }
 
     tokens
@@ -695,15 +1111,6 @@ fn matches_prefix(value: &str, prefix: &str) -> bool {
             .starts_with(&prefix.to_ascii_lowercase())
 }
 
-fn table_kind_label(kind: &TableKind) -> &'static str {
-    match kind {
-        TableKind::Table => "table",
-        TableKind::View => "view",
-        TableKind::MaterializedView => "materialized view",
-        TableKind::ForeignTable => "foreign table",
-    }
-}
-
 fn limit_items(mut items: Vec<ScoredCompletion>) -> Vec<CompletionItem> {
     items.sort_by(|left, right| {
         left.score
@@ -724,6 +1131,7 @@ fn limit_items(mut items: Vec<ScoredCompletion>) -> Vec<CompletionItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_source::TableKind;
 
     #[test]
     fn detects_table_reference_scope_with_partial_prefix() {
@@ -731,7 +1139,7 @@ mod tests {
         let cursor = statement.rfind("ord").unwrap();
         assert!(matches!(
             completion_scope(statement, cursor),
-            CompletionScope::TableReference
+            CompletionScope::JoinReference
         ));
     }
 
@@ -804,7 +1212,13 @@ mod tests {
             ..Default::default()
         };
 
-        let items = schema_table_items(&context, &schema, "public");
+        let config = DataSourceConfig {
+            name: "local".to_string(),
+            database: "app".to_string(),
+            ..Default::default()
+        };
+
+        let items = schema_table_items(&context, &schema, "public", &config);
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item.label, "users");

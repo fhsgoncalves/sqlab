@@ -10,8 +10,8 @@ use crate::data_source::DataSourceConfig;
 use crate::data_source::DatabaseSchema;
 use crate::schema_cache::db::with_conn;
 use crate::schema_cache::models::{
-    ColumnRow, FunctionRow, IndexRow, SchemaRow, SequenceRow, TableRow, TriggerRow, rows_to_schema,
-    schema_to_rows,
+    ColumnRow, ForeignKeyRow, FunctionRow, IndexRow, SchemaRow, SequenceRow, TableRow, TriggerRow,
+    rows_to_schema, schema_to_rows,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -43,7 +43,7 @@ pub fn save(
     with_conn(|conn| {
         db::clear_connection(conn, connection_key)?;
 
-        let (schemas, tables, columns, functions, sequences, indexes, triggers) =
+        let (schemas, tables, columns, functions, sequences, indexes, triggers, foreign_keys) =
             schema_to_rows(connection_key, schema);
 
         let now = std::time::SystemTime::now()
@@ -105,6 +105,13 @@ pub fn save(
             )?;
         }
 
+        for fk in &foreign_keys {
+            conn.execute(
+                "INSERT INTO foreign_keys (connection_key, name, source_schema, source_table, source_columns, target_schema, target_table, target_columns) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![fk.connection_key, fk.name, fk.source_schema, fk.source_table, fk.source_columns, fk.target_schema, fk.target_table, fk.target_columns],
+            )?;
+        }
+
         Ok(())
     })
 }
@@ -122,9 +129,17 @@ pub fn load(connection_key: &str) -> Result<Option<DatabaseSchema>, SchemaCacheE
         let sequences = load_sequences(conn, connection_key)?;
         let indexes = load_indexes(conn, connection_key)?;
         let triggers = load_triggers(conn, connection_key)?;
+        let foreign_keys = load_foreign_keys(conn, connection_key)?;
 
         Ok(Some(rows_to_schema(
-            schemas, tables, columns, functions, sequences, indexes, triggers,
+            schemas,
+            tables,
+            columns,
+            functions,
+            sequences,
+            indexes,
+            triggers,
+            foreign_keys,
         )))
     })
 }
@@ -259,6 +274,28 @@ fn load_triggers(
             event: row.get(4)?,
             timing: row.get(5)?,
             definition: row.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn load_foreign_keys(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<Vec<ForeignKeyRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT connection_key, name, source_schema, source_table, source_columns, target_schema, target_table, target_columns FROM foreign_keys WHERE connection_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![key], |row| {
+        Ok(ForeignKeyRow {
+            connection_key: row.get(0)?,
+            name: row.get(1)?,
+            source_schema: row.get(2)?,
+            source_table: row.get(3)?,
+            source_columns: row.get(4)?,
+            target_schema: row.get(5)?,
+            target_table: row.get(6)?,
+            target_columns: row.get(7)?,
         })
     })?;
     rows.collect()

@@ -1,6 +1,6 @@
 use crate::data_source::{
-    ColumnInfo, DatabaseSchema, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo, TableInfo,
-    TableKind, TriggerInfo,
+    ColumnInfo, DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo,
+    TableInfo, TableKind, TriggerInfo,
 };
 
 pub fn schema_to_rows(
@@ -14,6 +14,7 @@ pub fn schema_to_rows(
     Vec<SequenceRow>,
     Vec<IndexRow>,
     Vec<TriggerRow>,
+    Vec<ForeignKeyRow>,
 ) {
     let schemas: Vec<SchemaRow> = schema
         .schemas
@@ -112,8 +113,30 @@ pub fn schema_to_rows(
         })
         .collect();
 
+    let foreign_keys: Vec<ForeignKeyRow> = schema
+        .foreign_keys
+        .iter()
+        .map(|fk| ForeignKeyRow {
+            connection_key: connection_key.to_string(),
+            name: fk.name.clone(),
+            source_schema: fk.source_schema.clone(),
+            source_table: fk.source_table.clone(),
+            source_columns: serde_json::to_string(&fk.source_columns).unwrap_or_default(),
+            target_schema: fk.target_schema.clone(),
+            target_table: fk.target_table.clone(),
+            target_columns: serde_json::to_string(&fk.target_columns).unwrap_or_default(),
+        })
+        .collect();
+
     (
-        schemas, tables, columns, functions, sequences, indexes, triggers,
+        schemas,
+        tables,
+        columns,
+        functions,
+        sequences,
+        indexes,
+        triggers,
+        foreign_keys,
     )
 }
 
@@ -125,6 +148,7 @@ pub fn rows_to_schema(
     sequences: Vec<SequenceRow>,
     indexes: Vec<IndexRow>,
     triggers: Vec<TriggerRow>,
+    foreign_keys: Vec<ForeignKeyRow>,
 ) -> DatabaseSchema {
     let schema_infos: Vec<SchemaInfo> = schemas
         .into_iter()
@@ -213,6 +237,19 @@ pub fn rows_to_schema(
         })
         .collect();
 
+    let foreign_key_infos: Vec<ForeignKeyInfo> = foreign_keys
+        .into_iter()
+        .map(|fk| ForeignKeyInfo {
+            name: fk.name,
+            source_schema: fk.source_schema,
+            source_table: fk.source_table,
+            source_columns: serde_json::from_str(&fk.source_columns).unwrap_or_default(),
+            target_schema: fk.target_schema,
+            target_table: fk.target_table,
+            target_columns: serde_json::from_str(&fk.target_columns).unwrap_or_default(),
+        })
+        .collect();
+
     DatabaseSchema {
         schemas: schema_infos,
         tables: table_infos,
@@ -220,6 +257,7 @@ pub fn rows_to_schema(
         sequences: sequence_infos,
         indexes: index_infos,
         triggers: trigger_infos,
+        foreign_keys: foreign_key_infos,
     }
 }
 
@@ -292,4 +330,16 @@ pub struct TriggerRow {
     pub event: String,
     pub timing: String,
     pub definition: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForeignKeyRow {
+    pub connection_key: String,
+    pub name: String,
+    pub source_schema: String,
+    pub source_table: String,
+    pub source_columns: String,
+    pub target_schema: String,
+    pub target_table: String,
+    pub target_columns: String,
 }

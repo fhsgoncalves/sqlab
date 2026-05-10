@@ -14,8 +14,9 @@ use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Client, Row};
 
 use crate::data_source::{
-    ColumnInfo, DataSource, DataSourceConfig, DataSourceError, DatabaseSchema, FunctionInfo,
-    IndexInfo, QueryResult, SchemaInfo, SequenceInfo, TableInfo, TableKind, TriggerInfo,
+    ColumnInfo, DataSource, DataSourceConfig, DataSourceError, DatabaseSchema, ForeignKeyInfo,
+    FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo, TableInfo, TableKind,
+    TriggerInfo,
 };
 
 pub struct PostgresDataSource {
@@ -162,7 +163,7 @@ impl PostgresDataSource {
         let client = self.client.as_ref().ok_or(DataSourceError::NotConnected)?;
         let configured_schema = self.config.schema.clone();
 
-        let (schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows) = self
+        let (schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows, foreign_key_rows) = self
             .runtime
             .block_on(async {
                 let schema_rows = client
@@ -339,7 +340,38 @@ impl PostgresDataSource {
                     )
                     .await?;
 
-                Ok::<_, tokio_postgres::Error>((schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows))
+                let foreign_key_rows = client
+                    .query(
+                        "
+                        select
+                            con.conname as constraint_name,
+                            src_ns.nspname as source_schema,
+                            src.relname as source_table,
+                            array_agg(src_attr.attname order by src_cols.ord) as source_columns,
+                            tgt_ns.nspname as target_schema,
+                            tgt.relname as target_table,
+                            array_agg(tgt_attr.attname order by src_cols.ord) as target_columns
+                        from pg_constraint con
+                        join pg_class src on src.oid = con.conrelid
+                        join pg_namespace src_ns on src_ns.oid = src.relnamespace
+                        join pg_class tgt on tgt.oid = con.confrelid
+                        join pg_namespace tgt_ns on tgt_ns.oid = tgt.relnamespace
+                        join unnest(con.conkey) with ordinality as src_cols(attnum, ord) on true
+                        join unnest(con.confkey) with ordinality as tgt_cols(attnum, ord) on tgt_cols.ord = src_cols.ord
+                        join pg_attribute src_attr on src_attr.attrelid = src.oid and src_attr.attnum = src_cols.attnum
+                        join pg_attribute tgt_attr on tgt_attr.attrelid = tgt.oid and tgt_attr.attnum = tgt_cols.attnum
+                        where con.contype = 'f'
+                          and src_ns.nspname !~ '^pg_'
+                          and src_ns.nspname <> 'information_schema'
+                          and ($1 = '' or src_ns.nspname = $1 or tgt_ns.nspname = $1)
+                        group by con.conname, src_ns.nspname, src.relname, tgt_ns.nspname, tgt.relname
+                        order by src_ns.nspname, src.relname, con.conname
+                        ",
+                        &[&configured_schema],
+                    )
+                    .await?;
+
+                Ok::<_, tokio_postgres::Error>((schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows, foreign_key_rows))
             })
             .map_err(|e| DataSourceError::QueryFailed(format_postgres_error(e)))?;
 
@@ -454,6 +486,19 @@ impl PostgresDataSource {
             })
             .collect();
 
+        let foreign_keys = foreign_key_rows
+            .iter()
+            .map(|row| ForeignKeyInfo {
+                name: row.get("constraint_name"),
+                source_schema: row.get("source_schema"),
+                source_table: row.get("source_table"),
+                source_columns: row.get("source_columns"),
+                target_schema: row.get("target_schema"),
+                target_table: row.get("target_table"),
+                target_columns: row.get("target_columns"),
+            })
+            .collect();
+
         Ok(DatabaseSchema {
             schemas,
             tables,
@@ -461,6 +506,7 @@ impl PostgresDataSource {
             sequences,
             indexes,
             triggers,
+            foreign_keys,
         })
     }
 }
