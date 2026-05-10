@@ -3,6 +3,7 @@ name = "zql"
 version = "0.1.0"
 edition = "2024"
 description = "A SQL editor written in Rust using GPUI."
+repository = "https://github.com/fhsgoncalves/zql"
 
 [package.metadata.bundle]
 name = "zql"
@@ -48,3 +49,8 @@ windows-native-keyring-store = "1"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -55,6 +55,7 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 - [ ] Allow in-place editing in the data table
 - [ ] Support MySQL
 - [ ] Support SQLite
+- [ ] Terminal tab
 
 ## Tech Stack
 
