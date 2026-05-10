@@ -63,6 +63,7 @@ fn main() {
 
     app.run(move |cx| {
         gpui_component::init(cx);
+        ui::panels::file_tree::init(cx);
 
         app_theme::init(cx);
 

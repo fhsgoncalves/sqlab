@@ -2,15 +2,15 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use gpui::{
-    App, AppContext, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    Styled, Window, actions, div, prelude::FluentBuilder,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, WindowExt,
     dock::PanelControl,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     menu::ContextMenuExt,
     tree::TreeItem,
     v_flex,
@@ -19,9 +19,36 @@ use gpui_component::{
 actions!(
     file_tree,
     [
-        NewFile, NewFolder, RenameFile, DeleteFile, CutFile, PasteFile
+        NewFile,
+        NewFolder,
+        RenameFile,
+        DeleteFile,
+        CutFile,
+        PasteFile,
+        OpenSelectedFile,
+        SelectPreviousItem,
+        SelectNextItem,
+        ExpandSelectedItem,
+        CollapseSelectedItem,
+        CopySelectedName,
+        CancelInlineEdit
     ]
 );
+
+const CONTEXT: &str = "FileTree";
+
+pub(crate) fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("up", SelectPreviousItem, Some(CONTEXT)),
+        KeyBinding::new("down", SelectNextItem, Some(CONTEXT)),
+        KeyBinding::new("left", CollapseSelectedItem, Some(CONTEXT)),
+        KeyBinding::new("right", ExpandSelectedItem, Some(CONTEXT)),
+        KeyBinding::new("enter", OpenSelectedFile, Some(CONTEXT)),
+        KeyBinding::new("f2", RenameFile, Some(CONTEXT)),
+        KeyBinding::new("cmd-c", CopySelectedName, Some(CONTEXT)),
+        KeyBinding::new("escape", CancelInlineEdit, Some(CONTEXT)),
+    ]);
+}
 
 #[derive(Clone, Debug)]
 pub struct OpenFileEvent {
@@ -30,6 +57,20 @@ pub struct OpenFileEvent {
 
 #[derive(Clone, Debug)]
 pub struct RootChangedEvent;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingNewKind {
+    File,
+    Folder,
+}
+
+#[derive(Clone)]
+struct PendingNewEntry {
+    id: String,
+    parent: PathBuf,
+    kind: PendingNewKind,
+    input: Entity<InputState>,
+}
 
 #[derive(Clone)]
 struct DragPreview {
@@ -56,6 +97,9 @@ pub struct FileTreePanel {
     folder_ids: HashSet<String>,
     cut_buffer: Option<PathBuf>,
     selected_id: Option<String>,
+    renaming_id: Option<String>,
+    rename_input: Option<Entity<InputState>>,
+    pending_new: Option<PendingNewEntry>,
 }
 
 impl EventEmitter<OpenFileEvent> for FileTreePanel {}
@@ -96,6 +140,9 @@ impl FileTreePanel {
             folder_ids,
             cut_buffer: None,
             selected_id: None,
+            renaming_id: None,
+            rename_input: None,
+            pending_new: None,
         }
     }
 
@@ -146,6 +193,19 @@ impl FileTreePanel {
         false
     }
 
+    fn set_expanded(items: &mut Vec<TreeItem>, id: &str, expanded: bool) -> bool {
+        for item in items {
+            if item.id == id {
+                *item = item.clone().expanded(expanded);
+                return true;
+            }
+            if Self::set_expanded(&mut item.children, id, expanded) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn parent_for(&self, path: &PathBuf) -> PathBuf {
         if path.is_dir() {
             path.clone()
@@ -155,131 +215,26 @@ impl FileTreePanel {
     }
 
     fn on_action_new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.context_target.clone() else {
-            return;
-        };
+        let target = self
+            .selected_or_context_target()
+            .unwrap_or_else(|| self.root.clone());
         let parent = self.parent_for(&target);
-        let view = cx.entity();
-        let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("File name..."));
-        let input_state_for_ok = input_state.clone();
-        let input_state_for_focus = input_state.clone();
-        let parent_for_ok = parent.clone();
-        let view_for_ok = view.clone();
-
-        window.open_alert_dialog(cx, move |alert, _window, _cx| {
-            alert
-                .title("New File")
-                .child(Input::new(&input_state))
-                .on_ok({
-                    let input_state_for_ok = input_state_for_ok.clone();
-                    let parent_for_ok = parent_for_ok.clone();
-                    let view_for_ok = view_for_ok.clone();
-                    move |_, _window, cx| {
-                        let name = input_state_for_ok.read(cx).value();
-                        if name.is_empty() {
-                            return false;
-                        }
-                        let new_path = parent_for_ok.join(name.as_ref());
-                        if let Err(e) = std::fs::File::create(&new_path) {
-                            println!("Failed to create file: {}", e);
-                        }
-                        _ = view_for_ok.update(cx, |panel, cx| panel.refresh_tree(cx));
-                        true
-                    }
-                })
-        });
-        window.focus(&input_state_for_focus.read(cx).focus_handle(cx), cx);
+        self.start_inline_new(parent, PendingNewKind::File, window, cx);
     }
 
     fn on_action_new_folder(&mut self, _: &NewFolder, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.context_target.clone() else {
-            return;
-        };
+        let target = self
+            .selected_or_context_target()
+            .unwrap_or_else(|| self.root.clone());
         let parent = self.parent_for(&target);
-        let view = cx.entity();
-        let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Folder name..."));
-        let input_state_for_ok = input_state.clone();
-        let input_state_for_focus = input_state.clone();
-        let parent_for_ok = parent.clone();
-        let view_for_ok = view.clone();
-
-        window.open_alert_dialog(cx, move |alert, _window, _cx| {
-            alert
-                .title("New Folder")
-                .child(Input::new(&input_state))
-                .on_ok({
-                    let input_state_for_ok = input_state_for_ok.clone();
-                    let parent_for_ok = parent_for_ok.clone();
-                    let view_for_ok = view_for_ok.clone();
-                    move |_, _window, cx| {
-                        let name = input_state_for_ok.read(cx).value();
-                        if name.is_empty() {
-                            return false;
-                        }
-                        let new_path = parent_for_ok.join(name.as_ref());
-                        if let Err(e) = std::fs::create_dir(&new_path) {
-                            println!("Failed to create folder: {}", e);
-                        }
-                        _ = view_for_ok.update(cx, |panel, cx| panel.refresh_tree(cx));
-                        true
-                    }
-                })
-        });
-        window.focus(&input_state_for_focus.read(cx).focus_handle(cx), cx);
+        self.start_inline_new(parent, PendingNewKind::Folder, window, cx);
     }
 
     fn on_action_rename(&mut self, _: &RenameFile, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.context_target.clone() else {
+        let Some(target) = self.selected_or_context_target() else {
             return;
         };
-        let current_name = target
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        let view = cx.entity();
-        let input_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(current_name.clone())
-                .placeholder("New name...")
-        });
-        let input_state_for_ok = input_state.clone();
-        let current_name_for_ok = current_name.clone();
-        let target_for_ok = target.clone();
-        let view_for_ok = view.clone();
-
-        window.open_alert_dialog(cx, move |alert, _window, _cx| {
-            alert
-                .title("Rename")
-                .child(Input::new(&input_state))
-                .on_ok({
-                    let input_state_for_ok = input_state_for_ok.clone();
-                    let current_name_for_ok = current_name_for_ok.clone();
-                    let target_for_ok = target_for_ok.clone();
-                    let view_for_ok = view_for_ok.clone();
-                    move |_, _window, cx| {
-                        let name = input_state_for_ok.read(cx).value();
-                        if name.is_empty() || name == current_name_for_ok {
-                            return true;
-                        }
-                        let new_path = target_for_ok
-                            .parent()
-                            .unwrap_or(&target_for_ok)
-                            .join(name.as_ref());
-                        if let Err(e) = std::fs::rename(&target_for_ok, &new_path) {
-                            println!("Failed to rename: {}", e);
-                        } else {
-                            _ = view_for_ok.update(cx, |panel, _| {
-                                if panel.root == target_for_ok {
-                                    panel.root = new_path.clone();
-                                }
-                            });
-                        }
-                        _ = view_for_ok.update(cx, |panel, cx| panel.refresh_tree(cx));
-                        true
-                    }
-                })
-        });
+        self.start_inline_rename(target, window, cx);
     }
 
     fn on_action_delete(&mut self, _: &DeleteFile, window: &mut Window, cx: &mut Context<Self>) {
@@ -367,6 +322,398 @@ impl FileTreePanel {
             self.refresh_tree(cx);
         }
     }
+
+    fn on_action_cancel_inline_edit(
+        &mut self,
+        _: &CancelInlineEdit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_inline_edit(cx);
+    }
+
+    fn cancel_inline_edit(&mut self, cx: &mut Context<Self>) {
+        if self.renaming_id.is_some() || self.pending_new.is_some() {
+            self.renaming_id = None;
+            self.rename_input = None;
+            self.pending_new = None;
+            cx.notify();
+        }
+    }
+
+    fn selected_or_context_target(&self) -> Option<PathBuf> {
+        self.selected_id
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| self.context_target.clone())
+    }
+
+    fn visible_entries(&self) -> Vec<(TreeItem, usize)> {
+        let mut entries = Vec::new();
+        Self::flatten_items(&self.items, &mut entries, 0);
+        entries
+    }
+
+    fn select_item(&mut self, id: impl Into<String>, path: PathBuf, cx: &mut Context<Self>) {
+        let id = id.into();
+        self.selected_id = Some(id);
+        self.context_target = Some(path);
+        self.renaming_id = None;
+        self.rename_input = None;
+        self.pending_new = None;
+        cx.notify();
+    }
+
+    fn open_or_expand_selected(&mut self, cx: &mut Context<Self>) {
+        if self.renaming_id.is_some() || self.pending_new.is_some() {
+            return;
+        }
+        let selected_id = match self.selected_id.clone() {
+            Some(selected_id) => selected_id,
+            None => return,
+        };
+        let path = PathBuf::from(&selected_id);
+        if self.folder_ids.contains(selected_id.as_str()) {
+            if let Some(item) = Self::find_item(&self.items, &selected_id) {
+                if !item.is_expanded() {
+                    Self::toggle_expanded(&mut self.items, &selected_id);
+                    cx.notify();
+                }
+            }
+        } else {
+            cx.emit(OpenFileEvent { path });
+            cx.notify();
+        }
+    }
+
+    fn on_action_open_selected(
+        &mut self,
+        _: &OpenSelectedFile,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_or_expand_selected(cx);
+    }
+
+    fn on_action_select_previous(
+        &mut self,
+        _: &SelectPreviousItem,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_relative(-1, cx);
+    }
+
+    fn on_action_select_next(
+        &mut self,
+        _: &SelectNextItem,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_relative(1, cx);
+    }
+
+    fn on_action_expand_selected(
+        &mut self,
+        _: &ExpandSelectedItem,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_id.is_none() {
+            return;
+        }
+        let selected_id = self.selected_id.clone().unwrap();
+        if !self.folder_ids.contains(selected_id.as_str()) {
+            return;
+        }
+        if let Some(item) = Self::find_item(&self.items, &selected_id) {
+            if !item.is_expanded() {
+                Self::toggle_expanded(&mut self.items, &selected_id);
+                cx.notify();
+            }
+        }
+    }
+
+    fn on_action_collapse_selected(
+        &mut self,
+        _: &CollapseSelectedItem,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_id.is_none() {
+            return;
+        }
+        let selected_id = self.selected_id.clone().unwrap();
+        if !self.folder_ids.contains(selected_id.as_str()) {
+            return;
+        }
+        if let Some(item) = Self::find_item(&self.items, &selected_id) {
+            if item.is_expanded() {
+                Self::toggle_expanded(&mut self.items, &selected_id);
+                cx.notify();
+            }
+        }
+    }
+
+    fn on_action_copy_selected_name(
+        &mut self,
+        _: &CopySelectedName,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_id.is_none() || self.pending_new.is_some() {
+            return;
+        }
+        let selected_id = self.selected_id.as_ref().unwrap();
+        let path = PathBuf::from(selected_id);
+        let value = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(selected_id)
+            .to_string();
+        cx.write_to_clipboard(ClipboardItem::new_string(value));
+    }
+
+    fn select_relative(&mut self, offset: isize, cx: &mut Context<Self>) {
+        let entries = self.visible_entries();
+        if entries.is_empty() {
+            return;
+        }
+
+        let current_ix = self.selected_id.as_ref().and_then(|selected_id| {
+            entries
+                .iter()
+                .position(|(item, _)| item.id == selected_id.as_str())
+        });
+        if current_ix.is_none() {
+            let next_ix = if offset < 0 { entries.len() - 1 } else { 0 };
+            let selected = &entries[next_ix].0;
+            self.selected_id = Some(selected.id.to_string());
+            self.context_target = Some(PathBuf::from(selected.id.as_str()));
+            self.renaming_id = None;
+            self.rename_input = None;
+            cx.notify();
+            return;
+        }
+        let current_ix = current_ix.unwrap();
+        let next_ix = if offset < 0 {
+            if current_ix == 0 {
+                entries.len() - 1
+            } else {
+                current_ix - 1
+            }
+        } else if current_ix + 1 >= entries.len() {
+            0
+        } else {
+            current_ix + 1
+        };
+
+        let selected = &entries[next_ix].0;
+        self.selected_id = Some(selected.id.to_string());
+        self.context_target = Some(PathBuf::from(selected.id.as_str()));
+        self.renaming_id = None;
+        self.rename_input = None;
+        cx.notify();
+    }
+
+    fn find_item<'a>(items: &'a [TreeItem], id: &str) -> Option<&'a TreeItem> {
+        for item in items {
+            if item.id == id {
+                return Some(item);
+            }
+            if let Some(found) = Self::find_item(&item.children, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    fn start_inline_new(
+        &mut self,
+        parent: PathBuf,
+        kind: PendingNewKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let parent_id = parent.to_string_lossy().to_string();
+        Self::set_expanded(&mut self.items, &parent_id, true);
+
+        let id = format!(
+            "{}::__zql_pending_new_{}__",
+            parent_id,
+            if kind == PendingNewKind::File {
+                "file"
+            } else {
+                "folder"
+            }
+        );
+        let input_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(if kind == PendingNewKind::File {
+                "File name..."
+            } else {
+                "Folder name..."
+            })
+        });
+        let input_state_for_subscribe = input_state.clone();
+        let id_for_subscribe = id.clone();
+        cx.subscribe_in(
+            &input_state_for_subscribe,
+            window,
+            move |panel, input, event: &InputEvent, _window, cx| match event {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    panel.finish_inline_new(id_for_subscribe.clone(), input, cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+
+        self.renaming_id = None;
+        self.rename_input = None;
+        self.selected_id = Some(id.clone());
+        self.context_target = Some(parent.clone());
+        self.pending_new = Some(PendingNewEntry {
+            id,
+            parent,
+            kind,
+            input: input_state.clone(),
+        });
+        cx.notify();
+        window.focus(&input_state.read(cx).focus_handle(cx), cx);
+    }
+
+    fn finish_inline_new(
+        &mut self,
+        pending_id: String,
+        input_state: &Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.pending_new.clone() else {
+            return;
+        };
+        if pending.id != pending_id {
+            return;
+        }
+
+        let name = input_state.read(cx).value().trim().to_string();
+        self.pending_new = None;
+
+        if name.is_empty() {
+            cx.notify();
+            return;
+        }
+
+        let new_path = pending.parent.join(&name);
+        let result = if pending.kind == PendingNewKind::File {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&new_path)
+                .map(|_| ())
+        } else {
+            std::fs::create_dir(&new_path)
+        };
+
+        if let Err(e) = result {
+            println!(
+                "Failed to create {}: {}",
+                if pending.kind == PendingNewKind::File {
+                    "file"
+                } else {
+                    "folder"
+                },
+                e
+            );
+        } else {
+            self.selected_id = Some(new_path.to_string_lossy().to_string());
+            self.context_target = Some(new_path);
+        }
+        self.refresh_tree(cx);
+    }
+
+    fn start_inline_rename(
+        &mut self,
+        target: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = target.to_string_lossy().to_string();
+        let current_name = target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if current_name.is_empty() {
+            return;
+        }
+
+        self.pending_new = None;
+
+        let input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(current_name.clone())
+                .placeholder("New name...")
+        });
+        let input_state_for_subscribe = input_state.clone();
+        let id_for_subscribe = id.clone();
+        cx.subscribe_in(
+            &input_state_for_subscribe,
+            window,
+            move |panel, input, event: &InputEvent, _window, cx| match event {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    panel.finish_inline_rename(id_for_subscribe.clone(), input, cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+
+        self.selected_id = Some(id.clone());
+        self.context_target = Some(target);
+        self.renaming_id = Some(id);
+        self.rename_input = Some(input_state.clone());
+        cx.notify();
+        window.focus(&input_state.read(cx).focus_handle(cx), cx);
+    }
+
+    fn finish_inline_rename(
+        &mut self,
+        target_id: String,
+        input_state: &Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.renaming_id.as_deref() != Some(target_id.as_str()) {
+            return;
+        }
+
+        let target = PathBuf::from(&target_id);
+        let current_name = target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let name = input_state.read(cx).value().trim().to_string();
+        self.renaming_id = None;
+        self.rename_input = None;
+
+        if name.is_empty() || name == current_name {
+            cx.notify();
+            return;
+        }
+
+        let new_path = target.parent().unwrap_or(&target).join(&name);
+        if let Err(e) = std::fs::rename(&target, &new_path) {
+            println!("Failed to rename: {}", e);
+        } else {
+            if self.root == target {
+                self.root = new_path.clone();
+                cx.emit(RootChangedEvent);
+            }
+            self.selected_id = Some(new_path.to_string_lossy().to_string());
+            self.context_target = Some(new_path);
+        }
+        self.refresh_tree(cx);
+    }
 }
 
 fn build_dir_items(
@@ -437,6 +784,25 @@ impl Render for FileTreePanel {
         let _view = cx.entity();
         let mut entries = Vec::new();
         Self::flatten_items(&self.items, &mut entries, 0);
+        if let Some(pending) = self.pending_new.clone() {
+            let parent_id = pending.parent.to_string_lossy().to_string();
+            let insert_at = entries
+                .iter()
+                .position(|(item, _)| item.id == parent_id)
+                .map(|ix| ix + 1)
+                .unwrap_or(entries.len());
+            let depth = entries
+                .get(insert_at.saturating_sub(1))
+                .and_then(|(item, depth)| {
+                    if item.id == parent_id {
+                        Some(depth + 1)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            entries.insert(insert_at, (TreeItem::new(pending.id.clone(), ""), depth));
+        }
 
         let focus_handle = self.focus_handle.clone();
         let can_paste = self.cut_buffer.is_some();
@@ -444,6 +810,7 @@ impl Render for FileTreePanel {
         v_flex()
             .id("file-tree-panel")
             .size_full()
+            .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_action_new_file))
             .on_action(cx.listener(Self::on_action_new_folder))
@@ -451,6 +818,13 @@ impl Render for FileTreePanel {
             .on_action(cx.listener(Self::on_action_delete))
             .on_action(cx.listener(Self::on_action_cut_file))
             .on_action(cx.listener(Self::on_action_paste_file))
+            .on_action(cx.listener(Self::on_action_open_selected))
+            .on_action(cx.listener(Self::on_action_select_previous))
+            .on_action(cx.listener(Self::on_action_select_next))
+            .on_action(cx.listener(Self::on_action_expand_selected))
+            .on_action(cx.listener(Self::on_action_collapse_selected))
+            .on_action(cx.listener(Self::on_action_copy_selected_name))
+            .on_action(cx.listener(Self::on_action_cancel_inline_edit))
             .context_menu(move |menu, _window, _cx| {
                 menu.action_context(focus_handle.clone())
                     .menu("New File", Box::new(NewFile))
@@ -458,6 +832,7 @@ impl Render for FileTreePanel {
                     .separator()
                     .menu("Cut", Box::new(CutFile))
                     .menu_with_disabled("Paste", Box::new(PasteFile), !can_paste)
+                    .menu("Copy Name", Box::new(CopySelectedName))
                     .separator()
                     .menu("Rename", Box::new(RenameFile))
                     .menu("Delete", Box::new(DeleteFile))
@@ -467,8 +842,14 @@ impl Render for FileTreePanel {
                     .id("tree-inner")
                     .overflow_y_scroll()
                     .children(entries.into_iter().enumerate().map(|(ix, (item, depth))| {
+                        let pending = self.pending_new.clone();
+                        let pending = pending.filter(|pending| pending.id == item.id.as_str());
                         let path = PathBuf::from(item.id.as_str());
-                        let is_dir = self.folder_ids.contains(item.id.as_str());
+                        let is_pending = pending.is_some();
+                        let is_dir = pending
+                            .as_ref()
+                            .map(|pending| pending.kind == PendingNewKind::Folder)
+                            .unwrap_or_else(|| self.folder_ids.contains(item.id.as_str()));
                         let is_selected = self
                             .selected_id
                             .as_ref()
@@ -480,6 +861,15 @@ impl Render for FileTreePanel {
                             .as_ref()
                             .map(|b| b.to_string_lossy() == item.id.as_str())
                             .unwrap_or(false);
+                        let is_renaming = self
+                            .renaming_id
+                            .as_ref()
+                            .map(|id| id == item.id.as_ref())
+                            .unwrap_or(false);
+                        let active_input = pending
+                            .as_ref()
+                            .map(|pending| pending.input.clone())
+                            .or_else(|| self.rename_input.clone());
 
                         let icon = if !is_dir {
                             let is_sql = path
@@ -490,13 +880,15 @@ impl Render for FileTreePanel {
                             if is_sql {
                                 Icon::new(IconName::File).path("icons/file-sql.svg")
                             } else {
-                                Icon::new(IconName::File)
+                                Icon::new(IconName::File).path("icons/file.svg")
                             }
                         } else if is_expanded {
                             Icon::new(IconName::FolderOpen)
                         } else {
                             Icon::new(IconName::Folder)
-                        };
+                        }
+                        .size(gpui::px(16.))
+                        .flex_none();
 
                         let item_id_click = item.id.clone();
                         let item_id_right = item.id.clone();
@@ -514,62 +906,91 @@ impl Render for FileTreePanel {
                             .rounded(cx.theme().radius)
                             .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.15)))
                             .when(is_cut, |this| this.text_color(cx.theme().muted_foreground))
-                            .child(h_flex().gap_2().child(icon).child(item.label.clone()))
-                            .on_click(cx.listener(move |panel, _, _, cx| {
-                                if is_dir {
-                                    panel.selected_id = Some(item_id_click.to_string());
-                                    Self::toggle_expanded(&mut panel.items, &item_id_click);
-                                    panel.refresh_tree(cx);
+                            .child(h_flex().gap_2().child(icon).child(
+                                if is_renaming || is_pending {
+                                    active_input
+                                        .as_ref()
+                                        .map(|input| Input::new(input).into_any_element())
+                                        .unwrap_or_else(|| {
+                                            div().child(item.label.clone()).into_any_element()
+                                        })
                                 } else {
-                                    panel.selected_id = Some(item_id_click.to_string());
-                                    cx.emit(OpenFileEvent {
-                                        path: path_click.clone(),
-                                    });
-                                    cx.notify();
-                                }
-                            }))
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |panel, _, _, cx| {
-                                    panel.context_target = Some(path_right.clone());
-                                    panel.selected_id = Some(item_id_right.to_string());
-                                    cx.notify();
-                                }),
-                            )
-                            .on_drag(path_drag.clone(), move |path, _, _, cx| {
-                                cx.new(|_| DragPreview {
-                                    label: path.file_name().unwrap().to_string_lossy().into(),
+                                    div().child(item.label.clone()).into_any_element()
+                                },
+                            ))
+                            .on_click(cx.listener(
+                                move |panel, event: &gpui::ClickEvent, window, cx| {
+                                    if is_renaming || is_pending {
+                                        return;
+                                    }
+                                    window.focus(&panel.focus_handle, cx);
+                                    panel.select_item(
+                                        item_id_click.to_string(),
+                                        path_click.clone(),
+                                        cx,
+                                    );
+                                    if event.click_count() == 2 {
+                                        if is_dir {
+                                            Self::toggle_expanded(&mut panel.items, &item_id_click);
+                                            panel.refresh_tree(cx);
+                                        } else {
+                                            cx.emit(OpenFileEvent {
+                                                path: path_click.clone(),
+                                            });
+                                            cx.notify();
+                                        }
+                                    }
+                                },
+                            ))
+                            .when(!is_pending, |this| {
+                                this.on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(move |panel, _, window, cx| {
+                                        window.focus(&panel.focus_handle, cx);
+                                        panel.context_target = Some(path_right.clone());
+                                        panel.selected_id = Some(item_id_right.to_string());
+                                        cx.notify();
+                                    }),
+                                )
+                                .on_drag(path_drag.clone(), move |path, _, _, cx| {
+                                    cx.new(|_| DragPreview {
+                                        label: path.file_name().unwrap().to_string_lossy().into(),
+                                    })
                                 })
-                            })
-                            .on_drop(cx.listener(move |panel, dragged_path: &PathBuf, _, cx| {
-                                let dest_dir = if is_dir {
-                                    path_drop.clone()
-                                } else {
-                                    path_drop.parent().unwrap_or(&path_drop).to_path_buf()
-                                };
-                                let file_name = match dragged_path.file_name() {
-                                    Some(name) => name.to_os_string(),
-                                    None => return,
-                                };
-                                let dest = dest_dir.join(&file_name);
+                                .on_drop(cx.listener(
+                                    move |panel, dragged_path: &PathBuf, _, cx| {
+                                        let dest_dir = if is_dir {
+                                            path_drop.clone()
+                                        } else {
+                                            path_drop.parent().unwrap_or(&path_drop).to_path_buf()
+                                        };
+                                        let file_name = match dragged_path.file_name() {
+                                            Some(name) => name.to_os_string(),
+                                            None => return,
+                                        };
+                                        let dest = dest_dir.join(&file_name);
 
-                                if dragged_path == &dest {
-                                    return;
-                                }
+                                        if dragged_path == &dest {
+                                            return;
+                                        }
 
-                                if dragged_path.is_dir() && dest.starts_with(dragged_path) {
-                                    println!("Cannot move a folder into itself");
-                                    return;
-                                }
+                                        if dragged_path.is_dir() && dest.starts_with(dragged_path) {
+                                            println!("Cannot move a folder into itself");
+                                            return;
+                                        }
 
-                                if let Err(e) = std::fs::rename(dragged_path, &dest) {
-                                    println!("Failed to move: {}", e);
-                                } else {
-                                    panel.refresh_tree(cx);
-                                }
-                            }))
-                            .drag_over(|style, _path: &PathBuf, _, cx| {
-                                style.bg(cx.theme().accent.opacity(0.3))
+                                        if let Err(e) = std::fs::rename(dragged_path, &dest) {
+                                            println!("Failed to move: {}", e);
+                                        } else {
+                                            panel.refresh_tree(cx);
+                                        }
+                                    },
+                                ))
+                                .drag_over(
+                                    |style, _path: &PathBuf, _, cx| {
+                                        style.bg(cx.theme().accent.opacity(0.3))
+                                    },
+                                )
                             })
                     }))
                     .text_sm()

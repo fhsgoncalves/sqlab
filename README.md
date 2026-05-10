@@ -48,8 +48,9 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 - [ ] Generate DDL for tables, functions, indexes, and triggers from the connections panel
 - [ ] Show type information on data table columns
 - [ ] Cycle between open tabs
+- [ ] Reorder tabs dragging
 - [ ] File search
-- [ ] Find text (using fuzzy search)
+- [ ] Find text (using fuzzy search - https://github.com/skim-rs/skim)
 - [ ] Export results to more formats
 - [ ] Copy selected content as CSV / JSON
 - [ ] Allow in-place editing in the data table
