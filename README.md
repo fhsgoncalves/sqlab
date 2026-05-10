@@ -30,11 +30,10 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 | Connection panel with live schema tree | ✅ |
 | Tabbed query files | ✅ |
 | PostgreSQL driver | ✅ |
-| Autocompletion | ✅ |
+| Autocompletion on steroids | ✅ |
 | Highlight active query selection | ✅ |
 | Passwords stored securely | ✅ |
 | Auto save on focus lost | ✅ |
-
 
 ## Supported Databases
 
@@ -44,7 +43,7 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 
 ## Roadmap
 
-- [ ] Improve autocompletion reliability
+- [ ] Fix keychain asking password everytime
 - [ ] Refactor connection panel layout (IntelliJ-style)
 - [ ] Generate DDL for tables, functions, indexes, and triggers from the connections panel
 - [ ] Show type information on data table columns

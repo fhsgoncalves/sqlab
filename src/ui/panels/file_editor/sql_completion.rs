@@ -223,7 +223,11 @@ pub struct SqlDiagnostic {
     pub message: String,
 }
 
-pub fn sql_diagnostics(text: &str, schema: &DatabaseSchema) -> Vec<SqlDiagnostic> {
+pub fn sql_diagnostics_at(
+    text: &str,
+    schema: &DatabaseSchema,
+    cursor: Option<usize>,
+) -> Vec<SqlDiagnostic> {
     let mut diagnostics = Vec::new();
     let mut statement_start = 0;
     for statement in text.split_inclusive(';') {
@@ -232,6 +236,7 @@ pub fn sql_diagnostics(text: &str, schema: &DatabaseSchema) -> Vec<SqlDiagnostic
             statement_text,
             statement_start,
             schema,
+            cursor,
         ));
         statement_start += statement.len();
     }
@@ -594,6 +599,13 @@ fn column_items_for_table(
         .iter()
         .filter(|column| matches_prefix(&column.name, &context.prefix))
         .map(|column| {
+            let key_score = if column.is_pk {
+                0
+            } else if column.is_fk {
+                1
+            } else {
+                4
+            };
             scored_completion_item(
                 context,
                 &column.name,
@@ -601,7 +613,7 @@ fn column_items_for_table(
                 Some(format!("({})", owner)),
                 None,
                 Some(column.data_type.clone()),
-                score,
+                score + key_score,
             )
         })
         .collect()
@@ -707,10 +719,18 @@ fn sql_diagnostics_for_statement(
     statement: &str,
     statement_start: usize,
     schema: &DatabaseSchema,
+    cursor: Option<usize>,
 ) -> Vec<SqlDiagnostic> {
     let tokens = positioned_sql_tokens(statement);
     let refs = table_refs_for_statement(statement);
-    let mut diagnostics = syntax_diagnostics_for_statement(statement, statement_start);
+    let mut diagnostics = if cursor
+        .and_then(|cursor| cursor.checked_sub(statement_start))
+        .is_some_and(|cursor| current_token_before_cursor(statement, cursor).ends_with('.'))
+    {
+        Vec::new()
+    } else {
+        syntax_diagnostics_for_statement(statement, statement_start, cursor)
+    };
 
     for ix in 0..tokens.len() {
         if !is_table_reference_keyword(
@@ -744,13 +764,22 @@ fn sql_diagnostics_for_statement(
         .map(|token| token.text.clone())
         .collect::<Vec<_>>();
     for (ix, token) in tokens.iter().enumerate() {
-        if is_reserved_token(&token.text) || is_numeric_token(&token.text) {
+        if is_reserved_token(&token.text)
+            || is_numeric_token(&token.text)
+            || is_operator_token(&token.text)
+            || cursor.is_some_and(|cursor| {
+                (statement_start + token.start..=statement_start + token.end).contains(&cursor)
+            })
+        {
             continue;
         }
         if ix > 0 && is_table_reference_keyword(&token_texts, ix - 1) {
             continue;
         }
         if let Some((qualifier, column)) = token.text.rsplit_once('.') {
+            if column.is_empty() {
+                continue;
+            }
             if schema.tables.iter().any(|table| {
                 table.schema.eq_ignore_ascii_case(qualifier)
                     && table.name.eq_ignore_ascii_case(column)
@@ -811,7 +840,11 @@ fn sql_diagnostics_for_statement(
     diagnostics
 }
 
-fn syntax_diagnostics_for_statement(statement: &str, statement_start: usize) -> Vec<SqlDiagnostic> {
+fn syntax_diagnostics_for_statement(
+    statement: &str,
+    statement_start: usize,
+    cursor: Option<usize>,
+) -> Vec<SqlDiagnostic> {
     let mut parser = tree_sitter::Parser::new();
     if parser
         .set_language(&tree_sitter_sequel::LANGUAGE.into())
@@ -823,18 +856,22 @@ fn syntax_diagnostics_for_statement(statement: &str, statement_start: usize) -> 
         return Vec::new();
     };
     let mut diagnostics = Vec::new();
-    collect_syntax_diagnostics(tree.root_node(), statement_start, &mut diagnostics);
+    collect_syntax_diagnostics(tree.root_node(), statement_start, cursor, &mut diagnostics);
     diagnostics
 }
 
 fn collect_syntax_diagnostics(
     node: tree_sitter::Node,
     statement_start: usize,
+    cursor: Option<usize>,
     diagnostics: &mut Vec<SqlDiagnostic>,
 ) {
     if node.is_error() || node.is_missing() {
         let start = statement_start + node.start_byte();
         let end = statement_start + node.end_byte().max(node.start_byte() + 1);
+        if cursor.is_some_and(|cursor| start <= cursor && cursor <= end) {
+            return;
+        }
         diagnostics.push(SqlDiagnostic {
             range: start..end,
             message: "SQL syntax error".to_string(),
@@ -842,9 +879,9 @@ fn collect_syntax_diagnostics(
         return;
     }
 
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_syntax_diagnostics(child, statement_start, diagnostics);
+    let mut walk = node.walk();
+    for child in node.children(&mut walk) {
+        collect_syntax_diagnostics(child, statement_start, cursor, diagnostics);
     }
 }
 
@@ -865,6 +902,13 @@ fn table_for_qualifier<'a>(
 
 fn is_numeric_token(token: &str) -> bool {
     token.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_operator_token(token: &str) -> bool {
+    matches!(
+        token,
+        "=" | "<" | ">" | "<>" | "!=" | "<=" | ">=" | "+" | "-" | "*" | "/" | "%"
+    )
 }
 
 fn is_expression_position(tokens: &[String], ix: usize) -> bool {
@@ -982,16 +1026,39 @@ fn token_position(tokens: &[String], needle: &str) -> Option<usize> {
 fn sql_tokens(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut token = String::new();
+    let mut chars = text.chars().peekable();
 
-    for ch in text.chars() {
+    while let Some(ch) = chars.next() {
+        if ch == '\'' {
+            if !token.is_empty() {
+                tokens.push(std::mem::take(&mut token));
+            }
+            while let Some(next) = chars.next() {
+                if next == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
         if ch == '_' || ch == '.' || ch.is_ascii_alphanumeric() {
             token.push(ch.to_ascii_lowercase());
         } else {
             if !token.is_empty() {
                 tokens.push(std::mem::take(&mut token));
             }
-            if matches!(ch, ',' | '=' | '<' | '>') {
-                tokens.push(ch.to_string());
+            if matches!(ch, ',' | '=' | '<' | '>' | '!') {
+                let mut operator = ch.to_string();
+                if matches!(ch, '<' | '>' | '!')
+                    && chars.peek().is_some_and(|next| matches!(next, '=' | '>'))
+                {
+                    operator.push(chars.next().unwrap());
+                }
+                tokens.push(operator);
             }
         }
     }
@@ -1014,8 +1081,29 @@ fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
     let mut tokens = Vec::new();
     let mut token = String::new();
     let mut token_start = 0;
+    let mut chars = text.char_indices().peekable();
 
-    for (ix, ch) in text.char_indices() {
+    while let Some((ix, ch)) = chars.next() {
+        if ch == '\'' {
+            if !token.is_empty() {
+                tokens.push(PositionedToken {
+                    text: std::mem::take(&mut token),
+                    start: token_start,
+                    end: ix,
+                });
+            }
+            while let Some((_, next)) = chars.next() {
+                if next == '\'' {
+                    if chars.peek().is_some_and(|(_, peek)| *peek == '\'') {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
         if ch == '_' || ch == '.' || ch.is_ascii_alphanumeric() {
             if token.is_empty() {
                 token_start = ix;
@@ -1029,11 +1117,20 @@ fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
                     end: ix,
                 });
             }
-            if matches!(ch, ',' | '=' | '<' | '>') {
+            if matches!(ch, ',' | '=' | '<' | '>' | '!') {
+                let mut text = ch.to_string();
+                let mut end = ix + ch.len_utf8();
+                if matches!(ch, '<' | '>' | '!')
+                    && chars.peek().is_some_and(|(_, next)| matches!(next, '=' | '>'))
+                {
+                    let (next_ix, next) = chars.next().unwrap();
+                    text.push(next);
+                    end = next_ix + next.len_utf8();
+                }
                 tokens.push(PositionedToken {
-                    text: ch.to_string(),
+                    text,
                     start: ix,
-                    end: ix + ch.len_utf8(),
+                    end,
                 });
             }
         }
@@ -1091,7 +1188,12 @@ fn previous_identifier(rope: &Rope, before_offset: usize) -> Option<String> {
 
 fn current_completion_token(rope: &Rope, offset: usize) -> String {
     let text = rope.slice(0..offset).to_string();
-    text.chars()
+    current_token_before_cursor(&text, text.len())
+}
+
+fn current_token_before_cursor(text: &str, offset: usize) -> String {
+    text[..offset.min(text.len())]
+        .chars()
         .rev()
         .take_while(|ch| is_completion_token_char(*ch))
         .collect::<String>()
@@ -1131,7 +1233,7 @@ fn limit_items(mut items: Vec<ScoredCompletion>) -> Vec<CompletionItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_source::TableKind;
+    use crate::data_source::{ColumnInfo, TableKind};
 
     #[test]
     fn detects_table_reference_scope_with_partial_prefix() {
@@ -1222,5 +1324,121 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item.label, "users");
+    }
+
+    #[test]
+    fn diagnostics_ignore_strings_and_not_equal_operator() {
+        let schema = test_schema();
+        let text = "select o.created_at from customers c inner join orders o on o.customer_id = c.id where c.city <> 'S';";
+
+        let diagnostics = sql_diagnostics_at(text, &schema, None);
+
+        assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
+    fn diagnostics_ignore_current_incomplete_qualified_column() {
+        let schema = test_schema();
+        let text = "select name, c.city, o. from customers c inner join orders o on o.customer_id = c.id;";
+        let cursor = text.find("o. from").unwrap() + "o.".len();
+
+        let diagnostics = sql_diagnostics_at(text, &schema, Some(cursor));
+
+        assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
+    fn key_columns_sort_before_regular_columns() {
+        let rope = Rope::from("select o. from orders o");
+        let context = CompletionContextData::new(&rope, "select o.".len());
+        let schema = test_schema();
+
+        let items = limit_items(qualified_column_items(&context, &schema, "o"));
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "customer_id", "created_at", "status"]
+        );
+    }
+
+    fn test_schema() -> DatabaseSchema {
+        DatabaseSchema {
+            tables: vec![
+                TableInfo {
+                    schema: "public".to_string(),
+                    name: "customers".to_string(),
+                    kind: TableKind::Table,
+                    columns: vec![
+                        ColumnInfo {
+                            name: "id".to_string(),
+                            data_type: "bigint".to_string(),
+                            nullable: false,
+                            ordinal: 1,
+                            is_pk: true,
+                            is_fk: false,
+                        },
+                        ColumnInfo {
+                            name: "name".to_string(),
+                            data_type: "text".to_string(),
+                            nullable: false,
+                            ordinal: 2,
+                            is_pk: false,
+                            is_fk: false,
+                        },
+                        ColumnInfo {
+                            name: "city".to_string(),
+                            data_type: "text".to_string(),
+                            nullable: true,
+                            ordinal: 3,
+                            is_pk: false,
+                            is_fk: false,
+                        },
+                    ],
+                },
+                TableInfo {
+                    schema: "public".to_string(),
+                    name: "orders".to_string(),
+                    kind: TableKind::Table,
+                    columns: vec![
+                        ColumnInfo {
+                            name: "created_at".to_string(),
+                            data_type: "timestamp with time zone".to_string(),
+                            nullable: false,
+                            ordinal: 3,
+                            is_pk: false,
+                            is_fk: false,
+                        },
+                        ColumnInfo {
+                            name: "customer_id".to_string(),
+                            data_type: "uuid".to_string(),
+                            nullable: false,
+                            ordinal: 2,
+                            is_pk: false,
+                            is_fk: true,
+                        },
+                        ColumnInfo {
+                            name: "id".to_string(),
+                            data_type: "bigint".to_string(),
+                            nullable: false,
+                            ordinal: 1,
+                            is_pk: true,
+                            is_fk: false,
+                        },
+                        ColumnInfo {
+                            name: "status".to_string(),
+                            data_type: "text".to_string(),
+                            nullable: true,
+                            ordinal: 4,
+                            is_pk: false,
+                            is_fk: false,
+                        },
+                    ],
+                },
+            ],
+            ..Default::default()
+        }
     }
 }

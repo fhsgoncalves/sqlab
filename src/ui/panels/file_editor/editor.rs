@@ -12,7 +12,7 @@ use gpui_component::{
 };
 
 use super::query_detector::{QueryRange, query_ranges_for_execution};
-use super::sql_completion::{SqlCompletionProvider, sql_diagnostics};
+use super::sql_completion::{SqlCompletionProvider, sql_diagnostics_at};
 use crate::data_source::manager::DataSourceManager;
 use crate::schema_cache;
 
@@ -174,8 +174,10 @@ impl EditorPanel {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let (text, schema) = {
-            let text = self.editor.read(cx).value().to_string();
+        let (text, cursor, schema) = {
+            let state = self.editor.read(cx);
+            let text = state.value().to_string();
+            let cursor = state.cursor();
             let schema = self
                 .data_source_manager
                 .read(cx)
@@ -185,12 +187,12 @@ impl EditorPanel {
                         .ok()
                         .flatten()
                 });
-            (text, schema)
+            (text, cursor, schema)
         };
 
         if let Some(schema) = schema {
             decorations.extend(
-                sql_diagnostics(&text, &schema)
+                sql_diagnostics_at(&text, &schema, Some(cursor))
                     .into_iter()
                     .map(|diagnostic| InputDecoration {
                         range: diagnostic.range,

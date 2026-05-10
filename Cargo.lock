@@ -2284,6 +2284,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
+source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#9747f3dbccbd8e7e258b0da13172139e68c24bef"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2327,6 +2328,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
+source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#9747f3dbccbd8e7e258b0da13172139e68c24bef"
 dependencies = [
  "anyhow",
  "gpui",
@@ -2340,6 +2342,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
+source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#9747f3dbccbd8e7e258b0da13172139e68c24bef"
 dependencies = [
  "proc-macro2",
  "quote",
