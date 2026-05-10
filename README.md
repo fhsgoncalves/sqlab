@@ -43,7 +43,7 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 
 ## Roadmap
 
-- [ ] Fix keychain asking password everytime
+- [ ] App distribution
 - [ ] Refactor connection panel layout (IntelliJ-style)
 - [ ] Generate DDL for tables, functions, indexes, and triggers from the connections panel
 - [ ] Show type information on data table columns
@@ -53,6 +53,8 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 - [ ] Export results to more formats
 - [ ] Copy selected content as CSV / JSON
 - [ ] Allow in-place editing in the data table
+- [ ] Support MySQL
+- [ ] Support SQLite
 
 ## Tech Stack
 

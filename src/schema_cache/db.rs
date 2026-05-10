@@ -35,6 +35,11 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             refreshed_at INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS schemas (
             connection_key TEXT NOT NULL,
             name TEXT NOT NULL,
@@ -131,6 +136,24 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     )
     .ok();
 
+    Ok(())
+}
+
+pub fn load_setting(conn: &Connection, key: &str) -> Result<Option<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
+    let mut rows = stmt.query(params![key])?;
+    match rows.next()? {
+        Some(row) => row.get(0).map(Some),
+        None => Ok(None),
+    }
+}
+
+pub fn save_setting(conn: &Connection, key: &str, value: &str) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
     Ok(())
 }
 
