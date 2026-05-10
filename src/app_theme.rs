@@ -4,7 +4,7 @@ use gpui_component::{Theme, ThemeRegistry};
 use crate::schema_cache::db;
 
 const THEME_SETTING_KEY: &str = "theme";
-const DEFAULT_THEME_NAME: &str = "Catppuccin Latte";
+const DEFAULT_THEME_NAME: &str = "JetBrains Dark";
 
 const BUNDLED_THEMES: &[(&str, &str)] = &[
     (
@@ -24,6 +24,7 @@ const BUNDLED_THEMES: &[(&str, &str)] = &[
         "catppuccin",
         include_str!("ui/themes/gpui-component/catppuccin.json"),
     ),
+    ("darcula", include_str!("ui/themes/darcula.json")),
     (
         "everforest",
         include_str!("ui/themes/gpui-component/everforest.json"),
@@ -51,6 +52,10 @@ const BUNDLED_THEMES: &[(&str, &str)] = &[
     (
         "jellybeans",
         include_str!("ui/themes/gpui-component/jellybeans.json"),
+    ),
+    (
+        "jetbrains-dark",
+        include_str!("ui/themes/jetbrains-dark.json"),
     ),
     (
         "kibble",
