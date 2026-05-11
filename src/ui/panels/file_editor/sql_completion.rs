@@ -149,6 +149,7 @@ struct CompletionContextData {
     qualifier: Option<String>,
     scope: CompletionScope,
     table_refs: Vec<TableRef>,
+    used_columns: HashSet<String>,
     rope: Rope,
 }
 
@@ -183,6 +184,16 @@ impl CompletionContextData {
         let table_refs = table_refs_for_statement(&statement);
         let scope = completion_scope(&statement, context_start_in_statement);
 
+        let mut used_columns = HashSet::new();
+        let tokens = sql_tokens(&statement);
+        for token in tokens {
+            if let Some((_, col)) = token.rsplit_once('.') {
+                used_columns.insert(col.to_string());
+            } else {
+                used_columns.insert(token);
+            }
+        }
+
         Self {
             offset,
             replace_start,
@@ -190,6 +201,7 @@ impl CompletionContextData {
             qualifier,
             scope,
             table_refs,
+            used_columns,
             rope: rope.clone(),
         }
     }
@@ -206,6 +218,8 @@ impl CompletionContextData {
 enum CompletionScope {
     TableReference,
     JoinReference,
+    JoinCondition,
+    WhereClause,
     SelectList,
     General,
 }
@@ -284,7 +298,10 @@ fn build_items(
         return limit_items(items);
     }
 
-    if context.scope == CompletionScope::SelectList {
+    if matches!(
+        context.scope,
+        CompletionScope::SelectList | CompletionScope::WhereClause | CompletionScope::JoinCondition
+    ) {
         let mut items = involved_column_items(context, schema);
         if !items.is_empty() {
             items.extend(keyword_items(context, 50));
@@ -327,7 +344,7 @@ fn qualified_column_items(
         table.name.eq_ignore_ascii_case(qualifier)
             || format!("{}.{}", table.schema, table.name).eq_ignore_ascii_case(qualifier)
     }) {
-        items.extend(column_items_for_table(context, table, qualifier, 0));
+        items.extend(column_items_for_table(context, table, &table.name, None, 0));
     }
 
     for table_ref in context
@@ -336,8 +353,7 @@ fn qualified_column_items(
         .filter(|table_ref| table_ref.alias_matches(qualifier))
     {
         if let Some(table) = table_for_ref(schema, table_ref) {
-            let owner = table_ref.alias.as_deref().unwrap_or(&table.name);
-            items.extend(column_items_for_table(context, table, owner, 0));
+            items.extend(column_items_for_table(context, table, &table.name, None, 0));
         }
     }
 
@@ -524,10 +540,27 @@ fn involved_column_items(
     schema: &DatabaseSchema,
 ) -> Vec<ScoredCompletion> {
     let mut items = Vec::new();
+    let use_prefix = context.table_refs.len() > 1
+        || context
+            .table_refs
+            .iter()
+            .any(|table_ref| table_ref.alias.is_some());
+
     for table_ref in &context.table_refs {
         if let Some(table) = table_for_ref(schema, table_ref) {
-            let owner = table_ref.alias.as_deref().unwrap_or(&table.name);
-            items.extend(column_items_for_table(context, table, owner, 0));
+            let owner_alias = table_ref.alias.as_deref().unwrap_or(&table.name);
+            let prefix = if use_prefix {
+                Some(format!("{}.", owner_alias))
+            } else {
+                None
+            };
+            items.extend(column_items_for_table(
+                context,
+                table,
+                &table.name,
+                prefix.as_deref(),
+                0,
+            ));
         }
     }
     items
@@ -591,7 +624,8 @@ fn general_items(
 fn column_items_for_table(
     context: &CompletionContextData,
     table: &TableInfo,
-    owner: &str,
+    table_name: &str,
+    prefix: Option<&str>,
     score: usize,
 ) -> Vec<ScoredCompletion> {
     table
@@ -599,18 +633,29 @@ fn column_items_for_table(
         .iter()
         .filter(|column| matches_prefix(&column.name, &context.prefix))
         .map(|column| {
-            let key_score = if column.is_pk {
+            let mut key_score = if column.is_pk {
                 0
             } else if column.is_fk {
                 1
             } else {
                 4
             };
+
+            if context.used_columns.contains(&column.name.to_lowercase()) {
+                key_score += 10;
+            }
+
+            let label = if let Some(prefix) = prefix {
+                format!("{}{}", prefix, column.name)
+            } else {
+                column.name.clone()
+            };
+
             scored_completion_item(
                 context,
-                &column.name,
+                &label,
                 CompletionItemKind::FIELD,
-                Some(format!("({})", owner)),
+                Some(format!("({})", table_name)),
                 None,
                 Some(column.data_type.clone()),
                 score + key_score,
@@ -927,21 +972,16 @@ fn is_expression_position(tokens: &[String], ix: usize) -> bool {
 fn completion_scope(statement: &str, cursor: usize) -> CompletionScope {
     let before_cursor = &statement[..cursor.min(statement.len())];
     let tokens = sql_tokens(before_cursor);
-    if let Some(keyword) = table_keyword_before_cursor(&tokens) {
-        return if keyword == "join" {
-            CompletionScope::JoinReference
-        } else {
-            CompletionScope::TableReference
-        };
-    }
 
-    let all_tokens = sql_tokens(statement);
-    let before_tokens = sql_tokens(before_cursor);
-    if token_position(&before_tokens, "select").is_some()
-        && token_position(&before_tokens, "from").is_none()
-        && token_position(&all_tokens, "from").is_some()
-    {
-        return CompletionScope::SelectList;
+    for token in tokens.iter().rev() {
+        match token.as_str() {
+            "from" => return CompletionScope::TableReference,
+            "join" => return CompletionScope::JoinReference,
+            "on" => return CompletionScope::JoinCondition,
+            "where" | "and" | "or" => return CompletionScope::WhereClause,
+            "select" => return CompletionScope::SelectList,
+            _ => continue,
+        }
     }
 
     CompletionScope::General
@@ -958,48 +998,50 @@ fn table_refs_for_statement(statement: &str) -> Vec<TableRef> {
             continue;
         }
 
-        ix += 1;
-        let Some(table_token) = tokens.get(ix) else {
-            break;
-        };
-        if is_reserved_token(table_token) {
-            continue;
-        }
-
-        let (schema_name, table_name) = split_table_name(table_token);
+        let is_from_list = tokens[ix] == "from";
         ix += 1;
 
-        let alias = if tokens.get(ix).is_some_and(|token| token == "as") {
+        while ix < tokens.len() {
+            let Some(table_token) = tokens.get(ix) else {
+                break;
+            };
+            if is_reserved_token(table_token) {
+                break;
+            }
+
+            let (schema_name, table_name) = split_table_name(table_token);
             ix += 1;
-            alias_token(tokens.get(ix))
-        } else {
-            alias_token(tokens.get(ix))
-        };
 
-        refs.push(TableRef {
-            table_name,
-            schema_name,
-            alias,
-        });
+            let alias = if tokens.get(ix).is_some_and(|token| token == "as") {
+                ix += 1;
+                let a = alias_token(tokens.get(ix));
+                if a.is_some() {
+                    ix += 1;
+                }
+                a
+            } else {
+                let a = alias_token(tokens.get(ix));
+                if a.is_some() {
+                    ix += 1;
+                }
+                a
+            };
+
+            refs.push(TableRef {
+                table_name,
+                schema_name,
+                alias,
+            });
+
+            if is_from_list && tokens.get(ix).is_some_and(|token| token == ",") {
+                ix += 1;
+            } else {
+                break;
+            }
+        }
     }
 
     refs
-}
-
-fn table_keyword_before_cursor(tokens: &[String]) -> Option<&str> {
-    let mut ix = tokens.len();
-    while ix > 0 {
-        ix -= 1;
-        let token = &tokens[ix];
-        if token == "," {
-            continue;
-        }
-        if token == "from" || token == "join" {
-            return Some(token);
-        }
-        return None;
-    }
-    None
 }
 
 fn is_table_reference_keyword(tokens: &[String], ix: usize) -> bool {
@@ -1017,10 +1059,6 @@ fn split_table_name(token: &str) -> (Option<String>, String) {
     } else {
         (None, token.to_string())
     }
-}
-
-fn token_position(tokens: &[String], needle: &str) -> Option<usize> {
-    tokens.iter().position(|token| token == needle)
 }
 
 fn sql_tokens(text: &str) -> Vec<String> {
@@ -1271,24 +1309,94 @@ mod tests {
     }
 
     #[test]
-    fn detects_select_list_scope_before_from() {
-        let statement = "select c from customers c join orders o on o.customer_id = c.id";
-        let cursor = statement.find("c from").unwrap();
+    fn detects_where_clause_scope() {
+        let statement = "select * from users where ";
         assert!(matches!(
-            completion_scope(statement, cursor),
-            CompletionScope::SelectList
+            completion_scope(statement, statement.len()),
+            CompletionScope::WhereClause
+        ));
+
+        let statement = "select * from users where id = 1 and ";
+        assert!(matches!(
+            completion_scope(statement, statement.len()),
+            CompletionScope::WhereClause
         ));
     }
 
     #[test]
-    fn derives_completion_prefix_from_rope() {
-        let rope = Rope::from("select * from ord");
-        let context = CompletionContextData::new(&rope, rope.len());
+    fn detects_join_condition_scope() {
+        let statement = "select * from users u join orders o on ";
+        assert!(matches!(
+            completion_scope(statement, statement.len()),
+            CompletionScope::JoinCondition
+        ));
+    }
 
-        assert_eq!(context.prefix, "ord");
-        assert_eq!(context.replace_start, "select * from ".len());
-        assert_eq!(context.qualifier, None);
-        assert!(matches!(context.scope, CompletionScope::TableReference));
+    #[test]
+    fn prefixes_columns_when_multiple_tables_involved() {
+        let rope = Rope::from("select  from customers, orders");
+        let context = CompletionContextData::new(&rope, "select ".len());
+        let schema = test_schema();
+
+        let items = involved_column_items(&context, &schema);
+        let labels: Vec<_> = items.iter().map(|i| i.item.label.as_str()).collect();
+
+        assert!(labels.contains(&"customers.name"));
+        assert!(labels.contains(&"orders.status"));
+    }
+
+    #[test]
+    fn prefixes_columns_with_alias() {
+        let rope = Rope::from("select  from customers c");
+        let context = CompletionContextData::new(&rope, "select ".len());
+        let schema = test_schema();
+
+        let items = involved_column_items(&context, &schema);
+        let labels: Vec<_> = items.iter().map(|i| i.item.label.as_str()).collect();
+
+        assert!(labels.contains(&"c.name"));
+    }
+
+    #[test]
+    fn does_not_prefix_columns_with_single_table_no_alias() {
+        let rope = Rope::from("select  from customers");
+        let context = CompletionContextData::new(&rope, "select ".len());
+        let schema = test_schema();
+
+        let items = involved_column_items(&context, &schema);
+        let labels: Vec<_> = items.iter().map(|i| i.item.label.as_str()).collect();
+
+        assert!(labels.contains(&"name"));
+        assert!(!labels.iter().any(|l| l.contains('.')));
+    }
+
+    #[test]
+    fn penalizes_used_columns_in_ranking() {
+        let rope = Rope::from("select name from customers where ");
+        let context = CompletionContextData::new(&rope, rope.len());
+        let schema = test_schema();
+
+        let items = involved_column_items(&context, &schema);
+        let name_item = items.iter().find(|i| i.item.label == "name").unwrap();
+        let id_item = items.iter().find(|i| i.item.label == "id").unwrap();
+
+        // id is PK (0), name is normal (4). name is used (+10) -> 14.
+        assert!(name_item.score > id_item.score);
+    }
+
+    #[test]
+    fn shows_actual_table_name_in_detail() {
+        let rope = Rope::from("select  from customers c");
+        let context = CompletionContextData::new(&rope, "select ".len());
+        let schema = test_schema();
+
+        let items = involved_column_items(&context, &schema);
+        let name_item = items.iter().find(|i| i.item.label == "c.name").unwrap();
+
+        assert_eq!(
+            name_item.item.label_details.as_ref().unwrap().detail.as_deref(),
+            Some("(customers)")
+        );
     }
 
     #[test]
