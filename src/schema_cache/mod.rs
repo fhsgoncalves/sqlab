@@ -7,6 +7,7 @@ use std::hash::{Hash, Hasher};
 use rusqlite::params;
 
 use crate::data_source::DataSourceConfig;
+use crate::data_source::Database;
 use crate::data_source::DatabaseSchema;
 use crate::schema_cache::db::with_conn;
 use crate::schema_cache::models::{
@@ -53,7 +54,7 @@ pub fn save(
 
         conn.execute(
             "INSERT INTO cache_metadata (connection_key, connection_name, db_type, refreshed_at) VALUES (?1, ?2, ?3, ?4)",
-            params![connection_key, connection_name, schema.db_type, now],
+            params![connection_key, connection_name, schema.db_type.as_str(), now],
         )?;
 
         for s in &schemas {
@@ -118,11 +119,22 @@ pub fn save(
 
 pub fn load(connection_key: &str) -> Result<Option<DatabaseSchema>, SchemaCacheError> {
     with_conn(|conn| {
-        let db_type: String = conn.query_row(
+        let db_type_str: String = match conn.query_row(
             "SELECT db_type FROM cache_metadata WHERE connection_key = ?1",
             params![connection_key],
             |row| row.get(0),
-        ).unwrap_or_else(|_| "postgres".to_string());
+        ) {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        };
+
+        let db_type = match Database::try_from(db_type_str.as_str()) {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("Warning: invalid db_type in cache: {}", e);
+                return Ok(None);
+            }
+        };
 
         let schemas = load_schemas(conn, connection_key)?;
         if schemas.is_empty() {

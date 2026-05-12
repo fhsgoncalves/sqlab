@@ -14,9 +14,9 @@ use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Client, Row};
 
 use crate::data_source::{
-    ColumnInfo, DataSource, DataSourceConfig, DataSourceError, DatabaseSchema, ForeignKeyInfo,
-    FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo, TableInfo, TableKind,
-    TriggerInfo,
+    ColumnInfo, DataSource, DataSourceConfig, DataSourceError, Database, DatabaseSchema,
+    ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo, TableInfo,
+    TableKind, TriggerInfo,
 };
 
 pub struct PostgresDataSource {
@@ -500,7 +500,7 @@ impl PostgresDataSource {
             .collect();
 
         Ok(DatabaseSchema {
-            db_type: "postgres".to_string(),
+            db_type: Database::Postgres,
             schemas,
             tables,
             functions,
@@ -518,8 +518,8 @@ impl DataSource for PostgresDataSource {
         &self.config.name
     }
 
-    fn db_type(&self) -> &str {
-        &self.config.db_type
+    fn db_type(&self) -> Database {
+        self.config.db_type
     }
 
     fn config(&self) -> &DataSourceConfig {

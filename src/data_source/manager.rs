@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::config::Config;
 use crate::credentials;
 use crate::data_source::postgres::PostgresDataSource;
-use crate::data_source::{ConnectionStatus, DataSource, DataSourceConfig, DataSourceError};
+use crate::data_source::{ConnectionStatus, DataSource, DataSourceConfig, DataSourceError, Database};
 use crate::schema_cache::{self, cache_key};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,11 +230,7 @@ impl DataSourceManager {
 pub fn create_data_source(
     config: &DataSourceConfig,
 ) -> Result<Box<dyn DataSource>, DataSourceError> {
-    match config.db_type.as_str() {
-        "postgres" => Ok(Box::new(PostgresDataSource::new(config.clone())?)),
-        other => Err(DataSourceError::ConnectionFailed(format!(
-            "Unsupported database type: {}",
-            other
-        ))),
+    match config.db_type {
+        Database::Postgres => Ok(Box::new(PostgresDataSource::new(config.clone())?)),
     }
 }

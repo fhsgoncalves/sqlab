@@ -5,11 +5,56 @@ pub use manager::create_data_source;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Database {
+    Postgres,
+}
+
+impl Database {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Database::Postgres => "postgres",
+        }
+    }
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        Database::Postgres
+    }
+}
+
+impl TryFrom<&str> for Database {
+    type Error = &'static str;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "postgres" => Ok(Database::Postgres),
+            _ => Err("unsupported database type"),
+        }
+    }
+}
+
+impl TryFrom<String> for Database {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Database::try_from(value.as_str())
+    }
+}
+
+impl std::fmt::Display for Database {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataSourceConfig {
     pub name: String,
-    #[serde(default = "default_db_type")]
-    pub db_type: String,
+    #[serde(default)]
+    pub db_type: Database,
     #[serde(default = "default_host")]
     pub host: String,
     #[serde(default = "default_postgres_port")]
@@ -28,7 +73,7 @@ impl Default for DataSourceConfig {
     fn default() -> Self {
         Self {
             name: String::new(),
-            db_type: default_db_type(),
+            db_type: Database::default(),
             host: default_host(),
             port: default_postgres_port(),
             user: String::new(),
@@ -38,10 +83,6 @@ impl Default for DataSourceConfig {
             query_string: String::new(),
         }
     }
-}
-
-fn default_db_type() -> String {
-    "postgres".into()
 }
 
 fn default_host() -> String {
@@ -66,7 +107,7 @@ pub struct QueryResult {
 
 #[derive(Debug, Clone, Default)]
 pub struct DatabaseSchema {
-    pub db_type: String,
+    pub db_type: Database,
     pub schemas: Vec<SchemaInfo>,
     pub tables: Vec<TableInfo>,
     pub functions: Vec<FunctionInfo>,
@@ -182,7 +223,7 @@ pub enum ConnectionStatus {
 #[allow(dead_code)]
 pub trait DataSource: Send + Sync {
     fn name(&self) -> &str;
-    fn db_type(&self) -> &str;
+    fn db_type(&self) -> Database;
     fn config(&self) -> &DataSourceConfig;
     fn is_connected(&self) -> bool;
 

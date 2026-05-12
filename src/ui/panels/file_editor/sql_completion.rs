@@ -12,7 +12,7 @@ use lsp_types::{
 use serde_json::json;
 
 use crate::data_source::manager::DataSourceManager;
-use crate::data_source::{DataSourceConfig, DatabaseSchema, TableInfo};
+use crate::data_source::{Database, DataSourceConfig, DatabaseSchema, TableInfo};
 use crate::schema_cache;
 
 const SQL_KEYWORDS: &[&str] = &[
@@ -1194,7 +1194,7 @@ fn is_reserved_token(token: &str, schema: &DatabaseSchema) -> bool {
         return true;
     }
 
-    if schema.db_type == "postgres" && is_postgres_reserved_token(token) {
+    if schema.db_type == Database::Postgres && is_postgres_reserved_token(token) {
         return true;
     }
 
@@ -1386,8 +1386,10 @@ mod tests {
 
     #[test]
     fn extracts_table_aliases_from_from_and_join() {
+        let schema = test_schema();
         let refs = table_refs_for_statement(
             "select c.id, o.status from public.customers c join orders as o on o.customer_id = c.id",
+            &schema,
         );
 
         assert_eq!(refs.len(), 2);
@@ -1504,8 +1506,8 @@ mod tests {
     #[test]
     fn suggests_tables_after_schema_qualifier_in_table_scope() {
         let rope = Rope::from("select * from public.us");
-        let context = CompletionContextData::new(&rope, rope.len());
         let schema = DatabaseSchema {
+            db_type: Database::Postgres,
             tables: vec![TableInfo {
                 schema: "public".to_string(),
                 name: "users".to_string(),
@@ -1514,6 +1516,7 @@ mod tests {
             }],
             ..Default::default()
         };
+        let context = CompletionContextData::new(&rope, rope.len(), &schema);
 
         let config = DataSourceConfig {
             name: "local".to_string(),
@@ -1550,7 +1553,7 @@ mod tests {
     #[test]
     fn diagnostics_include_postgres_specific_functions() {
         let mut schema = test_schema();
-        schema.db_type = "postgres".to_string();
+        schema.db_type = Database::Postgres;
         let text = "select gen_random_uuid(), current_date, current_user from customers c;";
 
         let diagnostics = sql_diagnostics_at(text, &schema, None);

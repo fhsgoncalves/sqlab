@@ -19,7 +19,7 @@ use gpui_component::{
 
 use crate::data_source::manager::{DataSourceManager, IntrospectionStatus};
 use crate::data_source::{
-    ConnectionStatus, DataSourceConfig, DataSourceError, TableKind, create_data_source,
+    ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind, create_data_source,
 };
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
@@ -108,7 +108,7 @@ impl ConnectionPanel {
     ) {
         let manager = self.manager.clone();
         let name = cx.new(|cx| InputState::new(window, cx).default_value(config.name));
-        let db_type = cx.new(|cx| InputState::new(window, cx).default_value(config.db_type));
+        let db_type = cx.new(|cx| InputState::new(window, cx).default_value(config.db_type.as_str()));
         let host = cx.new(|cx| InputState::new(window, cx).default_value(config.host));
         let port = cx.new(|cx| InputState::new(window, cx).default_value(config.port.to_string()));
         let user = cx.new(|cx| InputState::new(window, cx).default_value(config.user));
@@ -163,7 +163,7 @@ impl ConnectionPanel {
                     let view = view.clone();
                     move |_, window: &mut Window, cx: &mut App| {
                         let name = name_for_ok.read(cx).value().trim().to_string();
-                        let db_type = db_type_for_ok.read(cx).value().trim().to_string();
+                        let db_type_str = db_type_for_ok.read(cx).value().trim().to_string();
                         let host = host_for_ok.read(cx).value().trim().to_string();
                         let port = port_for_ok
                             .read(cx)
@@ -177,8 +177,20 @@ impl ConnectionPanel {
                         let schema = schema_for_ok.read(cx).value().trim().to_string();
                         let query_string = query_string_for_ok.read(cx).value().trim().to_string();
 
+                        let db_type = match Database::try_from(db_type_str.as_str()) {
+                            Ok(db) => db,
+                            Err(_) => {
+                                let db_type_display = db_type_str.clone();
+                                window.open_alert_dialog(cx, move |alert, _, _| {
+                                    alert.title("Unsupported Database Type").description(
+                                        format!("The database type '{}' is not supported.", db_type_display),
+                                    )
+                                });
+                                return false;
+                            }
+                        };
+
                         if name.is_empty()
-                            || db_type.is_empty()
                             || host.is_empty()
                             || user.is_empty()
                             || database.is_empty()
@@ -985,7 +997,7 @@ impl Render for ConnectionPanel {
                             })),
                     )
                     .child(div().id(format!("connection-icon-{}", row_name)).child(
-                        if config.db_type == "postgres" {
+                        if config.db_type == Database::Postgres {
                             Icon::new(IconName::File)
                                 .path("icons/pg.svg")
                                 .size(px(28.))

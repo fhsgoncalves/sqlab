@@ -1,6 +1,6 @@
 use crate::data_source::{
-    ColumnInfo, DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo,
-    TableInfo, TableKind, TriggerInfo,
+    ColumnInfo, Database, DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, SchemaInfo,
+    SequenceInfo, TableInfo, TableKind, TriggerInfo,
 };
 
 pub fn schema_to_rows(
@@ -141,7 +141,7 @@ pub fn schema_to_rows(
 }
 
 pub fn rows_to_schema(
-    db_type: String,
+    db_type: Database,
     schemas: Vec<SchemaRow>,
     tables: Vec<TableRow>,
     columns: Vec<ColumnRow>,
