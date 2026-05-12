@@ -141,6 +141,7 @@ pub fn schema_to_rows(
 }
 
 pub fn rows_to_schema(
+    db_type: String,
     schemas: Vec<SchemaRow>,
     tables: Vec<TableRow>,
     columns: Vec<ColumnRow>,
@@ -251,6 +252,7 @@ pub fn rows_to_schema(
         .collect();
 
     DatabaseSchema {
+        db_type,
         schemas: schema_infos,
         tables: table_infos,
         functions: function_infos,

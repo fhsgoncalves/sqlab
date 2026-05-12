@@ -79,9 +79,7 @@ fn main() {
 
         cx.bind_keys(vec![
             KeyBinding::new("cmd-w", ClosePanel, None),
-            KeyBinding::new("cmd-enter", ExecuteQuery, None),
             KeyBinding::new("cmd-enter", ExecuteQuery, Some("Input")),
-            KeyBinding::new("cmd-s", SaveFile, None),
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-c", CopyResultSelection, None),
             KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),

@@ -85,13 +85,13 @@ impl CompletionProvider for SqlCompletionProvider {
         let _ = trigger;
         let config = self.manager.read(cx).active_config().cloned();
         let cache = self.cache.clone();
-        let context = CompletionContextData::new(rope, offset);
 
         if let Some(config) = config {
             let key = schema_cache::cache_key(&config);
 
             // Check in-memory cache first
             if let Some(schema) = cached_schema(&cache, &key) {
+                let context = CompletionContextData::new(rope, offset, &schema);
                 return Task::ready(Ok(CompletionResponse::Array(build_items(
                     &context,
                     schema.as_ref(),
@@ -103,6 +103,7 @@ impl CompletionProvider for SqlCompletionProvider {
             match schema_cache::load(&key) {
                 Ok(Some(schema)) => {
                     let schema = Arc::new(schema);
+                    let context = CompletionContextData::new(rope, offset, &schema);
                     if let Ok(mut guard) = cache.write() {
                         *guard = Some(SchemaCache {
                             key,
@@ -119,6 +120,7 @@ impl CompletionProvider for SqlCompletionProvider {
             }
         }
 
+        let context = CompletionContextData::new(rope, offset, &DatabaseSchema::default());
         Task::ready(Ok(CompletionResponse::Array(limit_items(keyword_items(
             &context, 0,
         )))))
@@ -154,7 +156,7 @@ struct CompletionContextData {
 }
 
 impl CompletionContextData {
-    fn new(rope: &Rope, offset: usize) -> Self {
+    fn new(rope: &Rope, offset: usize, schema: &DatabaseSchema) -> Self {
         let text = rope.to_string();
         let statement_start = text[..offset]
             .rfind(';')
@@ -181,7 +183,7 @@ impl CompletionContextData {
 
         let statement = text[statement_start..statement_end].to_string();
         let context_start_in_statement = replace_start.saturating_sub(statement_start);
-        let table_refs = table_refs_for_statement(&statement);
+        let table_refs = table_refs_for_statement(&statement, schema);
         let scope = completion_scope(&statement, context_start_in_statement);
 
         let mut used_columns = HashSet::new();
@@ -767,7 +769,7 @@ fn sql_diagnostics_for_statement(
     cursor: Option<usize>,
 ) -> Vec<SqlDiagnostic> {
     let tokens = positioned_sql_tokens(statement);
-    let refs = table_refs_for_statement(statement);
+    let refs = table_refs_for_statement(statement, schema);
     let mut diagnostics = if cursor
         .and_then(|cursor| cursor.checked_sub(statement_start))
         .is_some_and(|cursor| current_token_before_cursor(statement, cursor).ends_with('.'))
@@ -787,7 +789,7 @@ fn sql_diagnostics_for_statement(
         let Some(table_token) = tokens.get(ix + 1) else {
             continue;
         };
-        if is_reserved_token(&table_token.text) {
+        if is_reserved_token(&table_token.text, schema) {
             continue;
         }
         let (schema_name, table_name) = split_table_name(&table_token.text);
@@ -809,7 +811,7 @@ fn sql_diagnostics_for_statement(
         .map(|token| token.text.clone())
         .collect::<Vec<_>>();
     for (ix, token) in tokens.iter().enumerate() {
-        if is_reserved_token(&token.text)
+        if is_reserved_token(&token.text, schema)
             || is_numeric_token(&token.text)
             || is_operator_token(&token.text)
             || cursor.is_some_and(|cursor| {
@@ -987,7 +989,7 @@ fn completion_scope(statement: &str, cursor: usize) -> CompletionScope {
     CompletionScope::General
 }
 
-fn table_refs_for_statement(statement: &str) -> Vec<TableRef> {
+fn table_refs_for_statement(statement: &str, schema: &DatabaseSchema) -> Vec<TableRef> {
     let tokens = sql_tokens(statement);
     let mut refs = Vec::new();
     let mut ix = 0;
@@ -1005,7 +1007,7 @@ fn table_refs_for_statement(statement: &str) -> Vec<TableRef> {
             let Some(table_token) = tokens.get(ix) else {
                 break;
             };
-            if is_reserved_token(table_token) {
+            if is_reserved_token(table_token, schema) {
                 break;
             }
 
@@ -1014,13 +1016,13 @@ fn table_refs_for_statement(statement: &str) -> Vec<TableRef> {
 
             let alias = if tokens.get(ix).is_some_and(|token| token == "as") {
                 ix += 1;
-                let a = alias_token(tokens.get(ix));
+                let a = alias_token(tokens.get(ix), schema);
                 if a.is_some() {
                     ix += 1;
                 }
                 a
             } else {
-                let a = alias_token(tokens.get(ix));
+                let a = alias_token(tokens.get(ix), schema);
                 if a.is_some() {
                     ix += 1;
                 }
@@ -1048,9 +1050,9 @@ fn is_table_reference_keyword(tokens: &[String], ix: usize) -> bool {
     tokens[ix] == "from" || tokens[ix] == "join"
 }
 
-fn alias_token(token: Option<&String>) -> Option<String> {
+fn alias_token(token: Option<&String>, schema: &DatabaseSchema) -> Option<String> {
     let token = token?;
-    (!is_reserved_token(token) && token != "," && token != ".").then(|| token.clone())
+    (!is_reserved_token(token, schema) && token != "," && token != ".").then(|| token.clone())
 }
 
 fn split_table_name(token: &str) -> (Option<String>, String) {
@@ -1187,7 +1189,19 @@ fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
     tokens
 }
 
-fn is_reserved_token(token: &str) -> bool {
+fn is_reserved_token(token: &str, schema: &DatabaseSchema) -> bool {
+    if is_generic_reserved_token(token) {
+        return true;
+    }
+
+    if schema.db_type == "postgres" && is_postgres_reserved_token(token) {
+        return true;
+    }
+
+    false
+}
+
+fn is_generic_reserved_token(token: &str) -> bool {
     matches!(
         token,
         "select"
@@ -1209,6 +1223,82 @@ fn is_reserved_token(token: &str) -> bool {
             | "union"
             | "returning"
             | "as"
+            | "and"
+            | "or"
+            | "not"
+            | "by"
+            | "is"
+            | "null"
+            | "in"
+            | "between"
+            | "case"
+            | "when"
+            | "then"
+            | "else"
+            | "end"
+            | "distinct"
+            | "exists"
+            | "now"
+            | "count"
+            | "sum"
+            | "avg"
+            | "min"
+            | "max"
+            | "coalesce"
+            | "all"
+            | "any"
+            | "some"
+            | "asc"
+            | "desc"
+            | "nulls"
+            | "first"
+            | "last"
+            | "insert"
+            | "into"
+            | "values"
+            | "update"
+            | "set"
+            | "delete"
+            | "create"
+            | "table"
+            | "drop"
+            | "alter"
+            | "truncate"
+            | "with"
+            | "recursive"
+    )
+}
+
+fn is_postgres_reserved_token(token: &str) -> bool {
+    matches!(
+        token,
+        "current_date"
+            | "current_time"
+            | "current_timestamp"
+            | "current_user"
+            | "localtime"
+            | "localtimestamp"
+            | "session_user"
+            | "user"
+            | "current_catalog"
+            | "current_schema"
+            | "current_role"
+            | "gen_random_uuid"
+            | "uuid_generate_v4"
+            | "date_trunc"
+            | "date_part"
+            | "age"
+            | "now"
+            | "to_char"
+            | "to_date"
+            | "to_number"
+            | "to_timestamp"
+            | "array_agg"
+            | "string_agg"
+            | "json_agg"
+            | "jsonb_agg"
+            | "json_build_object"
+            | "jsonb_build_object"
     )
 }
 
@@ -1335,8 +1425,8 @@ mod tests {
     #[test]
     fn prefixes_columns_when_multiple_tables_involved() {
         let rope = Rope::from("select  from customers, orders");
-        let context = CompletionContextData::new(&rope, "select ".len());
         let schema = test_schema();
+        let context = CompletionContextData::new(&rope, "select ".len(), &schema);
 
         let items = involved_column_items(&context, &schema);
         let labels: Vec<_> = items.iter().map(|i| i.item.label.as_str()).collect();
@@ -1348,8 +1438,8 @@ mod tests {
     #[test]
     fn prefixes_columns_with_alias() {
         let rope = Rope::from("select  from customers c");
-        let context = CompletionContextData::new(&rope, "select ".len());
         let schema = test_schema();
+        let context = CompletionContextData::new(&rope, "select ".len(), &schema);
 
         let items = involved_column_items(&context, &schema);
         let labels: Vec<_> = items.iter().map(|i| i.item.label.as_str()).collect();
@@ -1360,8 +1450,8 @@ mod tests {
     #[test]
     fn does_not_prefix_columns_with_single_table_no_alias() {
         let rope = Rope::from("select  from customers");
-        let context = CompletionContextData::new(&rope, "select ".len());
         let schema = test_schema();
+        let context = CompletionContextData::new(&rope, "select ".len(), &schema);
 
         let items = involved_column_items(&context, &schema);
         let labels: Vec<_> = items.iter().map(|i| i.item.label.as_str()).collect();
@@ -1373,8 +1463,8 @@ mod tests {
     #[test]
     fn penalizes_used_columns_in_ranking() {
         let rope = Rope::from("select name from customers where ");
-        let context = CompletionContextData::new(&rope, rope.len());
         let schema = test_schema();
+        let context = CompletionContextData::new(&rope, rope.len(), &schema);
 
         let items = involved_column_items(&context, &schema);
         let name_item = items.iter().find(|i| i.item.label == "name").unwrap();
@@ -1387,8 +1477,8 @@ mod tests {
     #[test]
     fn shows_actual_table_name_in_detail() {
         let rope = Rope::from("select  from customers c");
-        let context = CompletionContextData::new(&rope, "select ".len());
         let schema = test_schema();
+        let context = CompletionContextData::new(&rope, "select ".len(), &schema);
 
         let items = involved_column_items(&context, &schema);
         let name_item = items.iter().find(|i| i.item.label == "c.name").unwrap();
@@ -1403,7 +1493,8 @@ mod tests {
     fn derives_qualifier_after_dot_from_rope() {
         let rope = Rope::from("select u. from users u");
         let offset = "select u.".len();
-        let context = CompletionContextData::new(&rope, offset);
+        let schema = DatabaseSchema::default();
+        let context = CompletionContextData::new(&rope, offset, &schema);
 
         assert_eq!(context.prefix, "");
         assert_eq!(context.replace_start, offset);
@@ -1447,6 +1538,27 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_include_and_and_now() {
+        let schema = test_schema();
+        let text = "select c.name, o.status from customers c inner join orders o on c.id = o.customer_id and o.customer_id = c.id where c.city = 'a' and o.created_at = now();";
+
+        let diagnostics = sql_diagnostics_at(text, &schema, None);
+
+        assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
+    fn diagnostics_include_postgres_specific_functions() {
+        let mut schema = test_schema();
+        schema.db_type = "postgres".to_string();
+        let text = "select gen_random_uuid(), current_date, current_user from customers c;";
+
+        let diagnostics = sql_diagnostics_at(text, &schema, None);
+
+        assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
     fn diagnostics_ignore_current_incomplete_qualified_column() {
         let schema = test_schema();
         let text =
@@ -1461,8 +1573,8 @@ mod tests {
     #[test]
     fn key_columns_sort_before_regular_columns() {
         let rope = Rope::from("select o. from orders o");
-        let context = CompletionContextData::new(&rope, "select o.".len());
         let schema = test_schema();
+        let context = CompletionContextData::new(&rope, "select o.".len(), &schema);
 
         let items = limit_items(qualified_column_items(&context, &schema, "o"));
 

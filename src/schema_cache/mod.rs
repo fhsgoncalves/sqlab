@@ -52,8 +52,8 @@ pub fn save(
             .as_secs() as i64;
 
         conn.execute(
-            "INSERT INTO cache_metadata (connection_key, connection_name, refreshed_at) VALUES (?1, ?2, ?3)",
-            params![connection_key, connection_name, now],
+            "INSERT INTO cache_metadata (connection_key, connection_name, db_type, refreshed_at) VALUES (?1, ?2, ?3, ?4)",
+            params![connection_key, connection_name, schema.db_type, now],
         )?;
 
         for s in &schemas {
@@ -118,6 +118,12 @@ pub fn save(
 
 pub fn load(connection_key: &str) -> Result<Option<DatabaseSchema>, SchemaCacheError> {
     with_conn(|conn| {
+        let db_type: String = conn.query_row(
+            "SELECT db_type FROM cache_metadata WHERE connection_key = ?1",
+            params![connection_key],
+            |row| row.get(0),
+        ).unwrap_or_else(|_| "postgres".to_string());
+
         let schemas = load_schemas(conn, connection_key)?;
         if schemas.is_empty() {
             return Ok(None);
@@ -132,6 +138,7 @@ pub fn load(connection_key: &str) -> Result<Option<DatabaseSchema>, SchemaCacheE
         let foreign_keys = load_foreign_keys(conn, connection_key)?;
 
         Ok(Some(rows_to_schema(
+            db_type,
             schemas,
             tables,
             columns,

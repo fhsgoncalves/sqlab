@@ -500,6 +500,7 @@ impl PostgresDataSource {
             .collect();
 
         Ok(DatabaseSchema {
+            db_type: "postgres".to_string(),
             schemas,
             tables,
             functions,

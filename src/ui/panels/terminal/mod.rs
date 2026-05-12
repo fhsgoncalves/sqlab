@@ -12,17 +12,18 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
 use async_channel::{Receiver, Sender};
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyDownEvent, Keystroke, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity,
-    Window, actions, canvas, div, fill, point, px, size, Hsla, TextRun, TextStyle, WhiteSpace,
+    App, Context, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement,
+    KeyDownEvent, Keystroke, ParentElement, Render, StatefulInteractiveElement, Styled, TextRun,
+    TextStyle, WeakEntity, WhiteSpace, Window, actions, canvas, div, fill, point, px, size,
 };
 
 use gpui_component::{
     ActiveTheme, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     dock::{DockArea, Panel, PanelEvent, PanelState},
-    h_flex, v_flex,
+    h_flex,
     scroll::ScrollableElement,
+    v_flex,
 };
 
 use crate::ui::components::tab::{Tab, TabBar};
@@ -47,7 +48,6 @@ struct TerminalSession {
     id: usize,
     title: String,
     backend: Option<TerminalBackend>,
-    error: Option<String>,
 }
 
 struct TerminalBackend {
@@ -150,8 +150,11 @@ impl TerminalPanel {
     pub fn new_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let id = self.next_session_id;
         self.next_session_id += 1;
-        self.sessions
-            .push(TerminalSession::new(id, self.last_size, self.event_tx.clone()));
+        self.sessions.push(TerminalSession::new(
+            id,
+            self.last_size,
+            self.event_tx.clone(),
+        ));
         self.active_ix = self.sessions.len().saturating_sub(1);
         cx.notify();
     }
@@ -357,13 +360,11 @@ impl TerminalSession {
                 id,
                 title: format!("Terminal {}", id),
                 backend: Some(backend),
-                error: None,
             },
-            Err(error) => Self {
+            Err(_) => Self {
                 id,
                 title: format!("Terminal {}", id),
                 backend: None,
-                error: Some(format!("Failed to start terminal: {}", error)),
             },
         }
     }
@@ -400,7 +401,8 @@ impl TerminalSession {
             _italic: false,
             _underline: false,
         };
-        let mut lines = vec![vec![default_cell.clone(); terminal.columns()]; terminal.screen_lines()];
+        let mut lines =
+            vec![vec![default_cell.clone(); terminal.columns()]; terminal.screen_lines()];
 
         for indexed in content.display_iter {
             let row = indexed.point.line.0 + content.display_offset as i32;
@@ -480,7 +482,8 @@ impl TerminalSession {
 struct Palette {
     black: Hsla,
     red: Hsla,
-    green: Hsla, yellow: Hsla,
+    green: Hsla,
+    yellow: Hsla,
     blue: Hsla,
     magenta: Hsla,
     cyan: Hsla,
@@ -604,8 +607,80 @@ impl TerminalBackend {
 }
 
 fn key_to_esc_str(keystroke: &Keystroke, mode: &TermMode) -> Option<Cow<'static, str>> {
+    if keystroke.modifiers.platform {
+        return None;
+    }
+
+    let ctrl = keystroke.modifiers.control;
+    let alt = keystroke.modifiers.alt;
+    let shift = keystroke.modifiers.shift;
+
+    let manual = match (keystroke.key.as_str(), ctrl, alt, shift) {
+        ("tab", false, false, false) => Some(Cow::Borrowed("\x09")),
+        ("tab", false, false, true) => Some(Cow::Borrowed("\x1b[Z")),
+        ("escape", false, false, false) => Some(Cow::Borrowed("\x1b")),
+        ("enter", false, false, false) => {
+            if mode.contains(TermMode::LINE_FEED_NEW_LINE) {
+                Some(Cow::Borrowed("\x0d\x0a"))
+            } else {
+                Some(Cow::Borrowed("\x0d"))
+            }
+        }
+        ("enter", false, false, true) => Some(Cow::Borrowed("\x0a")),
+        ("enter", false, true, false) => Some(Cow::Borrowed("\x1b\x0d")),
+        ("backspace", false, false, _) => Some(Cow::Borrowed("\x7f")),
+        ("backspace", true, false, _) => Some(Cow::Borrowed("\x08")),
+        ("backspace", false, true, _) => Some(Cow::Borrowed("\x1b\x7f")),
+        ("space", true, false, _) => Some(Cow::Borrowed("\x00")),
+        ("home", false, false, _) if mode.contains(TermMode::APP_CURSOR) => {
+            Some(Cow::Borrowed("\x1bOH"))
+        }
+        ("home", false, false, _) => Some(Cow::Borrowed("\x1b[H")),
+        ("end", false, false, _) if mode.contains(TermMode::APP_CURSOR) => {
+            Some(Cow::Borrowed("\x1bOF"))
+        }
+        ("end", false, false, _) => Some(Cow::Borrowed("\x1b[F")),
+        ("up", false, false, _) if mode.contains(TermMode::APP_CURSOR) => {
+            Some(Cow::Borrowed("\x1bOA"))
+        }
+        ("up", false, false, _) => Some(Cow::Borrowed("\x1b[A")),
+        ("down", false, false, _) if mode.contains(TermMode::APP_CURSOR) => {
+            Some(Cow::Borrowed("\x1bOB"))
+        }
+        ("down", false, false, _) => Some(Cow::Borrowed("\x1b[B")),
+        ("right", false, false, _) if mode.contains(TermMode::APP_CURSOR) => {
+            Some(Cow::Borrowed("\x1bOC"))
+        }
+        ("right", false, false, _) => Some(Cow::Borrowed("\x1b[C")),
+        ("left", false, false, _) if mode.contains(TermMode::APP_CURSOR) => {
+            Some(Cow::Borrowed("\x1bOD"))
+        }
+        ("left", false, false, _) => Some(Cow::Borrowed("\x1b[D")),
+        ("insert", false, false, _) => Some(Cow::Borrowed("\x1b[2~")),
+        ("delete", false, false, _) => Some(Cow::Borrowed("\x1b[3~")),
+        ("pageup", false, false, _) => Some(Cow::Borrowed("\x1b[5~")),
+        ("pagedown", false, false, _) => Some(Cow::Borrowed("\x1b[6~")),
+        ("f1", false, false, _) => Some(Cow::Borrowed("\x1bOP")),
+        ("f2", false, false, _) => Some(Cow::Borrowed("\x1bOQ")),
+        ("f3", false, false, _) => Some(Cow::Borrowed("\x1bOR")),
+        ("f4", false, false, _) => Some(Cow::Borrowed("\x1bOS")),
+        ("f5", false, false, _) => Some(Cow::Borrowed("\x1b[15~")),
+        ("f6", false, false, _) => Some(Cow::Borrowed("\x1b[17~")),
+        ("f7", false, false, _) => Some(Cow::Borrowed("\x1b[18~")),
+        ("f8", false, false, _) => Some(Cow::Borrowed("\x1b[19~")),
+        ("f9", false, false, _) => Some(Cow::Borrowed("\x1b[20~")),
+        ("f10", false, false, _) => Some(Cow::Borrowed("\x1b[21~")),
+        ("f11", false, false, _) => Some(Cow::Borrowed("\x1b[23~")),
+        ("f12", false, false, _) => Some(Cow::Borrowed("\x1b[24~")),
+        _ => None,
+    };
+
+    if let Some(manual) = manual {
+        return Some(manual);
+    }
+
     // Common shell word-navigation bindings on macOS terminal emulators.
-    if keystroke.modifiers.alt && !keystroke.modifiers.control && !keystroke.modifiers.platform {
+    if alt && !ctrl {
         match keystroke.key.as_str() {
             "left" => return Some(Cow::Borrowed("\x1bb")),
             "right" => return Some(Cow::Borrowed("\x1bf")),
@@ -614,65 +689,18 @@ fn key_to_esc_str(keystroke: &Keystroke, mode: &TermMode) -> Option<Cow<'static,
     }
 
     if let Some(key_char) = &keystroke.key_char {
-        if !keystroke.modifiers.control && !keystroke.modifiers.platform {
-            if keystroke.modifiers.alt {
+        if !ctrl {
+            if alt {
                 return Some(Cow::Owned(format!("\x1b{}", key_char)));
             }
             return Some(Cow::Owned(key_char.clone()));
         }
     }
 
-    let ctrl = keystroke.modifiers.control;
-    let alt = keystroke.modifiers.alt;
-    let shift = keystroke.modifiers.shift;
-
-    let manual = match (keystroke.key.as_str(), ctrl, alt, shift) {
-        ("tab", false, false, false) => Some("\x09"),
-        ("tab", false, false, true) => Some("\x1b[Z"),
-        ("escape", false, false, false) => Some("\x1b"),
-        ("enter", false, false, false) => Some("\x0d"),
-        ("enter", false, false, true) => Some("\x0a"),
-        ("enter", false, true, false) => Some("\x1b\x0d"),
-        ("backspace", false, false, _) => Some("\x7f"),
-        ("backspace", true, false, _) => Some("\x08"),
-        ("backspace", false, true, _) => Some("\x1b\x7f"),
-        ("space", true, false, _) => Some("\x00"),
-        ("home", false, false, _) if mode.contains(TermMode::APP_CURSOR) => Some("\x1bOH"),
-        ("home", false, false, _) => Some("\x1b[H"),
-        ("end", false, false, _) if mode.contains(TermMode::APP_CURSOR) => Some("\x1bOF"),
-        ("end", false, false, _) => Some("\x1b[F"),
-        ("up", false, false, _) if mode.contains(TermMode::APP_CURSOR) => Some("\x1bOA"),
-        ("up", false, false, _) => Some("\x1b[A"),
-        ("down", false, false, _) if mode.contains(TermMode::APP_CURSOR) => Some("\x1bOB"),
-        ("down", false, false, _) => Some("\x1b[B"),
-        ("right", false, false, _) if mode.contains(TermMode::APP_CURSOR) => Some("\x1bOC"),
-        ("right", false, false, _) => Some("\x1b[C"),
-        ("left", false, false, _) if mode.contains(TermMode::APP_CURSOR) => Some("\x1bOD"),
-        ("left", false, false, _) => Some("\x1b[D"),
-        ("insert", false, false, _) => Some("\x1b[2~"),
-        ("delete", false, false, _) => Some("\x1b[3~"),
-        ("pageup", false, false, _) => Some("\x1b[5~"),
-        ("pagedown", false, false, _) => Some("\x1b[6~"),
-        ("f1", false, false, _) => Some("\x1bOP"),
-        ("f2", false, false, _) => Some("\x1bOQ"),
-        ("f3", false, false, _) => Some("\x1bOR"),
-        ("f4", false, false, _) => Some("\x1bOS"),
-        ("f5", false, false, _) => Some("\x1b[15~"),
-        ("f6", false, false, _) => Some("\x1b[17~"),
-        ("f7", false, false, _) => Some("\x1b[18~"),
-        ("f8", false, false, _) => Some("\x1b[19~"),
-        ("f9", false, false, _) => Some("\x1b[20~"),
-        ("f10", false, false, _) => Some("\x1b[21~"),
-        ("f11", false, false, _) => Some("\x1b[23~"),
-        ("f12", false, false, _) => Some("\x1b[24~"),
-        _ => ctrl_key_sequence(keystroke),
-    };
-
-    if let Some(manual) = manual {
-        return Some(Cow::Borrowed(manual));
-    }
-
     if ctrl || alt || shift {
+        if let Some(sequence) = ctrl_key_sequence(keystroke) {
+            return Some(Cow::Borrowed(sequence));
+        }
         modified_key_sequence(keystroke).map(Cow::Owned)
     } else {
         None
@@ -836,79 +864,94 @@ impl Render for TerminalPanel {
                     .track_focus(&self.focus_handle)
                     .bg(cx.theme().background)
                     .p_2()
-                    .child(canvas(
-                        {
-                            let entity = entity.clone();
-                            move |bounds, window, cx| {
-                                entity.update(cx, |this, cx| {
-                                    this.build_terminal_paint_state(active_ix, bounds, window, cx)
-                                })
-                            }
-                        },
-                        move |bounds, state, window, cx| {
-                            let scale_factor = window.scale_factor();
-                            let snap_px = |value: gpui::Pixels| {
-                                gpui::Pixels::from((f32::from(value) * scale_factor).floor() / scale_factor)
-                            };
-                            window.paint_quad(fill(bounds, state.background));
-                            let origin = point(snap_px(bounds.origin.x), snap_px(bounds.origin.y));
-
-                            for (line_ix, line) in state.lines.iter().enumerate() {
-                                for span in line {
-                                    if let Some(bg) = span.bg {
-                                        let x = snap_px(origin.x + span.start_col as f32 * state.cell_width);
-                                        let y = snap_px(origin.y + line_ix as f32 * state.line_height);
-                                        window.paint_quad(fill(
-                                            gpui::Bounds::new(
-                                                point(x, y),
-                                                size(
-                                                    (state.cell_width * span.cell_count as f32).ceil(),
-                                                    state.line_height,
-                                                ),
-                                            ),
-                                            bg,
-                                        ));
-                                    }
-
-                                    let mut run_font = state.text_style.font();
-                                    if span.bold {
-                                        run_font = run_font.bold();
-                                    }
-                                    if span.italic {
-                                        run_font = run_font.italic();
-                                    }
-
-                                    let run = TextRun {
-                                        len: span.text.len(),
-                                        font: run_font,
-                                        color: span.fg,
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    };
-
-                                    let shaped = window.text_system().shape_line(
-                                        span.text.clone().into(),
-                                        state.text_style.font_size.to_pixels(window.rem_size()),
-                                        &[run],
-                                        Some(state.cell_width),
-                                    );
-
-                                    let x = snap_px(origin.x + span.start_col as f32 * state.cell_width);
-                                    let y = snap_px(origin.y + line_ix as f32 * state.line_height);
-                                    let _ = shaped.paint(
-                                        point(x, y),
-                                        state.line_height,
-                                        gpui::TextAlign::Left,
-                                        None,
-                                        window,
-                                        cx,
-                                    );
+                    .child(
+                        canvas(
+                            {
+                                let entity = entity.clone();
+                                move |bounds, window, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.build_terminal_paint_state(
+                                            active_ix, bounds, window, cx,
+                                        )
+                                    })
                                 }
-                            }
-                        },
-                    )
-                    .size_full()),
+                            },
+                            move |bounds, state, window, cx| {
+                                let scale_factor = window.scale_factor();
+                                let snap_px = |value: gpui::Pixels| {
+                                    gpui::Pixels::from(
+                                        (f32::from(value) * scale_factor).floor() / scale_factor,
+                                    )
+                                };
+                                window.paint_quad(fill(bounds, state.background));
+                                let origin =
+                                    point(snap_px(bounds.origin.x), snap_px(bounds.origin.y));
+
+                                for (line_ix, line) in state.lines.iter().enumerate() {
+                                    for span in line {
+                                        if let Some(bg) = span.bg {
+                                            let x = snap_px(
+                                                origin.x + span.start_col as f32 * state.cell_width,
+                                            );
+                                            let y = snap_px(
+                                                origin.y + line_ix as f32 * state.line_height,
+                                            );
+                                            window.paint_quad(fill(
+                                                gpui::Bounds::new(
+                                                    point(x, y),
+                                                    size(
+                                                        (state.cell_width * span.cell_count as f32)
+                                                            .ceil(),
+                                                        state.line_height,
+                                                    ),
+                                                ),
+                                                bg,
+                                            ));
+                                        }
+
+                                        let mut run_font = state.text_style.font();
+                                        if span.bold {
+                                            run_font = run_font.bold();
+                                        }
+                                        if span.italic {
+                                            run_font = run_font.italic();
+                                        }
+
+                                        let run = TextRun {
+                                            len: span.text.len(),
+                                            font: run_font,
+                                            color: span.fg,
+                                            background_color: None,
+                                            underline: None,
+                                            strikethrough: None,
+                                        };
+
+                                        let shaped = window.text_system().shape_line(
+                                            span.text.clone().into(),
+                                            state.text_style.font_size.to_pixels(window.rem_size()),
+                                            &[run],
+                                            Some(state.cell_width),
+                                        );
+
+                                        let x = snap_px(
+                                            origin.x + span.start_col as f32 * state.cell_width,
+                                        );
+                                        let y =
+                                            snap_px(origin.y + line_ix as f32 * state.line_height);
+                                        let _ = shaped.paint(
+                                            point(x, y),
+                                            state.line_height,
+                                            gpui::TextAlign::Left,
+                                            None,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                }
+                            },
+                        )
+                        .size_full(),
+                    ),
             )
     }
 }

@@ -66,6 +66,7 @@ pub struct QueryResult {
 
 #[derive(Debug, Clone, Default)]
 pub struct DatabaseSchema {
+    pub db_type: String,
     pub schemas: Vec<SchemaInfo>,
     pub tables: Vec<TableInfo>,
     pub functions: Vec<FunctionInfo>,

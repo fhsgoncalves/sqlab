@@ -32,6 +32,7 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         CREATE TABLE IF NOT EXISTS cache_metadata (
             connection_key TEXT PRIMARY KEY,
             connection_name TEXT NOT NULL,
+            db_type TEXT NOT NULL DEFAULT 'postgres',
             refreshed_at INTEGER NOT NULL
         );
 
