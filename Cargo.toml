@@ -40,6 +40,8 @@ chrono = "0.4"
 uuid = "1"
 rusqlite = { version = "0.34", features = ["bundled"] }
 rust-embed = "8"
+alacritty_terminal = "0.25"
+async-channel = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }

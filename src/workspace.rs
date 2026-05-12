@@ -18,12 +18,15 @@ use gpui_component::{
 use crate::data_source::manager::DataSourceManager;
 use crate::data_source::{ConnectionStatus, DataSourceError, QueryResult, create_data_source};
 use crate::ui::activity::ActivityTracker;
+use crate::ui::panels::bottom_panel::{BottomPanel, BottomPanelMode, ToggleBottomPanelMode};
+use crate::ui::panels::connection::ConnectionPanel;
 use crate::ui::panels::file_editor::query_detector::queries_in_text;
 use crate::ui::panels::file_editor::{
     EditorTabs, ExecuteQuery, QueryChoice, QuerySelected, QuerySelector, SaveFile,
 };
 use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
-use crate::ui::panels::{connection::ConnectionPanel, result::ResultPanel};
+use crate::ui::panels::result::ResultPanel;
+use crate::ui::panels::terminal::TerminalPanel;
 
 actions!(workspace, [OpenFolder]);
 
@@ -32,7 +35,7 @@ pub struct Workspace {
     file_tree_panel: Entity<FileTreePanel>,
     dock_area: Entity<DockArea>,
     editor_tabs: Entity<EditorTabs>,
-    results_panel: Entity<ResultPanel>,
+    bottom_panel: Entity<BottomPanel>,
     data_source_manager: Entity<DataSourceManager>,
     activity_tracker: Entity<ActivityTracker>,
     focus_handle: FocusHandle,
@@ -123,8 +126,20 @@ impl Workspace {
             panel
         });
 
-        // Set up bottom dock: query results
-        let bottom_panels = DockItem::panel(Arc::new(results_panel.clone()));
+        let terminal_panel = cx.new(|cx| {
+            let mut panel = TerminalPanel::new(window, cx);
+            panel.set_dock_area(weak_dock_area.clone());
+            panel
+        });
+
+        let bottom_panel = cx.new(|cx| {
+            let mut panel = BottomPanel::new(results_panel, terminal_panel, cx);
+            panel.set_dock_area(weak_dock_area.clone(), cx);
+            panel
+        });
+
+        // Set up bottom dock: wrapper panel
+        let bottom_panels = DockItem::panel(Arc::new(bottom_panel.clone()));
 
         dock_area.update(cx, |dock_area, cx| {
             dock_area.set_center(center_panels, window, cx);
@@ -147,7 +162,7 @@ impl Workspace {
             file_tree_panel,
             dock_area,
             editor_tabs,
-            results_panel,
+            bottom_panel,
             data_source_manager: data_source_manager.clone(),
             activity_tracker,
             focus_handle,
@@ -296,7 +311,8 @@ impl Workspace {
             return;
         };
 
-        let results_panel = self.results_panel.clone();
+        let results_panel = self.bottom_panel.read(cx).results_panel().clone();
+        let bottom_panel = self.bottom_panel.clone();
         let data_source_manager = self.data_source_manager.clone();
         let activity_tracker = self.activity_tracker.clone();
         let config_for_result = config.clone();
@@ -330,6 +346,10 @@ impl Workspace {
                 panel.set_result(query, result, succeeded, Some(config_for_result), cx);
             });
 
+            cx.update_entity(&bottom_panel, |panel, cx| {
+                panel.set_mode(BottomPanelMode::Results, cx);
+            });
+
             cx.update_entity(&activity_tracker, |tracker, cx| {
                 tracker.finish(activity_id, cx);
             });
@@ -346,7 +366,18 @@ impl Workspace {
         .detach();
     }
 
-    fn render_bottom_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn on_toggle_bottom_panel_mode(
+        &mut self,
+        action: &ToggleBottomPanelMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.bottom_panel.update(cx, |panel, cx| {
+            panel.on_toggle_mode(action, window, cx);
+        });
+    }
+
+    fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_connection = self
             .data_source_manager
             .read(cx)
@@ -376,6 +407,10 @@ impl Workspace {
             activity_label
         };
 
+        let bottom_panel_mode = self.bottom_panel.read(cx).mode();
+        let is_terminal_active = bottom_panel_mode == BottomPanelMode::Terminal;
+        let is_dock_open = self.dock_area.read(cx).is_dock_open(gpui_component::dock::DockPlacement::Bottom, cx);
+
         h_flex()
             .id("workspace-bottom-bar")
             .h(px(24.))
@@ -393,16 +428,64 @@ impl Workspace {
             .child(
                 h_flex()
                     .items_center()
-                    .gap_1()
-                    .child(div().child(activity_label))
-                    .child(if is_busy {
-                        Spinner::new()
+                    .gap_2()
+                    .child({
+                        let btn = Button::new("terminal-toggle")
+                            .icon(IconName::Inbox) // Using Inbox for Terminal
                             .xsmall()
-                            .color(cx.theme().muted_foreground)
-                            .into_any_element()
-                    } else {
-                        div().size(px(12.)).into_any_element()
-                    }),
+                            .ghost()
+                            .tooltip("Terminal");
+                        
+                        let btn = if is_terminal_active && is_dock_open {
+                            btn.text_color(cx.theme().accent)
+                        } else {
+                            btn
+                        };
+
+                        btn.on_click(cx.listener(|this, _, window, cx| {
+                                let mut is_open = false;
+                                this.dock_area.update(cx, |dock_area, cx| {
+                                    is_open = dock_area.is_dock_open(gpui_component::dock::DockPlacement::Bottom, cx);
+                                });
+
+                                this.bottom_panel.update(cx, |panel, cx| {
+                                    let mode = panel.mode();
+                                    if is_open {
+                                        if mode == BottomPanelMode::Terminal {
+                                            // Toggle dock if already in terminal
+                                            this.dock_area.update(cx, |dock_area, cx| {
+                                                dock_area.toggle_dock(gpui_component::dock::DockPlacement::Bottom, window, cx);
+                                            });
+                                        } else {
+                                            // Switch to terminal
+                                            panel.set_mode(BottomPanelMode::Terminal, cx);
+                                            window.focus(&panel.focus_handle(cx), cx);
+                                        }
+                                    } else {
+                                        // Open dock and set terminal
+                                        panel.set_mode(BottomPanelMode::Terminal, cx);
+                                        this.dock_area.update(cx, |dock_area, cx| {
+                                            dock_area.toggle_dock(gpui_component::dock::DockPlacement::Bottom, window, cx);
+                                        });
+                                        window.focus(&panel.focus_handle(cx), cx);
+                                    }
+                                });
+                            }))
+                    })
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(div().child(activity_label))
+                            .child(if is_busy {
+                                Spinner::new()
+                                    .xsmall()
+                                    .color(cx.theme().muted_foreground)
+                                    .into_any_element()
+                            } else {
+                                div().size(px(12.)).into_any_element()
+                            }),
+                    )
             )
     }
 }
@@ -429,6 +512,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_open_folder))
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_execute_query))
+            .on_action(cx.listener(Self::on_toggle_bottom_panel_mode))
             .child(
                 TitleBar::new().child(
                     h_flex()
@@ -467,7 +551,7 @@ impl Render for Workspace {
                     .overflow_hidden()
                     .child(self.dock_area.clone()),
             )
-            .child(self.render_bottom_bar(cx))
+            .child(self.render_bottom_bar(window, cx))
             .children(Root::render_dialog_layer(window, cx))
     }
 }

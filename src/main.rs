@@ -15,10 +15,12 @@ mod schema_cache;
 mod ui;
 mod workspace;
 
+use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
     ConfirmSelectedQuery, ExecuteQuery, SaveFile, SelectNextQuery, SelectPreviousQuery,
 };
 use ui::panels::result::CopyResultSelection;
+use ui::panels::terminal::NewTerminalTab;
 use workspace::{OpenFolder, Workspace};
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
@@ -82,6 +84,8 @@ fn main() {
             KeyBinding::new("cmd-s", SaveFile, None),
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-c", CopyResultSelection, None),
+            KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),
+            KeyBinding::new("cmd-t", NewTerminalTab, Some("terminal_panel")),
             KeyBinding::new("up", SelectPreviousQuery, None),
             KeyBinding::new("down", SelectNextQuery, None),
             KeyBinding::new("enter", ConfirmSelectedQuery, None),
