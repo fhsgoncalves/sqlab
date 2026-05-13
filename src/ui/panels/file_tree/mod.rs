@@ -146,6 +146,10 @@ impl FileTreePanel {
         }
     }
 
+    pub fn root(&self) -> &PathBuf {
+        &self.root
+    }
+
     pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = root;
         self.refresh_tree(cx);

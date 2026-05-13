@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -42,6 +43,7 @@ pub struct TerminalPanel {
     event_rx: Option<Receiver<SessionEvent>>,
     dock_area: Option<WeakEntity<DockArea>>,
     last_size: TerminalSize,
+    working_directory: Option<PathBuf>,
 }
 
 struct TerminalSession {
@@ -120,7 +122,7 @@ impl Drop for TerminalBackend {
 }
 
 impl TerminalPanel {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(working_directory: PathBuf, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = async_channel::unbounded();
         let last_size = TerminalSize {
             columns: 80,
@@ -137,6 +139,7 @@ impl TerminalPanel {
             event_rx: Some(event_rx),
             dock_area: None,
             last_size,
+            working_directory: Some(working_directory),
         };
         panel.start_event_task(cx);
         panel.new_tab(_window, cx);
@@ -147,6 +150,10 @@ impl TerminalPanel {
         self.dock_area = Some(dock_area);
     }
 
+    pub fn set_working_directory(&mut self, dir: PathBuf) {
+        self.working_directory = Some(dir);
+    }
+
     pub fn new_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let id = self.next_session_id;
         self.next_session_id += 1;
@@ -154,6 +161,7 @@ impl TerminalPanel {
             id,
             self.last_size,
             self.event_tx.clone(),
+            self.working_directory.clone(),
         ));
         self.active_ix = self.sessions.len().saturating_sub(1);
         cx.notify();
@@ -209,7 +217,9 @@ impl TerminalPanel {
                 }
             }
             TerminalEvent::ChildExit(code) => {
-                println!("Terminal process exited with code: {}", code);
+                if code != 0 {
+                    println!("Terminal process exited with code: {}", code);
+                }
                 self.close_tab(ix, cx);
             }
             TerminalEvent::Exit => {
@@ -354,8 +364,13 @@ struct StyledCell {
 }
 
 impl TerminalSession {
-    fn new(id: usize, size: TerminalSize, tx: Sender<SessionEvent>) -> Self {
-        match TerminalBackend::new(id, size, tx) {
+    fn new(
+        id: usize,
+        size: TerminalSize,
+        tx: Sender<SessionEvent>,
+        working_directory: Option<PathBuf>,
+    ) -> Self {
+        match TerminalBackend::new(id, size, tx, working_directory) {
             Ok(backend) => Self {
                 id,
                 title: format!("Terminal {}", id),
@@ -586,7 +601,12 @@ fn terminal_color_to_gpui(color: AnsiColor, palette: &Palette, cx: &App) -> Hsla
 }
 
 impl TerminalBackend {
-    fn new(id: usize, size: TerminalSize, tx: Sender<SessionEvent>) -> anyhow::Result<Self> {
+    fn new(
+        id: usize,
+        size: TerminalSize,
+        tx: Sender<SessionEvent>,
+        working_directory: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
         tty::setup_env();
         let proxy = TerminalEventProxy { session_id: id, tx };
         let terminal = Arc::new(FairMutex::new(Term::new(
@@ -594,7 +614,14 @@ impl TerminalBackend {
             &size,
             proxy.clone(),
         )));
-        let pty = tty::new(&tty::Options::default(), size.window_size(), id as u64)?;
+        let pty = tty::new(
+            &tty::Options {
+                working_directory,
+                ..Default::default()
+            },
+            size.window_size(),
+            id as u64,
+        )?;
         let event_loop = EventLoop::new(terminal.clone(), proxy, pty, true, false)?;
         let sender = event_loop.channel();
         let _join_handle = event_loop.spawn();

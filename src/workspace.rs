@@ -31,7 +31,6 @@ use crate::ui::panels::terminal::TerminalPanel;
 actions!(workspace, [OpenFolder]);
 
 pub struct Workspace {
-    #[allow(dead_code)]
     file_tree_panel: Entity<FileTreePanel>,
     dock_area: Entity<DockArea>,
     editor_tabs: Entity<EditorTabs>,
@@ -39,6 +38,7 @@ pub struct Workspace {
     data_source_manager: Entity<DataSourceManager>,
     activity_tracker: Entity<ActivityTracker>,
     focus_handle: FocusHandle,
+    terminal_panel: Entity<TerminalPanel>,
 }
 
 impl Workspace {
@@ -50,7 +50,7 @@ impl Workspace {
     ) -> Self {
         let dock_area = cx.new(|cx| DockArea::new("main-dock", None, window, cx));
 
-        let file_tree_panel = cx.new(|cx| FileTreePanel::new(root_path, window, cx));
+        let file_tree_panel = cx.new(|cx| FileTreePanel::new(root_path.clone(), window, cx));
         let data_source_manager = cx.new(|_cx| {
             DataSourceManager::load().unwrap_or_else(|e| {
                 eprintln!("failed to load data source config: {}", e);
@@ -82,15 +82,19 @@ impl Workspace {
         .detach();
 
         // Subscribe to root changed events to clear editor tabs
-        cx.subscribe_in(
-            &file_tree_panel,
-            window,
-            |this, _file_tree, _event: &RootChangedEvent, _window, cx| {
-                this.editor_tabs.update(cx, |tabs, cx| {
-                    tabs.clear_tabs(cx);
-                });
-            },
-        )
+    cx.subscribe_in(
+        &file_tree_panel,
+        window,
+        |this, _file_tree, _event: &RootChangedEvent, _window, cx| {
+            this.editor_tabs.update(cx, |tabs, cx| {
+                tabs.clear_tabs(cx);
+            });
+            let root = this.file_tree_panel.read(cx).root().clone();
+            this.terminal_panel.update(cx, |terminal, _cx| {
+                terminal.set_working_directory(root);
+            });
+        },
+    )
         .detach();
 
         let weak_dock_area = dock_area.downgrade();
@@ -126,14 +130,14 @@ impl Workspace {
             panel
         });
 
-        let terminal_panel = cx.new(|cx| {
-            let mut panel = TerminalPanel::new(window, cx);
-            panel.set_dock_area(weak_dock_area.clone());
-            panel
-        });
+    let terminal_panel = cx.new(|cx| {
+        let mut panel = TerminalPanel::new(root_path.clone(), window, cx);
+        panel.set_dock_area(weak_dock_area.clone());
+        panel
+    });
 
-        let bottom_panel = cx.new(|cx| {
-            let mut panel = BottomPanel::new(results_panel, terminal_panel, cx);
+    let bottom_panel = cx.new(|cx| {
+        let mut panel = BottomPanel::new(results_panel, terminal_panel.clone(), cx);
             panel.set_dock_area(weak_dock_area.clone(), cx);
             panel
         });
@@ -158,15 +162,16 @@ impl Workspace {
             );
         });
 
-        let mut this = Self {
-            file_tree_panel,
-            dock_area,
-            editor_tabs,
-            bottom_panel,
-            data_source_manager: data_source_manager.clone(),
-            activity_tracker,
-            focus_handle,
-        };
+    let mut this = Self {
+        file_tree_panel,
+        dock_area,
+        editor_tabs,
+        bottom_panel,
+        data_source_manager: data_source_manager.clone(),
+        activity_tracker,
+        focus_handle,
+        terminal_panel,
+    };
 
         if let Some(file) = initial_file {
             this.open_file(file, window, cx);
