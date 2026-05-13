@@ -1172,7 +1172,7 @@ fn terminal_text_style(_window: &mut Window, cx: &App) -> TextStyle {
     TextStyle {
         font_family: cx.theme().mono_font_family.clone(),
         font_size: font_size.into(),
-        line_height: font_size.into(),
+        line_height: (font_size * 1.3).into(),
         white_space: WhiteSpace::Normal,
         background_color: Some(cx.theme().background),
         color: cx.theme().foreground,

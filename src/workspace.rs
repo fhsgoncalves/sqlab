@@ -373,13 +373,49 @@ impl Workspace {
 
     fn on_toggle_bottom_panel_mode(
         &mut self,
-        action: &ToggleBottomPanelMode,
+        _action: &ToggleBottomPanelMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.bottom_panel.update(cx, |panel, cx| {
-            panel.on_toggle_mode(action, window, cx);
+        let mut is_open = false;
+        self.dock_area.update(cx, |dock_area, cx| {
+            is_open = dock_area.is_dock_open(
+                gpui_component::dock::DockPlacement::Bottom,
+                cx,
+            );
         });
+
+        let is_terminal = self
+            .bottom_panel
+            .read(cx)
+            .mode()
+            == BottomPanelMode::Terminal;
+
+        if is_open && is_terminal {
+            self.dock_area.update(cx, |dock_area, cx| {
+                dock_area.toggle_dock(
+                    gpui_component::dock::DockPlacement::Bottom,
+                    window,
+                    cx,
+                );
+            });
+            return;
+        }
+
+        self.bottom_panel.update(cx, |panel, cx| {
+            panel.set_mode(BottomPanelMode::Terminal, cx);
+            window.focus(&panel.focus_handle(cx), cx);
+        });
+
+        if !is_open {
+            self.dock_area.update(cx, |dock_area, cx| {
+                dock_area.toggle_dock(
+                    gpui_component::dock::DockPlacement::Bottom,
+                    window,
+                    cx,
+                );
+            });
+        }
     }
 
     fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
