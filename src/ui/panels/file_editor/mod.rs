@@ -9,4 +9,4 @@ pub use query_selector::{
     ConfirmSelectedQuery, QueryChoice, QuerySelected, QuerySelector, SelectNextQuery,
     SelectPreviousQuery,
 };
-pub use tabs::EditorTabs;
+pub use tabs::{CycleTabBackward, CycleTabForward, EditorTabs};

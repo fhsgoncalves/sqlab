@@ -35,6 +35,7 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 | Passwords stored securely | ✅ |
 | Auto save on focus lost | ✅ |
 | Terminal panel (supports coding agents) | ✅ |
+| File search | ✅ |
 
 ## Supported Databases
 
@@ -45,9 +46,7 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 ## Roadmap
 
 - [ ] App distribution
-- [ ] File search
 - [ ] Find text (using fuzzy search - https://github.com/skim-rs/skim)
-- [ ] Cycle between open tabs
 - [ ] Reorder tabs dragging
 - [ ] Refactor connection panel layout (IntelliJ-style)
 - [ ] Generate DDL for tables, functions, indexes, and triggers from the connections panel

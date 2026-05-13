@@ -17,10 +17,11 @@ mod workspace;
 
 use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
-    ConfirmSelectedQuery, ExecuteQuery, SaveFile, SelectNextQuery, SelectPreviousQuery,
+    ConfirmSelectedQuery, CycleTabBackward, CycleTabForward, ExecuteQuery, SaveFile, SelectNextQuery, SelectPreviousQuery,
 };
-use ui::panels::result::CopyResultSelection;
-use ui::panels::terminal::NewTerminalTab;
+use ui::panels::file_search::ToggleFileSearch;
+use ui::panels::result::{CopyResultSelection, CycleTabBackward as ResultCycleTabBackward, CycleTabForward as ResultCycleTabForward};
+use ui::panels::terminal::{CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward, NewTerminalTab};
 use workspace::{OpenFolder, Workspace};
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
@@ -38,7 +39,11 @@ fn set_app_menus(cx: &mut gpui::App) {
     cx.set_menus(vec![
         Menu::new("zql").items(vec![app_theme::themes_menu_item(cx)]),
         Menu::new("File").items(vec![MenuItem::action("Open Folder...", OpenFolder)]),
-        Menu::new("Edit\u{200B}").items(vec![MenuItem::action("Save", SaveFile)]),
+        Menu::new("Edit\u{200B}").items(vec![
+            MenuItem::action("Search File...", ToggleFileSearch),
+            MenuItem::separator(),
+            MenuItem::action("Save", SaveFile),
+        ]),
     ]);
 }
 
@@ -66,6 +71,7 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
         ui::panels::file_tree::init(cx);
+        ui::panels::file_search::init(cx);
 
         app_theme::init(cx);
 
@@ -79,11 +85,18 @@ fn main() {
 
         cx.bind_keys(vec![
             KeyBinding::new("cmd-w", ClosePanel, None),
+            KeyBinding::new("cmd-e", ToggleFileSearch, None),
             KeyBinding::new("cmd-enter", ExecuteQuery, Some("Input")),
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-c", CopyResultSelection, None),
             KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),
             KeyBinding::new("cmd-t", NewTerminalTab, Some("terminal_panel")),
+            KeyBinding::new("ctrl-tab", CycleTabForward, None),
+            KeyBinding::new("ctrl-shift-tab", CycleTabBackward, None),
+            KeyBinding::new("ctrl-tab", TerminalCycleTabForward, Some("terminal_panel")),
+            KeyBinding::new("ctrl-shift-tab", TerminalCycleTabBackward, Some("terminal_panel")),
+            KeyBinding::new("ctrl-tab", ResultCycleTabForward, Some("results_panel")),
+            KeyBinding::new("ctrl-shift-tab", ResultCycleTabBackward, Some("results_panel")),
             KeyBinding::new("up", SelectPreviousQuery, None),
             KeyBinding::new("down", SelectNextQuery, None),
             KeyBinding::new("enter", ConfirmSelectedQuery, None),

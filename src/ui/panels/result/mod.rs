@@ -1,7 +1,7 @@
 use chrono::Local;
 use gpui::{
     App, AppContext, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions,
+    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, actions,
     div, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
@@ -21,7 +21,7 @@ use crate::data_source::{DataSourceConfig, QueryResult};
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 
-actions!(results_panel, [CopyResultSelection]);
+actions!(results_panel, [CopyResultSelection, CycleTabForward, CycleTabBackward]);
 
 pub struct ResultPanel {
     focus_handle: FocusHandle,
@@ -342,6 +342,51 @@ impl ResultPanel {
             cx.write_to_clipboard(ClipboardItem::new_string(value));
         }
     }
+
+    fn on_cycle_tab_forward(
+        &mut self,
+        _: &CycleTabForward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.executions.len() + 1 > 1 {
+            self.active_tab = (self.active_tab + 1) % (self.executions.len() + 1);
+            self.rebuild_table(window, cx);
+            cx.notify();
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn on_cycle_tab_backward(
+        &mut self,
+        _: &CycleTabBackward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.executions.len() + 1 > 1 {
+            self.active_tab = (self.active_tab + self.executions.len()) % (self.executions.len() + 1);
+            self.rebuild_table(window, cx);
+            cx.notify();
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn reorder_tab(&mut self, from_ix: usize, to_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if from_ix >= self.executions.len() || to_ix >= self.executions.len() || from_ix == to_ix {
+            return;
+        }
+        let execution = self.executions.remove(from_ix);
+        self.executions.insert(to_ix, execution);
+        if self.active_tab == from_ix + 1 {
+            self.active_tab = to_ix + 1;
+        } else if from_ix < self.active_tab - 1 && to_ix >= self.active_tab - 1 {
+            self.active_tab -= 1;
+        } else if from_ix > self.active_tab - 1 && to_ix <= self.active_tab - 1 {
+            self.active_tab += 1;
+        }
+        self.rebuild_table(window, cx);
+        cx.notify();
+    }
 }
 
 impl Panel for ResultPanel {
@@ -456,6 +501,9 @@ impl Render for ResultPanel {
                 this.rebuild_table(window, cx);
                 cx.notify();
             }))
+            .on_reorder(cx.listener(|this, (from_ix, to_ix), window, cx| {
+                this.reorder_tab(*from_ix, *to_ix, window, cx);
+            }))
             .child(Tab::new().label("History").selected(self.active_tab == 0));
 
         let tab_bar =
@@ -480,10 +528,16 @@ impl Render for ResultPanel {
 
         v_flex()
             .id("results-panel")
+            .key_context("results_panel")
             .size_full()
             .bg(cx.theme().background)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::on_cycle_tab_forward))
+            .on_action(cx.listener(Self::on_cycle_tab_backward))
+            .on_click(cx.listener(|this, _, window, cx| {
+                window.focus(&this.focus_handle, cx);
+            }))
             .child(
                 h_flex()
                     .items_center()

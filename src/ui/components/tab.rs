@@ -1,11 +1,20 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    AnyElement, App, AppContext, ClickEvent, InteractiveElement, IntoElement, MouseButton, ParentElement,
     RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, h_flex};
+
+#[derive(Clone)]
+struct TabDragData(usize);
+
+impl gpui::Render for TabDragData {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
 
 /// A Tab element for the [`TabBar`].
 #[derive(IntoElement)]
@@ -17,8 +26,10 @@ pub struct Tab {
     suffix: Option<AnyElement>,
     selected: bool,
     closable: bool,
+    index: Option<usize>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App) + 'static>>,
+    on_tab_drop: Option<Rc<dyn Fn(usize, usize, &mut Window, &mut App) + 'static>>,
 }
 
 impl Default for Tab {
@@ -31,8 +42,10 @@ impl Default for Tab {
             suffix: None,
             selected: false,
             closable: false,
+            index: None,
             on_click: None,
             on_close: None,
+            on_tab_drop: None,
         }
     }
 }
@@ -76,6 +89,16 @@ impl Tab {
         self.on_close = Some(Rc::new(on_close));
         self
     }
+
+    pub fn index(mut self, index: usize) -> Self {
+        self.index = Some(index);
+        self
+    }
+
+    pub fn on_tab_drop(mut self, on_tab_drop: impl Fn(usize, usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_tab_drop = Some(Rc::new(on_tab_drop));
+        self
+    }
 }
 
 impl ParentElement for Tab {
@@ -107,14 +130,19 @@ impl RenderOnce for Tab {
             cx.theme().tab_bar
         };
 
+        let tab_index = self.index.unwrap_or(0);
+        let on_tab_drop = self.on_tab_drop.clone();
+
         div()
             .id(self.id.clone().unwrap_or_else(|| SharedString::from("tab")))
+            .group("tab-group")
             .flex()
             .items_center()
-            .gap_1()
+            .gap_0p5()
             .flex_shrink_0()
             .h(px(32.))
-            .px_3()
+            .pl_3()
+            .pr_1()
             .bg(bg)
             .border_b_1()
             .border_color(border_color)
@@ -150,18 +178,21 @@ impl RenderOnce for Tab {
                             .map(|id| format!("{}-close", id))
                             .unwrap_or_else(|| String::from("tab-close")))
                         .flex_shrink_0()
-                        .size(px(16.))
+                        .w(px(14.))
+                        .h(px(14.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .hover(|style| {
+                        .invisible()
+                        .group_hover("tab-group", |style| {
                             style
+                                .visible()
                                 .bg(cx.theme().muted.opacity(0.2))
                                 .text_color(cx.theme().foreground)
                         })
                         .text_color(cx.theme().muted_foreground)
-                        .child(Icon::new(IconName::Close).size_3p5())
+                        .child(Icon::new(IconName::Close).size_3())
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
                         })
@@ -172,6 +203,17 @@ impl RenderOnce for Tab {
             })
             .when_some(self.on_click, |this, on_click| {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))
+            })
+            .when_some(on_tab_drop.clone(), |this, on_tab_drop| {
+                this.on_drag(TabDragData(tab_index), move |dragged, _, _, cx| {
+                    cx.new(|_| dragged.clone())
+                })
+                .on_drop(move |dragged: &TabDragData, window, cx| {
+                    on_tab_drop(dragged.0, tab_index, window, cx);
+                })
+                .drag_over(|style, _: &TabDragData, _, cx| {
+                    style.bg(cx.theme().accent.opacity(0.3))
+                })
             })
     }
 }
@@ -185,6 +227,7 @@ pub struct TabBar {
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
+    on_reorder: Option<Rc<dyn Fn(&(usize, usize), &mut Window, &mut App) + 'static>>,
 }
 
 impl TabBar {
@@ -196,6 +239,7 @@ impl TabBar {
             on_click: None,
             prefix: None,
             suffix: None,
+            on_reorder: None,
         }
     }
 
@@ -223,6 +267,11 @@ impl TabBar {
         self.suffix = Some(suffix.into_any_element());
         self
     }
+
+    pub fn on_reorder(mut self, on_reorder: impl Fn(&(usize, usize), &mut Window, &mut App) + 'static) -> Self {
+        self.on_reorder = Some(Rc::new(on_reorder));
+        self
+    }
 }
 
 impl ParentElement for TabBar {
@@ -233,6 +282,8 @@ impl ParentElement for TabBar {
 
 impl RenderOnce for TabBar {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let on_reorder = self.on_reorder.clone();
+
         div()
             .id(self.id)
             .flex()
@@ -247,14 +298,24 @@ impl RenderOnce for TabBar {
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .children(self.tabs.into_iter().enumerate().map(|(ix, tab)| {
                 let selected = ix == self.selected_index;
-                tab.id(format!("tab-{}", ix)).selected(selected).on_click({
-                    let on_click = self.on_click.clone();
-                    move |_, window, cx| {
-                        if let Some(on_click) = on_click.as_ref() {
-                            on_click(&ix, window, cx);
+                let on_click = self.on_click.clone();
+                let on_reorder = on_reorder.clone();
+                tab.id(format!("tab-{}", ix))
+                    .selected(selected)
+                    .index(ix)
+                    .on_click({
+                        let on_click = on_click.clone();
+                        move |_, window, cx| {
+                            if let Some(on_click) = on_click.as_ref() {
+                                on_click(&ix, window, cx);
+                            }
                         }
-                    }
-                })
+                    })
+                    .when_some(on_reorder, |this, on_reorder| {
+                        this.on_tab_drop(move |from_ix, to_ix, window, cx| {
+                            on_reorder(&(from_ix, to_ix), window, cx);
+                        })
+                    })
             }))
             .child(div().flex_1().h_full())
             .when_some(self.suffix, |this, suffix| this.child(suffix))

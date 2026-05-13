@@ -30,7 +30,7 @@ use gpui_component::{
 
 use crate::ui::components::tab::{Tab, TabBar};
 
-actions!(terminal_panel, [NewTerminalTab]);
+actions!(terminal_panel, [NewTerminalTab, CycleTabForward, CycleTabBackward]);
 
 const CELL_WIDTH: f32 = 9.0;
 const CELL_HEIGHT: f32 = 18.0;
@@ -307,6 +307,48 @@ impl TerminalPanel {
         cx: &mut Context<Self>,
     ) {
         self.new_tab(window, cx);
+    }
+
+    fn on_cycle_tab_forward(
+        &mut self,
+        _: &CycleTabForward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sessions.len() > 1 {
+            self.active_ix = (self.active_ix + 1) % self.sessions.len();
+            cx.notify();
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn on_cycle_tab_backward(
+        &mut self,
+        _: &CycleTabBackward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sessions.len() > 1 {
+            self.active_ix = (self.active_ix + self.sessions.len() - 1) % self.sessions.len();
+            cx.notify();
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn reorder_tab(&mut self, from_ix: usize, to_ix: usize, cx: &mut Context<Self>) {
+        if from_ix >= self.sessions.len() || to_ix >= self.sessions.len() || from_ix == to_ix {
+            return;
+        }
+        let session = self.sessions.remove(from_ix);
+        self.sessions.insert(to_ix, session);
+        if self.active_ix == from_ix {
+            self.active_ix = to_ix;
+        } else if from_ix < self.active_ix && to_ix >= self.active_ix {
+            self.active_ix -= 1;
+        } else if from_ix > self.active_ix && to_ix <= self.active_ix {
+            self.active_ix += 1;
+        }
+        cx.notify();
     }
 
     fn handle_key_down(
@@ -903,6 +945,9 @@ impl Render for TerminalPanel {
                 this.active_ix = *ix;
                 cx.notify();
             }))
+            .on_reorder(cx.listener(|this, (from_ix, to_ix), _, cx| {
+                this.reorder_tab(*from_ix, *to_ix, cx);
+            }))
             .suffix(
                 h_flex().gap_1().child(
                     Button::new("new-terminal-tab")
@@ -937,10 +982,13 @@ impl Render for TerminalPanel {
 
         v_flex()
             .id("terminal-panel")
+            .key_context("terminal_panel")
             .size_full()
             .bg(cx.theme().background)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_new_terminal_tab))
+            .on_action(cx.listener(Self::on_cycle_tab_forward))
+            .on_action(cx.listener(Self::on_cycle_tab_backward))
             .capture_key_down(cx.listener(Self::handle_key_down))
             .on_click(cx.listener(|this, _, window, cx| {
                 window.focus(&this.focus_handle, cx);

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, div, prelude::FluentBuilder,
+    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions, div, prelude::FluentBuilder,
     px, rgb,
 };
 use gpui_component::{
@@ -15,6 +15,8 @@ use gpui_component::{
 use super::editor::{EditorPanel, ExecuteQuery};
 use crate::data_source::manager::DataSourceManager;
 use crate::ui::components::tab::{Tab, TabBar};
+
+actions!(editor_tabs, [CycleTabForward, CycleTabBackward]);
 
 pub struct EditorTabs {
     editors: Vec<Entity<EditorPanel>>,
@@ -78,6 +80,44 @@ impl EditorTabs {
 
     pub fn active_editor(&self) -> Option<&Entity<EditorPanel>> {
         self.editors.get(self.active_ix)
+    }
+
+    fn cycle_tab_forward(&mut self, _: &CycleTabForward, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editors.len() > 1 {
+            self.active_ix = (self.active_ix + 1) % self.editors.len();
+            cx.notify();
+            if let Some(editor) = self.editors.get(self.active_ix) {
+                let focus_handle = editor.read(cx).editor_focus_handle(cx);
+                window.focus(&focus_handle, cx);
+            }
+        }
+    }
+
+    fn cycle_tab_backward(&mut self, _: &CycleTabBackward, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editors.len() > 1 {
+            self.active_ix = (self.active_ix + self.editors.len() - 1) % self.editors.len();
+            cx.notify();
+            if let Some(editor) = self.editors.get(self.active_ix) {
+                let focus_handle = editor.read(cx).editor_focus_handle(cx);
+                window.focus(&focus_handle, cx);
+            }
+        }
+    }
+
+    fn reorder_tab(&mut self, from_ix: usize, to_ix: usize, cx: &mut Context<Self>) {
+        if from_ix >= self.editors.len() || to_ix >= self.editors.len() || from_ix == to_ix {
+            return;
+        }
+        let editor = self.editors.remove(from_ix);
+        self.editors.insert(to_ix, editor);
+        if self.active_ix == from_ix {
+            self.active_ix = to_ix;
+        } else if from_ix < self.active_ix && to_ix >= self.active_ix {
+            self.active_ix -= 1;
+        } else if from_ix > self.active_ix && to_ix <= self.active_ix {
+            self.active_ix += 1;
+        }
+        cx.notify();
     }
 
     pub fn save_all(&mut self, cx: &mut Context<Self>) {
@@ -220,6 +260,9 @@ impl Render for EditorTabs {
             .on_click(cx.listener(|this, ix: &usize, _, cx| {
                 this.active_ix = *ix;
                 cx.notify();
+            }))
+            .on_reorder(cx.listener(|this, (from_ix, to_ix), _, cx| {
+                this.reorder_tab(*from_ix, *to_ix, cx);
             }));
 
         let tab_bar = self
@@ -274,6 +317,8 @@ impl Render for EditorTabs {
             .id("editor-tabs")
             .size_full()
             .bg(cx.theme().background)
+            .on_action(cx.listener(Self::cycle_tab_forward))
+            .on_action(cx.listener(Self::cycle_tab_backward))
             .child(tab_bar)
             .child(editor_toolbar)
             .child(

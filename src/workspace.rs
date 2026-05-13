@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, Window, actions, div, px,
+    ParentElement, Render, Styled, Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::{
@@ -24,6 +24,7 @@ use crate::ui::panels::file_editor::query_detector::queries_in_text;
 use crate::ui::panels::file_editor::{
     EditorTabs, ExecuteQuery, QueryChoice, QuerySelected, QuerySelector, SaveFile,
 };
+use crate::ui::panels::file_search::{FileSearch, FileSearchEvent, ToggleFileSearch};
 use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
 use crate::ui::panels::result::ResultPanel;
 use crate::ui::panels::terminal::TerminalPanel;
@@ -32,6 +33,7 @@ actions!(workspace, [OpenFolder]);
 
 pub struct Workspace {
     file_tree_panel: Entity<FileTreePanel>,
+    file_search: Entity<FileSearch>,
     dock_area: Entity<DockArea>,
     editor_tabs: Entity<EditorTabs>,
     bottom_panel: Entity<BottomPanel>,
@@ -51,6 +53,7 @@ impl Workspace {
         let dock_area = cx.new(|cx| DockArea::new("main-dock", None, window, cx));
 
         let file_tree_panel = cx.new(|cx| FileTreePanel::new(root_path.clone(), window, cx));
+        let file_search = cx.new(|cx| FileSearch::new(root_path.clone(), window, cx));
         let data_source_manager = cx.new(|_cx| {
             DataSourceManager::load().unwrap_or_else(|e| {
                 eprintln!("failed to load data source config: {}", e);
@@ -82,19 +85,36 @@ impl Workspace {
         .detach();
 
         // Subscribe to root changed events to clear editor tabs
+        let file_search_for_root = file_search.clone();
     cx.subscribe_in(
         &file_tree_panel,
         window,
-        |this, _file_tree, _event: &RootChangedEvent, _window, cx| {
+        move |this, _file_tree, _event: &RootChangedEvent, _window, cx| {
             this.editor_tabs.update(cx, |tabs, cx| {
                 tabs.clear_tabs(cx);
             });
             let root = this.file_tree_panel.read(cx).root().clone();
             this.terminal_panel.update(cx, |terminal, _cx| {
-                terminal.set_working_directory(root);
+                terminal.set_working_directory(root.clone());
+            });
+            file_search_for_root.update(cx, |search, cx| {
+                search.set_root(root, cx);
             });
         },
     )
+        .detach();
+
+        // Track recently opened files from file tree
+        let file_search_for_recent = file_search.clone();
+        cx.subscribe_in(
+            &file_tree_panel,
+            window,
+            move |_: &mut Workspace, _file_tree, event: &OpenFileEvent, _window, cx| {
+                file_search_for_recent.update(cx, |search, cx| {
+                    search.add_recent(event.path.clone(), cx);
+                });
+            },
+        )
         .detach();
 
         let weak_dock_area = dock_area.downgrade();
@@ -104,6 +124,38 @@ impl Workspace {
             tabs.set_dock_area(weak_dock_area.clone());
             tabs
         });
+
+        // Subscribe to file search results (after editor_tabs is created)
+        let editor_tabs_for_focus = editor_tabs.clone();
+        cx.subscribe_in(&file_search, window, {
+            move |this: &mut Workspace, _file_search, event: &FileSearchEvent, window, cx| {
+                match event {
+                    FileSearchEvent::OpenFile(path) => {
+                        this.open_file(path.clone(), window, cx);
+                        // Defer focus to active editor's inner input after render cycle
+                        let editor_tabs = editor_tabs_for_focus.clone();
+                        cx.defer_in(window, move |_, window, cx| {
+                            if let Some(editor) = editor_tabs.read(cx).active_editor() {
+                                let input_focus = editor.read(cx).editor_focus_handle(cx);
+                                window.focus(&input_focus, cx);
+                            }
+                        });
+                    }
+                    FileSearchEvent::Closed => {
+                        // Restore focus to active editor when search is closed
+                        let editor_tabs = editor_tabs_for_focus.clone();
+                        cx.defer_in(window, move |_, window, cx| {
+                            if let Some(editor) = editor_tabs.read(cx).active_editor() {
+                                let input_focus = editor.read(cx).editor_focus_handle(cx);
+                                window.focus(&input_focus, cx);
+                            }
+                        });
+                    }
+                }
+            }
+        })
+        .detach();
+
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
@@ -162,16 +214,17 @@ impl Workspace {
             );
         });
 
-    let mut this = Self {
-        file_tree_panel,
-        dock_area,
-        editor_tabs,
-        bottom_panel,
-        data_source_manager: data_source_manager.clone(),
-        activity_tracker,
-        focus_handle,
-        terminal_panel,
-    };
+        let mut this = Self {
+            file_tree_panel,
+            file_search,
+            dock_area,
+            editor_tabs,
+            bottom_panel,
+            data_source_manager: data_source_manager.clone(),
+            activity_tracker,
+            focus_handle,
+            terminal_panel,
+        };
 
         cx.subscribe_in(
             &this.terminal_panel,
@@ -385,6 +438,17 @@ impl Workspace {
         .detach();
     }
 
+    fn on_toggle_file_search(
+        &mut self,
+        _: &ToggleFileSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.file_search.update(cx, |search, cx| {
+            search.toggle(window, cx);
+        });
+    }
+
     fn on_toggle_bottom_panel_mode(
         &mut self,
         _action: &ToggleBottomPanelMode,
@@ -564,6 +628,8 @@ impl Render for Workspace {
             IconName::Moon
         };
 
+        let is_file_search_visible = self.file_search.read(cx).is_visible();
+
         v_flex()
             .id("workspace")
             .size_full()
@@ -571,6 +637,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_open_folder))
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_execute_query))
+            .on_action(cx.listener(Self::on_toggle_file_search))
             .on_action(cx.listener(Self::on_toggle_bottom_panel_mode))
             .child(
                 TitleBar::new().child(
@@ -608,7 +675,46 @@ impl Render for Workspace {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .child(self.dock_area.clone()),
+                    .relative()
+                    .child(self.dock_area.clone())
+                    .when(is_file_search_visible, |overlay| {
+                        overlay
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .inset_0()
+                                    .occlude()
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.file_search.update(cx, |search, cx| {
+                                                search.close(window, cx);
+                                            });
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .top(px(80.))
+                                    .flex()
+                                    .justify_center()
+                                    .items_start()
+                                    .child(
+                                        div()
+                                            .occlude()
+                                            .on_mouse_down(
+                                                gpui::MouseButton::Left,
+                                                |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                },
+                                            )
+                                            .child(self.file_search.clone()),
+                                    ),
+                            )
+                    }),
             )
             .child(self.render_bottom_bar(window, cx))
             .children(Root::render_dialog_layer(window, cx))

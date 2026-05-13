@@ -44,6 +44,10 @@ impl EditorPanel {
         &self.path
     }
 
+    pub fn editor_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.editor.read(cx).focus_handle(cx)
+    }
+
     pub fn new(
         path: PathBuf,
         data_source_manager: Entity<DataSourceManager>,
