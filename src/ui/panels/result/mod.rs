@@ -482,6 +482,7 @@ impl Render for ResultPanel {
             .id("results-panel")
             .size_full()
             .bg(cx.theme().background)
+            .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::copy_selection))
             .child(
                 h_flex()

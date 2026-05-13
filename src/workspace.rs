@@ -173,6 +173,20 @@ impl Workspace {
         terminal_panel,
     };
 
+        cx.subscribe_in(
+            &this.terminal_panel,
+            window,
+            |this, _terminal, _event: &gpui_component::dock::PanelEvent, _window, cx| {
+                let sessions_count = this.terminal_panel.read(cx).sessions_count();
+                if sessions_count == 0 {
+                    this.bottom_panel.update(cx, |panel, cx| {
+                        panel.set_mode(BottomPanelMode::Results, cx);
+                    });
+                }
+            },
+        )
+        .detach();
+
         if let Some(file) = initial_file {
             this.open_file(file, window, cx);
         }
@@ -385,37 +399,37 @@ impl Workspace {
             );
         });
 
-        let is_terminal = self
-            .bottom_panel
-            .read(cx)
-            .mode()
-            == BottomPanelMode::Terminal;
-
-        if is_open && is_terminal {
-            self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.toggle_dock(
-                    gpui_component::dock::DockPlacement::Bottom,
-                    window,
-                    cx,
-                );
+        if is_open {
+            self.bottom_panel.update(cx, |panel, cx| {
+                let new_mode = match panel.mode() {
+                    BottomPanelMode::Terminal => BottomPanelMode::Results,
+                    BottomPanelMode::Results => BottomPanelMode::Terminal,
+                };
+                panel.set_mode(new_mode, cx);
+                window.focus(&panel.focus_handle(cx), cx);
             });
             return;
         }
 
         self.bottom_panel.update(cx, |panel, cx| {
             panel.set_mode(BottomPanelMode::Terminal, cx);
+        });
+
+        self.terminal_panel.update(cx, |panel, cx| {
+            panel.ensure_has_tab(window, cx);
+        });
+
+        self.bottom_panel.update(cx, |panel, cx| {
             window.focus(&panel.focus_handle(cx), cx);
         });
 
-        if !is_open {
-            self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.toggle_dock(
-                    gpui_component::dock::DockPlacement::Bottom,
-                    window,
-                    cx,
-                );
-            });
-        }
+        self.dock_area.update(cx, |dock_area, cx| {
+            dock_area.toggle_dock(
+                gpui_component::dock::DockPlacement::Bottom,
+                window,
+                cx,
+            );
+        });
     }
 
     fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -493,14 +507,11 @@ impl Workspace {
                                     let mode = panel.mode();
                                     if is_open {
                                         if mode == BottomPanelMode::Terminal {
-                                            // Toggle dock if already in terminal
-                                            this.dock_area.update(cx, |dock_area, cx| {
-                                                dock_area.toggle_dock(gpui_component::dock::DockPlacement::Bottom, window, cx);
-                                            });
+                                            // Switch to results and keep dock open
+                                            panel.set_mode(BottomPanelMode::Results, cx);
                                         } else {
                                             // Switch to terminal
                                             panel.set_mode(BottomPanelMode::Terminal, cx);
-                                            window.focus(&panel.focus_handle(cx), cx);
                                         }
                                     } else {
                                         // Open dock and set terminal
@@ -508,8 +519,15 @@ impl Workspace {
                                         this.dock_area.update(cx, |dock_area, cx| {
                                             dock_area.toggle_dock(gpui_component::dock::DockPlacement::Bottom, window, cx);
                                         });
-                                        window.focus(&panel.focus_handle(cx), cx);
                                     }
+                                });
+
+                                this.terminal_panel.update(cx, |panel, cx| {
+                                    panel.ensure_has_tab(window, cx);
+                                });
+
+                                this.bottom_panel.update(cx, |panel, cx| {
+                                    window.focus(&panel.focus_handle(cx), cx);
                                 });
                             }))
                     })

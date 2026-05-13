@@ -21,6 +21,7 @@ pub struct BottomPanel {
     results_panel: Entity<ResultPanel>,
     terminal_panel: Entity<TerminalPanel>,
     focus_handle: FocusHandle,
+    dock_area: Option<WeakEntity<DockArea>>,
 }
 
 impl BottomPanel {
@@ -34,6 +35,7 @@ impl BottomPanel {
             results_panel,
             terminal_panel,
             focus_handle: cx.focus_handle(),
+            dock_area: None,
         }
     }
 
@@ -53,20 +55,13 @@ impl BottomPanel {
     }
 
     pub fn set_dock_area(&mut self, dock_area: WeakEntity<DockArea>, cx: &mut App) {
+        self.dock_area = Some(dock_area.clone());
         self.results_panel.update(cx, |panel, _| {
             panel.set_dock_area(dock_area.clone());
         });
         self.terminal_panel.update(cx, |panel, _| {
             panel.set_dock_area(dock_area);
         });
-    }
-
-    pub fn on_toggle_mode(&mut self, _: &ToggleBottomPanelMode, _window: &mut Window, cx: &mut Context<Self>) {
-        let new_mode = match self.mode {
-            BottomPanelMode::Results => BottomPanelMode::Terminal,
-            BottomPanelMode::Terminal => BottomPanelMode::Results,
-        };
-        self.set_mode(new_mode, cx);
     }
 }
 
@@ -94,12 +89,11 @@ impl Panel for BottomPanel {
 }
 
 impl Render for BottomPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .id("bottom-panel")
             .size_full()
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::on_toggle_mode))
             .child(match self.mode {
                 BottomPanelMode::Results => self.results_panel.clone().into_any_element(),
                 BottomPanelMode::Terminal => self.terminal_panel.clone().into_any_element(),

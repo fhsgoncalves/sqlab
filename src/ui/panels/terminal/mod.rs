@@ -189,6 +189,10 @@ impl TerminalPanel {
         self.working_directory = Some(dir);
     }
 
+    pub fn sessions_count(&self) -> usize {
+        self.sessions.len()
+    }
+
     pub fn new_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let id = self.next_session_id;
         self.next_session_id += 1;
@@ -200,6 +204,12 @@ impl TerminalPanel {
         ));
         self.active_ix = self.sessions.len().saturating_sub(1);
         cx.notify();
+    }
+
+    pub fn ensure_has_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sessions.is_empty() {
+            self.new_tab(window, cx);
+        }
     }
 
     fn start_event_task(&mut self, cx: &mut Context<Self>) {
@@ -279,7 +289,7 @@ impl TerminalPanel {
         }
         self.sessions.remove(ix);
         if self.sessions.is_empty() {
-            // Stay empty
+            cx.emit(PanelEvent::LayoutChanged);
         } else if self.active_ix >= self.sessions.len() {
             self.active_ix = self.sessions.len().saturating_sub(1);
         }
@@ -1172,7 +1182,7 @@ fn terminal_text_style(_window: &mut Window, cx: &App) -> TextStyle {
     TextStyle {
         font_family: cx.theme().mono_font_family.clone(),
         font_size: font_size.into(),
-        line_height: (font_size * 1.3).into(),
+        line_height: font_size.into(),
         white_space: WhiteSpace::Normal,
         background_color: Some(cx.theme().background),
         color: cx.theme().foreground,
