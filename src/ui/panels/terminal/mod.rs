@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config as TerminalConfig, Term, TermMode};
@@ -14,8 +14,9 @@ use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
 use async_channel::{Receiver, Sender};
 use gpui::{
     App, Context, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement,
-    KeyDownEvent, Keystroke, ParentElement, Render, StatefulInteractiveElement, Styled, TextRun,
-    TextStyle, WeakEntity, WhiteSpace, Window, actions, canvas, div, fill, point, px, size,
+    KeyDownEvent, Keystroke, ParentElement, Render, ScrollWheelEvent, StatefulInteractiveElement,
+    Styled, TextRun, TextStyle, WeakEntity, WhiteSpace, Window, actions, canvas, div, fill, point,
+    prelude::FluentBuilder, px, size,
 };
 
 use gpui_component::{
@@ -23,7 +24,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dock::{DockArea, Panel, PanelEvent, PanelState},
     h_flex,
-    scroll::ScrollableElement,
+    scroll::{Scrollbar, ScrollbarHandle},
     v_flex,
 };
 
@@ -112,6 +113,40 @@ impl EventListener for TerminalEventProxy {
             session_id: self.session_id,
             event,
         });
+    }
+}
+
+#[derive(Clone)]
+struct TerminalScrollHandle {
+    terminal: Arc<FairMutex<Term<TerminalEventProxy>>>,
+    cell_height: gpui::Pixels,
+}
+
+impl ScrollbarHandle for TerminalScrollHandle {
+    fn offset(&self) -> gpui::Point<gpui::Pixels> {
+        let term = self.terminal.lock();
+        let display_offset = term.grid().display_offset();
+        let history_size = term.history_size();
+        let lines_from_top = history_size.saturating_sub(display_offset);
+        point(px(0.), px(-(lines_from_top as f32) * f32::from(self.cell_height)))
+    }
+
+    fn set_offset(&self, offset: gpui::Point<gpui::Pixels>) {
+        let mut term = self.terminal.lock();
+        let current = term.grid().display_offset();
+        let history_size = term.history_size();
+        let lines_from_top = (-offset.y / self.cell_height).round() as usize;
+        let target = history_size.saturating_sub(lines_from_top);
+        if target != current {
+            let delta = target as i32 - current as i32;
+            term.scroll_display(Scroll::Delta(delta));
+        }
+    }
+
+    fn content_size(&self) -> gpui::Size<gpui::Pixels> {
+        let term = self.terminal.lock();
+        let total = term.history_size() + term.screen_lines();
+        size(px(0.), px(total as f32 * f32::from(self.cell_height)))
     }
 }
 
@@ -829,9 +864,28 @@ impl Panel for TerminalPanel {
 }
 
 impl Render for TerminalPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let active_ix = self.active_ix;
+
+        let text_style = terminal_text_style(window, cx);
+        let line_height = text_style.line_height_in_pixels(window.rem_size());
+
+        let scroll_handle: Option<TerminalScrollHandle> = self
+            .sessions
+            .get(active_ix)
+            .and_then(|s| s.backend.as_ref())
+            .map(|backend| TerminalScrollHandle {
+                terminal: backend.terminal.clone(),
+                cell_height: line_height,
+            });
+
+        let scroll_size = scroll_handle
+            .as_ref()
+            .map(|h| h.content_size())
+            .unwrap_or(size(px(0.), px(0.)));
+
+        let sh_for_paint = scroll_handle.clone();
 
         let tab_bar = TabBar::new("terminal-tab-bar")
             .selected_index(active_ix)
@@ -887,97 +941,162 @@ impl Render for TerminalPanel {
                     .flex_1()
                     .w_full()
                     .min_w_full()
-                    .overflow_y_scrollbar()
+                    .relative()
                     .track_focus(&self.focus_handle)
                     .bg(cx.theme().background)
                     .p_2()
                     .child(
-                        canvas(
-                            {
-                                let entity = entity.clone();
-                                move |bounds, window, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.build_terminal_paint_state(
-                                            active_ix, bounds, window, cx,
-                                        )
-                                    })
-                                }
-                            },
-                            move |bounds, state, window, cx| {
-                                let scale_factor = window.scale_factor();
-                                let snap_px = |value: gpui::Pixels| {
-                                    gpui::Pixels::from(
-                                        (f32::from(value) * scale_factor).floor() / scale_factor,
-                                    )
-                                };
-                                window.paint_quad(fill(bounds, state.background));
-                                let origin =
-                                    point(snap_px(bounds.origin.x), snap_px(bounds.origin.y));
+                        div()
+                            .size_full()
+                            .relative()
+                            .child(
+                                canvas(
+                                    {
+                                        let entity = entity.clone();
+                                        move |bounds, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.build_terminal_paint_state(
+                                                    active_ix, bounds, window, cx,
+                                                )
+                                            })
+                                        }
+                                    },
+                                    {
+                                        let sh = sh_for_paint;
+                                        move |bounds, state, window, cx| {
+                                            let scale_factor = window.scale_factor();
+                                            let snap_px = |value: gpui::Pixels| {
+                                                gpui::Pixels::from(
+                                                    (f32::from(value) * scale_factor).floor()
+                                                        / scale_factor,
+                                                )
+                                            };
+                                            window.paint_quad(fill(bounds, state.background));
+                                            let origin = point(
+                                                snap_px(bounds.origin.x),
+                                                snap_px(bounds.origin.y),
+                                            );
 
-                                for (line_ix, line) in state.lines.iter().enumerate() {
-                                    for span in line {
-                                        if let Some(bg) = span.bg {
-                                            let x = snap_px(
-                                                origin.x + span.start_col as f32 * state.cell_width,
-                                            );
-                                            let y = snap_px(
-                                                origin.y + line_ix as f32 * state.line_height,
-                                            );
-                                            window.paint_quad(fill(
-                                                gpui::Bounds::new(
-                                                    point(x, y),
-                                                    size(
-                                                        (state.cell_width * span.cell_count as f32)
-                                                            .ceil(),
+                                            for (line_ix, line) in state.lines.iter().enumerate() {
+                                                for span in line {
+                                                    if let Some(bg) = span.bg {
+                                                        let x = snap_px(
+                                                            origin.x
+                                                                + span.start_col as f32
+                                                                    * state.cell_width,
+                                                        );
+                                                        let y = snap_px(
+                                                            origin.y
+                                                                + line_ix as f32
+                                                                    * state.line_height,
+                                                        );
+                                                        window.paint_quad(fill(
+                                                            gpui::Bounds::new(
+                                                                point(x, y),
+                                                                size(
+                                                                    (state.cell_width
+                                                                        * span.cell_count as f32)
+                                                                        .ceil(),
+                                                                    state.line_height,
+                                                                ),
+                                                            ),
+                                                            bg,
+                                                        ));
+                                                    }
+
+                                                    let mut run_font = state.text_style.font();
+                                                    if span.bold {
+                                                        run_font = run_font.bold();
+                                                    }
+                                                    if span.italic {
+                                                        run_font = run_font.italic();
+                                                    }
+
+                                                    let run = TextRun {
+                                                        len: span.text.len(),
+                                                        font: run_font,
+                                                        color: span.fg,
+                                                        background_color: None,
+                                                        underline: None,
+                                                        strikethrough: None,
+                                                    };
+
+                                                    let shaped = window.text_system().shape_line(
+                                                        span.text.clone().into(),
+                                                        state
+                                                            .text_style
+                                                            .font_size
+                                                            .to_pixels(window.rem_size()),
+                                                        &[run],
+                                                        Some(state.cell_width),
+                                                    );
+
+                                                    let x = snap_px(
+                                                        origin.x
+                                                            + span.start_col as f32
+                                                                * state.cell_width,
+                                                    );
+                                                    let y = snap_px(
+                                                        origin.y
+                                                            + line_ix as f32 * state.line_height,
+                                                    );
+                                                    let _ = shaped.paint(
+                                                        point(x, y),
                                                         state.line_height,
-                                                    ),
-                                                ),
-                                                bg,
-                                            ));
+                                                        gpui::TextAlign::Left,
+                                                        None,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            }
+
+                                            if let Some(ref handle) = sh {
+                                                let handle = handle.clone();
+                                                let line_height = state.line_height;
+                                                let view_id = window.current_view();
+                                                window.on_mouse_event(
+                                                    move |event: &ScrollWheelEvent,
+                                                          phase,
+                                                          _,
+                                                          cx| {
+                                                        if !(bounds.contains(&event.position)
+                                                            && phase.bubble())
+                                                        {
+                                                            return;
+                                                        }
+                                                        let mut offset = handle.offset();
+                                                        let delta = event
+                                                            .delta
+                                                            .pixel_delta(line_height);
+                                                        offset.y += 3.0_f32 * delta.y;
+                                                        if offset != handle.offset() {
+                                                            handle.set_offset(offset);
+                                                            cx.notify(view_id);
+                                                            cx.stop_propagation();
+                                                        }
+                                                    },
+                                                );
+                                            }
                                         }
-
-                                        let mut run_font = state.text_style.font();
-                                        if span.bold {
-                                            run_font = run_font.bold();
-                                        }
-                                        if span.italic {
-                                            run_font = run_font.italic();
-                                        }
-
-                                        let run = TextRun {
-                                            len: span.text.len(),
-                                            font: run_font,
-                                            color: span.fg,
-                                            background_color: None,
-                                            underline: None,
-                                            strikethrough: None,
-                                        };
-
-                                        let shaped = window.text_system().shape_line(
-                                            span.text.clone().into(),
-                                            state.text_style.font_size.to_pixels(window.rem_size()),
-                                            &[run],
-                                            Some(state.cell_width),
-                                        );
-
-                                        let x = snap_px(
-                                            origin.x + span.start_col as f32 * state.cell_width,
-                                        );
-                                        let y =
-                                            snap_px(origin.y + line_ix as f32 * state.line_height);
-                                        let _ = shaped.paint(
-                                            point(x, y),
-                                            state.line_height,
-                                            gpui::TextAlign::Left,
-                                            None,
-                                            window,
-                                            cx,
-                                        );
-                                    }
-                                }
-                            },
-                        )
-                        .size_full(),
+                                    },
+                                )
+                                .size_full(),
+                            )
+                            .when_some(scroll_handle, |parent, handle| {
+                                parent.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .right_0()
+                                        .bottom_0()
+                                        .child(
+                                            Scrollbar::vertical(&handle)
+                                                .scroll_size(scroll_size),
+                                        ),
+                                )
+                            }),
                     ),
             )
     }
