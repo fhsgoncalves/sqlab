@@ -47,13 +47,11 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 
 - [ ] App distribution
 - [ ] Find text (using fuzzy search - https://github.com/skim-rs/skim)
-- [ ] Reorder tabs dragging
-- [ ] Refactor connection panel layout (IntelliJ-style)
-- [ ] Generate DDL for tables, functions, indexes, and triggers from the connections panel
-- [ ] Show type information on data table columns
+- [ ] Show type information on data table columns (result panel)
 - [ ] Export results to more formats
 - [ ] Copy selected content as CSV / JSON
 - [ ] Allow in-place editing in the data table
+- [ ] Refactor connection panel layout (IntelliJ-style)
 - [ ] Support MySQL
 - [ ] Support SQLite
 

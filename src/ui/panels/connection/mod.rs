@@ -17,6 +17,7 @@ use gpui_component::{
     v_flex,
 };
 
+use crate::data_source::ddl::create_ddl_generator;
 use crate::data_source::manager::{DataSourceManager, IntrospectionStatus};
 use crate::data_source::{
     ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind, create_data_source,
@@ -245,6 +246,8 @@ impl ConnectionPanel {
                         if is_new {
                             let _ = view.update(cx, |panel, cx| {
                                 panel.expanded_connections.insert(name.clone());
+                                let db_folder_id = format!("conn:{}:schemas", name);
+                                panel.expanded_nodes.insert(db_folder_id);
                                 panel.introspect_schema(config, cx);
                             });
                         }
@@ -499,6 +502,9 @@ impl ConnectionPanel {
             self.expanded_connections.remove(name);
         } else {
             self.expanded_connections.insert(name.to_string());
+            // Auto-expand the database folder when first opening a connection
+            let db_folder_id = format!("conn:{}:schemas", name);
+            self.expanded_nodes.insert(db_folder_id);
         }
     }
 
@@ -730,7 +736,9 @@ impl ConnectionPanel {
             schemas_item = schemas_item.child(schema_item);
         }
 
-        schemas_item = schemas_item.expanded(true);
+        if expanded.contains(&schemas_id) {
+            schemas_item = schemas_item.expanded(true);
+        }
         root_items.push(schemas_item);
 
         root_items
@@ -780,6 +788,81 @@ impl ConnectionPanel {
         } else {
             IconName::HardDrive
         }
+    }
+
+    fn build_visible_entries(
+        &self,
+        configs: &[DataSourceConfig],
+    ) -> Vec<String> {
+        let mut entries = Vec::new();
+
+        for config in configs {
+            // Add connection itself
+            entries.push(format!("conn:{}", config.name));
+
+            // If expanded, add its schema tree nodes
+            if self.expanded_connections.contains(&config.name) {
+                let cache_key = schema_cache::cache_key(config);
+                if let Some(schema) = schema_cache::load(&cache_key).ok().flatten() {
+                    let tree_items = Self::build_schema_tree_items(
+                        &config.name,
+                        &config.database,
+                        &schema,
+                        &self.expanded_nodes,
+                    );
+                    let mut flat = Vec::new();
+                    Self::flatten_items(&tree_items, &mut flat, 1);
+                    for (item, _) in flat {
+                        entries.push(item.id.to_string());
+                    }
+                }
+            }
+        }
+
+        entries
+    }
+
+    fn select_relative(&mut self, offset: isize, configs: &[DataSourceConfig], cx: &mut Context<Self>) {
+        let entries = self.build_visible_entries(configs);
+        if entries.is_empty() {
+            return;
+        }
+
+        // Find current selection index
+        let current_ix = if let Some(selected_node) = &self.selected_node {
+            entries.iter().position(|id| id == selected_node)
+        } else if let Some(selected_conn) = &self.selected_connection {
+            entries.iter().position(|id| *id == format!("conn:{}", selected_conn))
+        } else {
+            None
+        };
+
+        let next_ix = if let Some(ix) = current_ix {
+            if offset < 0 {
+                if ix == 0 { entries.len() - 1 } else { ix - 1 }
+            } else {
+                if ix + 1 >= entries.len() { 0 } else { ix + 1 }
+            }
+        } else {
+            if offset < 0 { entries.len() - 1 } else { 0 }
+        };
+
+        let selected_id = &entries[next_ix];
+        
+        // Determine if it's a connection or a node
+        // Connection entries are exactly "conn:name" (2 parts), everything else is a node
+        let parts: Vec<&str> = selected_id.split(':').collect();
+        if parts.len() == 2 && parts[0] == "conn" {
+            // It's a connection
+            self.selected_connection = Some(parts[1].to_string());
+            self.selected_node = None;
+        } else {
+            // It's a schema node (including database folder like conn:name:schemas)
+            self.selected_node = Some(selected_id.clone());
+            self.selected_connection = None;
+        }
+        
+        cx.notify();
     }
 
     fn node_icon_path(id: &str) -> Option<&'static str> {
@@ -852,6 +935,166 @@ impl ConnectionPanel {
             id.split(":schema:").nth(1).map(|s| s.to_string())
         } else {
             Some(label.to_string())
+        }
+    }
+
+    fn generate_ddl_for_node(
+        node_id: &str,
+        _label: &str,
+        schema: &crate::data_source::DatabaseSchema,
+    ) -> Option<String> {
+        let generator = create_ddl_generator(schema.db_type);
+
+        // Parse node_id segments
+        let segments: Vec<&str> = node_id.split(':').collect();
+
+        if node_id.contains(":col:") {
+            // conn:name:schema:schema_name:table:table_name:col:col_name[:pk][:fk]
+            let col_name_idx = segments.iter().position(|&s| s == "col")?;
+            let col_name = segments.get(col_name_idx + 1)?.split(':').next()?;
+            let table_name_idx = segments.iter().position(|&s| s == "table")?;
+            let table_name = segments.get(table_name_idx + 1)?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+
+            let table = schema.tables.iter().find(|t| {
+                t.schema == *schema_name && t.name == *table_name
+            })?;
+            let col = table.columns.iter().find(|c| c.name == col_name)?;
+            return Some(generator.generate_column_ddl(table, col));
+        }
+
+        if node_id.contains(":table:") {
+            let table_name_idx = segments.iter().position(|&s| s == "table")?;
+            let table_name = segments.get(table_name_idx + 1)?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+
+            let table = schema.tables.iter().find(|t| {
+                t.schema == *schema_name && t.name == *table_name
+            })?;
+            return Some(generator.generate_table_ddl(schema, table));
+        }
+
+        if node_id.contains(":view:") {
+            let view_name_idx = segments.iter().position(|&s| s == "view")?;
+            let view_name = segments.get(view_name_idx + 1)?.split(" (").next()?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+
+            let table = schema.tables.iter().find(|t| {
+                t.schema == *schema_name && t.name == view_name
+            })?;
+            return Some(generator.generate_view_ddl(schema, table));
+        }
+
+        if node_id.contains(":func:") {
+            let func_name_idx = segments.iter().position(|&s| s == "func")?;
+            let func_name = segments.get(func_name_idx + 1)?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+
+            let func = schema.functions.iter().find(|f| {
+                f.schema == *schema_name && f.name == **func_name
+            })?;
+            return Some(generator.generate_function_ddl(func));
+        }
+
+        if node_id.contains(":idx:") {
+            let idx_name_idx = segments.iter().position(|&s| s == "idx")?;
+            let idx_name = segments.get(idx_name_idx + 1)?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+
+            let idx = schema.indexes.iter().find(|i| {
+                i.schema == *schema_name && i.name == **idx_name
+            })?;
+            return Some(generator.generate_index_ddl(idx));
+        }
+
+        if node_id.contains(":trig:") {
+            let trig_name_idx = segments.iter().position(|&s| s == "trig")?;
+            let trig_name = segments.get(trig_name_idx + 1)?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+
+            let trig = schema.triggers.iter().find(|t| {
+                t.schema == *schema_name && t.name == **trig_name
+            })?;
+            return Some(generator.generate_trigger_ddl(trig));
+        }
+
+        if node_id.contains(":seq:") {
+            let seq_name_idx = segments.iter().position(|&s| s == "seq")?;
+            let seq_name = segments.get(seq_name_idx + 1)?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+
+            let seq = schema.sequences.iter().find(|s| {
+                s.schema == *schema_name && s.name == **seq_name
+            })?;
+            return Some(generator.generate_sequence_ddl(seq));
+        }
+
+        // Schema node: conn:name:schema:schema_name (no further segments after schema_name)
+        if let Some(schema_name_idx) = segments.iter().position(|&s| s == "schema") {
+            let schema_name = segments.get(schema_name_idx + 1)?;
+            // Ensure this is a leaf schema node (no other object type after it)
+            let after_schema = &segments[schema_name_idx + 2..];
+            if after_schema.is_empty() {
+                let schema_info = schema.schemas.iter().find(|s| s.name == *schema_name)?;
+                return Some(generator.generate_schema_ddl(schema_info));
+            }
+        }
+
+        None
+    }
+
+    fn schema_node_context_menu(
+        node_id: String,
+        _label: String,
+        schema: crate::data_source::DatabaseSchema,
+    ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
+        move |menu, _window, _cx| {
+            let ddl_node_id = node_id.clone();
+            let ddl_label = _label.clone();
+            let ddl_schema = schema.clone();
+
+            let is_folder_node = node_id.ends_with(":tables")
+                || node_id.ends_with(":views")
+                || node_id.ends_with(":functions")
+                || node_id.ends_with(":indexes")
+                || node_id.ends_with(":triggers")
+                || node_id.ends_with(":sequences")
+                || node_id.contains(":schemas");
+
+            menu.item(
+                PopupMenuItem::new("Copy Name")
+                    .icon(IconName::Copy)
+                    .on_click({
+                        let name = Self::copyable_name(&node_id, &_label).unwrap_or_default();
+                        move |_menu, _window, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(name.clone()));
+                        }
+                    }),
+            )
+            .when(!is_folder_node, |menu| {
+                menu.item(
+                    PopupMenuItem::new("Generate and copy DDL")
+                        .icon(IconName::File)
+                        .on_click({
+                            move |_menu, _window, cx| {
+                                if let Some(ddl) = Self::generate_ddl_for_node(
+                                    &ddl_node_id,
+                                    &ddl_label,
+                                    &ddl_schema,
+                                ) {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(ddl));
+                                }
+                            }
+                        }),
+                )
+            })
         }
     }
 }
@@ -1078,6 +1321,7 @@ impl Render for ConnectionPanel {
                         let is_node_expanded = item.is_expanded();
                         let id_click = id.clone();
                         let id_toggle = id.clone();
+                        let label_for_menu = label.clone();
 
                         let (name, data_type) = if id.contains(":col:") {
                             if let Some(pos) = label.find(" : ") {
@@ -1178,6 +1422,11 @@ impl Render for ConnectionPanel {
                                     }
                                     cx.notify();
                                 }))
+                                .context_menu(Self::schema_node_context_menu(
+                                    id.clone(),
+                                    label_for_menu,
+                                    schema.clone(),
+                                ))
                                 .into_any_element(),
                         );
                     }
@@ -1272,8 +1521,16 @@ impl Render for ConnectionPanel {
             .size_full()
             .items_start()
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
                 match event.keystroke.key.as_str() {
+                    "up" => {
+                        let configs = this.manager.read(cx).configs().to_vec();
+                        this.select_relative(-1, &configs, cx);
+                    }
+                    "down" => {
+                        let configs = this.manager.read(cx).configs().to_vec();
+                        this.select_relative(1, &configs, cx);
+                    }
                     "right" => {
                         if let Some(id) = &this.selected_node {
                             if !this.expanded_nodes.contains(id) {
@@ -1283,6 +1540,9 @@ impl Render for ConnectionPanel {
                         } else if let Some(id) = &this.selected_connection {
                             if !this.expanded_connections.contains(id) {
                                 this.expanded_connections.insert(id.clone());
+                                // Auto-expand the database folder when first opening a connection
+                                let db_folder_id = format!("conn:{}:schemas", id);
+                                this.expanded_nodes.insert(db_folder_id);
                                 cx.notify();
                             }
                         }

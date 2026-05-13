@@ -1,0 +1,481 @@
+use crate::data_source::{
+    ColumnInfo, DatabaseSchema, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo,
+    TableInfo, TableKind, TriggerInfo,
+};
+
+/// Trait for generating DDL statements for database objects.
+pub trait DdlGenerator {
+    fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String;
+    fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String;
+    fn generate_view_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String;
+    fn generate_function_ddl(&self, func: &FunctionInfo) -> String;
+    fn generate_index_ddl(&self, idx: &IndexInfo) -> String;
+    fn generate_trigger_ddl(&self, trig: &TriggerInfo) -> String;
+    fn generate_sequence_ddl(&self, seq: &SequenceInfo) -> String;
+    fn generate_column_ddl(&self, table: &TableInfo, column: &ColumnInfo) -> String;
+}
+
+/// PostgreSQL-specific DDL generator.
+pub struct PostgresDdlGenerator;
+
+impl DdlGenerator for PostgresDdlGenerator {
+    fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
+        let mut ddl = String::new();
+        ddl.push_str(&format!("CREATE SCHEMA {};\n", quote_identifier(&schema.name)));
+        if !schema.owner.is_empty() && schema.owner != "postgres" {
+            ddl.push_str(&format!(
+                "ALTER SCHEMA {} OWNER TO {};\n",
+                quote_identifier(&schema.name),
+                quote_identifier(&schema.owner)
+            ));
+        }
+        ddl
+    }
+
+    fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
+        let mut ddl = String::new();
+        let tbl_qualified_name = qualified_name(&table.schema, &table.name);
+
+        ddl.push_str(&format!("CREATE TABLE {} (\n", tbl_qualified_name));
+
+        // Columns
+        let columns_ddl: Vec<String> = table
+            .columns
+            .iter()
+            .map(|col| generate_column_definition(col, schema, table))
+            .collect();
+        ddl.push_str(&columns_ddl.join(",\n"));
+
+        // Foreign key constraints
+        let fk_constraints: Vec<String> = schema
+            .foreign_keys
+            .iter()
+            .filter(|fk| {
+                fk.source_schema == table.schema
+                    && fk.source_table == table.name
+                    && fk.source_columns.len() == 1
+            })
+            .map(|fk| {
+                format!(
+                    "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+                    quote_identifier(&fk.name),
+                    quote_identifier(&fk.source_columns[0]),
+                    qualified_name(&fk.target_schema, &fk.target_table),
+                    fk.target_columns
+                        .iter()
+                        .map(|c| quote_identifier(c))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .collect();
+
+        if !fk_constraints.is_empty() {
+            ddl.push_str(",\n");
+            ddl.push_str(&fk_constraints.join(",\n"));
+        }
+
+        ddl.push_str("\n);\n");
+
+        // Add comments if table is a foreign table
+        if matches!(table.kind, TableKind::ForeignTable) {
+            ddl.push_str(&format!(
+                "-- Note: {} is a foreign table\n",
+                tbl_qualified_name
+            ));
+        }
+
+        ddl
+    }
+
+    fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
+        let mut ddl = String::new();
+        let view_qualified_name = qualified_name(&table.schema, &table.name);
+
+        match table.kind {
+            TableKind::MaterializedView => {
+                ddl.push_str(&format!(
+                    "-- Materialized View: {}\n",
+                    view_qualified_name
+                ));
+                ddl.push_str(&format!(
+                    "-- To recreate: CREATE MATERIALIZED VIEW {} AS\n",
+                    view_qualified_name
+                ));
+                ddl.push_str("-- SELECT ... -- (view definition not available in schema cache)\n");
+            }
+            TableKind::View => {
+                ddl.push_str(&format!("-- View: {}\n", view_qualified_name));
+                ddl.push_str(&format!(
+                    "-- To recreate: CREATE VIEW {} AS\n",
+                    view_qualified_name
+                ));
+                ddl.push_str("-- SELECT ... -- (view definition not available in schema cache)\n");
+            }
+            _ => {}
+        }
+
+        // Include column definitions
+        if !table.columns.is_empty() {
+            ddl.push_str(&format!("\n-- Columns:\n"));
+            for col in &table.columns {
+                ddl.push_str(&format!(
+                    "--   {} : {}\n",
+                    col.name,
+                    format_column_type(col)
+                ));
+            }
+        }
+
+        ddl.push('\n');
+        ddl
+    }
+
+    fn generate_function_ddl(&self, func: &FunctionInfo) -> String {
+        let mut ddl = String::new();
+        let func_qualified_name = qualified_name(&func.schema, &func.name);
+
+        if let Some(ref definition) = func.definition {
+            // pg_get_functiondef returns the full CREATE FUNCTION statement
+            if definition.ends_with(';') {
+                ddl.push_str(&format!("{}\n", definition));
+            } else {
+                ddl.push_str(&format!("{};\n", definition));
+            }
+        } else if let Some(ref body) = func.body {
+            // Reconstruct CREATE FUNCTION from components
+            ddl.push_str(&format!("CREATE OR REPLACE FUNCTION {}(", func_qualified_name));
+
+            // Arguments
+            if !func.arguments.is_empty() {
+                ddl.push_str(&func.arguments);
+            }
+            ddl.push_str(")\n");
+
+            // Return type
+            ddl.push_str(&format!("RETURNS {}\n", func.return_type));
+            ddl.push_str(&format!("LANGUAGE {}\n", func.language));
+
+            // Function body based on language
+            match func.language.as_str() {
+                "c" => {
+                    // C functions need a shared library path
+                    if let Some(ref library) = func.library {
+                        ddl.push_str(&format!("AS '{}', '{}';\n", library, body));
+                    } else {
+                        ddl.push_str(&format!("AS 'object_file', '{}';\n", body));
+                        ddl.push_str("-- Note: Library path not available. Update object_file.\n");
+                    }
+                }
+                "internal" => {
+                    // Internal functions use prosrc as the internal function name
+                    ddl.push_str(&format!("AS '{}';\n", body));
+                }
+                "plpgsql" | "plperl" | "plpython3u" | "pltcl" | "sql" => {
+                    ddl.push_str("AS $$\n");
+                    ddl.push_str(body);
+                    if !body.ends_with('\n') {
+                        ddl.push('\n');
+                    }
+                    ddl.push_str("$$;\n");
+                }
+                _ => {
+                    ddl.push_str("AS $$\n");
+                    ddl.push_str(body);
+                    if !body.ends_with('\n') {
+                        ddl.push('\n');
+                    }
+                    ddl.push_str("$$;\n");
+                }
+            }
+        } else {
+            // Fallback: generate a skeleton
+            ddl.push_str(&format!("CREATE OR REPLACE FUNCTION {}(", func_qualified_name));
+
+            // Arguments
+            if !func.arguments.is_empty() {
+                ddl.push_str(&func.arguments);
+            }
+            ddl.push_str(")\n");
+
+            // Return type
+            ddl.push_str(&format!("RETURNS {}\n", func.return_type));
+            ddl.push_str(&format!("LANGUAGE {}\n", func.language));
+            ddl.push_str("AS $$\n");
+            ddl.push_str("BEGIN\n");
+            ddl.push_str("    -- Function body not available\n");
+            ddl.push_str("END;\n");
+            ddl.push_str("$$;\n");
+        }
+
+        // Add owner command if available
+        if !func.owner.is_empty() {
+            ddl.push_str(&format!("\nALTER FUNCTION {} OWNER TO {};\n", func_qualified_name, quote_identifier(&func.owner)));
+        }
+
+        ddl
+    }
+
+    fn generate_index_ddl(&self, idx: &IndexInfo) -> String {
+        let mut ddl = String::new();
+        let idx_qualified_name = qualified_name(&idx.schema, &idx.name);
+        let table_name = qualified_name(&idx.schema, &idx.table_name);
+
+        let unique = if idx.is_unique { "UNIQUE " } else { "" };
+
+        ddl.push_str(&format!(
+            "CREATE {}INDEX {} ON {} (",
+            unique,
+            idx_qualified_name,
+            table_name
+        ));
+
+        let columns: Vec<String> = idx
+            .columns
+            .iter()
+            .map(|c| quote_identifier(c))
+            .collect();
+        ddl.push_str(&columns.join(", "));
+        ddl.push_str(");\n");
+
+        ddl
+    }
+
+    fn generate_trigger_ddl(&self, trig: &TriggerInfo) -> String {
+        // TriggerInfo already contains the full definition from pg_get_triggerdef
+        if !trig.definition.is_empty() {
+            format!("{};\n", trig.definition)
+        } else {
+            // Fallback: generate from components
+            let mut ddl = String::new();
+            let _trig_qualified_name = qualified_name(&trig.schema, &trig.name);
+            let table_name = qualified_name(&trig.schema, &trig.table_name);
+
+            ddl.push_str(&format!(
+                "CREATE TRIGGER {}\n",
+                quote_identifier(&trig.name)
+            ));
+            ddl.push_str(&format!("    {} {}\n", trig.timing, trig.event));
+            ddl.push_str(&format!("    ON {}\n", table_name));
+            ddl.push_str("    FOR EACH ROW\n");
+            ddl.push_str("    EXECUTE FUNCTION ...; -- function not available in schema cache\n");
+
+            ddl
+        }
+    }
+
+    fn generate_sequence_ddl(&self, seq: &SequenceInfo) -> String {
+        let mut ddl = String::new();
+        let seq_qualified_name = qualified_name(&seq.schema, &seq.name);
+
+        ddl.push_str(&format!("CREATE SEQUENCE {}\n", seq_qualified_name));
+
+        if seq.start_value != "1" && !seq.start_value.is_empty() {
+            ddl.push_str(&format!("    START WITH {}\n", seq.start_value));
+        }
+        if seq.increment_by != "1" && !seq.increment_by.is_empty() {
+            ddl.push_str(&format!("    INCREMENT BY {}\n", seq.increment_by));
+        }
+        if seq.min_value != "1" && !seq.min_value.is_empty() && seq.min_value != "0" {
+            ddl.push_str(&format!("    MINVALUE {}\n", seq.min_value));
+        }
+        if !seq.max_value.is_empty() && seq.max_value != "0" {
+            ddl.push_str(&format!("    MAXVALUE {}\n", seq.max_value));
+        }
+        if !seq.data_type.is_empty() && seq.data_type != "bigint" {
+            ddl.push_str(&format!("    AS {}\n", seq.data_type));
+        }
+
+        ddl.push_str(";\n");
+
+        ddl
+    }
+
+    fn generate_column_ddl(&self, table: &TableInfo, column: &ColumnInfo) -> String {
+        let col_qualified_name = qualified_name(&table.schema, &table.name);
+        format!(
+            "ALTER TABLE {} ADD COLUMN {} {};\n",
+            col_qualified_name,
+            quote_identifier(&column.name),
+            format_column_type(column)
+        )
+    }
+}
+
+fn generate_column_definition(
+    col: &ColumnInfo,
+    _schema: &DatabaseSchema,
+    table: &TableInfo,
+) -> String {
+    let mut def = format!("    {}", quote_identifier(&col.name));
+    def.push_str(&format!(" {}", format_column_type(col)));
+
+    // NOT NULL
+    if !col.nullable {
+        def.push_str(" NOT NULL");
+    }
+
+    // Default value (if available)
+    if let Some(default) = &col.default_value {
+        def.push_str(&format!(" DEFAULT {}", default));
+    }
+
+    // Primary key (inline for single-column PKs)
+    if col.is_pk {
+        let pk_columns: Vec<&ColumnInfo> = table.columns.iter().filter(|c| c.is_pk).collect();
+        if pk_columns.len() == 1 {
+            def.push_str(" PRIMARY KEY");
+        }
+    }
+
+    def
+}
+
+fn format_column_type(col: &ColumnInfo) -> String {
+    let mut type_str = col.data_type.clone();
+
+    // Handle generated columns
+    if col.is_generated {
+        if let Some(gen_expr) = &col.generation_expression {
+            type_str = format!("GENERATED ALWAYS AS ({}) STORED", gen_expr);
+        }
+    }
+
+    type_str
+}
+
+fn quote_identifier(name: &str) -> String {
+    // Quote if it's a reserved word or contains special characters
+    if needs_quoting(name) {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    } else {
+        name.to_string()
+    }
+}
+
+fn needs_quoting(name: &str) -> bool {
+    // Quote if starts with digit, contains special chars, or is a reserved word
+    if name.is_empty() {
+        return true;
+    }
+
+    let first_char = name.chars().next().unwrap();
+    if first_char.is_ascii_digit() || !first_char.is_alphanumeric() && first_char != '_' {
+        return true;
+    }
+
+    if name.contains(|c: char| !c.is_alphanumeric() && c != '_') {
+        return true;
+    }
+
+    // Check for reserved words (common SQL reserved words)
+    let reserved_words = [
+        "select", "from", "where", "insert", "update", "delete", "create", "drop", "alter",
+        "table", "index", "view", "schema", "function", "trigger", "sequence", "primary", "key",
+        "foreign", "references", "constraint", "default", "null", "not", "and", "or", "in",
+        "is", "like", "between", "exists", "case", "when", "then", "else", "end", "as", "on",
+        "join", "inner", "outer", "left", "right", "full", "cross", "natural", "group", "by",
+        "order", "having", "limit", "offset", "union", "all", "distinct", "into", "values",
+        "set", "returning", "with", "recursive", "grant", "revoke", "public", "owner", "to",
+        "user", "role", "authorization", "begin", "commit", "rollback", "transaction", "work",
+        "language", "plpgsql", "sql", "returns", "declare", "execute", "perform", "raise",
+        "new", "old", "for", "each", "row", "statement", "before", "after", "instead", "of",
+    ];
+
+    reserved_words.contains(&name.to_lowercase().as_str())
+}
+
+fn qualified_name(schema: &str, name: &str) -> String {
+    format!("{}.{}", quote_identifier(schema), quote_identifier(name))
+}
+
+/// DDL generator factory based on database type.
+pub fn create_ddl_generator(db_type: crate::data_source::Database) -> Box<dyn DdlGenerator> {
+    match db_type {
+        crate::data_source::Database::Postgres => Box::new(PostgresDdlGenerator),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data_source::Database;
+
+    #[test]
+    fn test_quote_identifier_simple() {
+        assert_eq!(quote_identifier("users"), "users");
+        assert_eq!(quote_identifier("id"), "id");
+    }
+
+    #[test]
+    fn test_quote_identifier_needs_quoting() {
+        assert_eq!(quote_identifier("user"), "\"user\"");
+        assert_eq!(quote_identifier("123abc"), "\"123abc\"");
+        assert_eq!(quote_identifier("my-table"), "\"my-table\"");
+    }
+
+    #[test]
+    fn test_qualified_name() {
+        assert_eq!(qualified_name("public", "users"), "\"public\".users");
+        assert_eq!(
+            qualified_name("public", "user"),
+            "\"public\".\"user\""
+        );
+    }
+
+    #[test]
+    fn test_generate_schema_ddl() {
+        let generator = PostgresDdlGenerator;
+        let schema = SchemaInfo {
+            name: "public".to_string(),
+            owner: "postgres".to_string(),
+        };
+        let ddl = generator.generate_schema_ddl(&schema);
+        assert!(ddl.contains("CREATE SCHEMA \"public\";"));
+    }
+
+    #[test]
+    fn test_generate_index_ddl() {
+        let generator = PostgresDdlGenerator;
+        let idx = IndexInfo {
+            schema: "public".to_string(),
+            table_name: "users".to_string(),
+            name: "idx_users_email".to_string(),
+            is_unique: true,
+            is_primary: false,
+            columns: vec!["email".to_string()],
+        };
+        let ddl = generator.generate_index_ddl(&idx);
+        assert!(ddl.contains("CREATE UNIQUE INDEX"));
+        assert!(ddl.contains("idx_users_email"));
+        assert!(ddl.contains("ON \"public\".users"));
+        assert!(ddl.contains("(email)"));
+    }
+
+    #[test]
+    fn test_generate_sequence_ddl() {
+        let generator = PostgresDdlGenerator;
+        let seq = SequenceInfo {
+            schema: "public".to_string(),
+            name: "users_id_seq".to_string(),
+            data_type: "bigint".to_string(),
+            start_value: "1".to_string(),
+            min_value: "1".to_string(),
+            max_value: "0".to_string(),
+            increment_by: "1".to_string(),
+        };
+        let ddl = generator.generate_sequence_ddl(&seq);
+        assert!(ddl.contains("CREATE SEQUENCE \"public\".users_id_seq"));
+    }
+
+    #[test]
+    fn test_create_ddl_generator() {
+        let generator = create_ddl_generator(Database::Postgres);
+        // Just verify it doesn't panic
+        let schema = SchemaInfo {
+            name: "test".to_string(),
+            owner: "".to_string(),
+        };
+        let _ = generator.generate_schema_ddl(&schema);
+    }
+}

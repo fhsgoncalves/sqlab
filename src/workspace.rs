@@ -20,7 +20,6 @@ use crate::data_source::{ConnectionStatus, DataSourceError, QueryResult, create_
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::bottom_panel::{BottomPanel, BottomPanelMode, ToggleBottomPanelMode};
 use crate::ui::panels::connection::ConnectionPanel;
-use crate::ui::panels::file_editor::query_detector::queries_in_text;
 use crate::ui::panels::file_editor::{
     EditorTabs, ExecuteQuery, QueryChoice, QuerySelected, QuerySelector, SaveFile,
 };
@@ -310,10 +309,10 @@ impl Workspace {
         };
 
         let queries: Vec<QueryChoice> = if !selected.trim().is_empty() {
-            queries_in_text(&selected)
-                .into_iter()
-                .map(|query| QueryChoice { query, range: None })
-                .collect()
+            vec![QueryChoice {
+                query: selected.clone(),
+                range: None,
+            }]
         } else {
             active_queries
                 .into_iter()

@@ -73,8 +73,13 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             connection_key TEXT NOT NULL,
             schema_name TEXT NOT NULL,
             name TEXT NOT NULL,
-            arguments TEXT,
+            arguments TEXT NOT NULL DEFAULT '',
             return_type TEXT,
+            definition TEXT,
+            language TEXT,
+            body TEXT,
+            library TEXT,
+            owner TEXT,
             PRIMARY KEY (connection_key, schema_name, name, arguments)
         );
 
@@ -135,6 +140,81 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         "ALTER TABLE columns ADD COLUMN is_fk INTEGER NOT NULL DEFAULT 0",
         [],
     )
+    .ok();
+    conn.execute(
+        "ALTER TABLE cache_metadata ADD COLUMN db_type TEXT NOT NULL DEFAULT 'postgres'",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE columns ADD COLUMN default_value TEXT",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE columns ADD COLUMN is_generated INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE columns ADD COLUMN generation_expression TEXT",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE functions ADD COLUMN definition TEXT",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE functions ADD COLUMN language TEXT",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE functions ADD COLUMN body TEXT",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE functions ADD COLUMN library TEXT",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE functions ADD COLUMN owner TEXT",
+        [],
+    )
+    .ok();
+
+    // Migrate functions table to ensure arguments is NOT NULL (fixes overloaded function support)
+    conn.execute("DROP TABLE IF EXISTS functions_new", [])
+    .ok();
+    conn.execute(
+        "CREATE TABLE functions_new (
+            connection_key TEXT NOT NULL,
+            schema_name TEXT NOT NULL,
+            name TEXT NOT NULL,
+            arguments TEXT NOT NULL DEFAULT '',
+            return_type TEXT,
+            definition TEXT,
+            language TEXT,
+            body TEXT,
+            library TEXT,
+            owner TEXT,
+            PRIMARY KEY (connection_key, schema_name, name, arguments)
+        )",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "INSERT INTO functions_new SELECT connection_key, schema_name, name, COALESCE(arguments, ''), return_type, definition, language, body, library, owner FROM functions",
+        [],
+    )
+    .ok();
+    conn.execute("DROP TABLE IF EXISTS functions", [])
+    .ok();
+    conn.execute("ALTER TABLE functions_new RENAME TO functions", [])
     .ok();
 
     Ok(())

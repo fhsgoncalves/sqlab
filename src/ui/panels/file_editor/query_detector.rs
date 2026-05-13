@@ -54,14 +54,6 @@ pub fn query_ranges_at_cursor(text: &str, cursor: usize) -> Vec<QueryRange> {
     }
 }
 
-/// Detect top-level SQL queries in a block of selected text.
-pub fn queries_in_text(text: &str) -> Vec<String> {
-    query_ranges_in_text(text)
-        .into_iter()
-        .map(|query| query.text)
-        .collect()
-}
-
 /// Detect top-level SQL query ranges in a block of selected text.
 pub fn query_ranges_in_text(text: &str) -> Vec<QueryRange> {
     if text.trim().is_empty() {
@@ -320,29 +312,50 @@ fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
     let mut paren_depth = 0usize;
     let mut in_single_quote = false;
     let mut in_double_quote = false;
+    let mut dollar_quote_tag: Option<String> = None;
 
-    for (ix, ch) in text.char_indices() {
-        let at_top_level = paren_depth == 0 && !in_single_quote && !in_double_quote;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut ix = 0;
+    while ix < chars.len() {
+        let (byte_ix, ch) = chars[ix];
+        let at_top_level = paren_depth == 0
+            && !in_single_quote
+            && !in_double_quote
+            && dollar_quote_tag.is_none();
 
-        if at_top_level && ch == ';' {
-            if let Some(query) = trimmed_query_range(text, start, ix) {
-                queries.push(query);
-            }
-            start = ix + ch.len_utf8();
-        } else if at_top_level
-            && ch == '\n'
-            && text[start..ix].trim().is_empty()
-            && line_starts_statement(text, ix + ch.len_utf8())
-        {
-            start = ix + ch.len_utf8();
-        } else if at_top_level && ch == '\n' && !text[start..ix].trim().is_empty() {
-            let next_start = ix + ch.len_utf8();
-            let should_split = line_starts_statement(text, next_start)
-                && !cte_continues_with_main_select(text, start, ix, next_start);
-            if !should_split {
+        if let Some(ref tag) = dollar_quote_tag {
+            let closing = format!("${}$", tag);
+            let remaining = &text[byte_ix..];
+            if remaining.starts_with(&closing) {
+                dollar_quote_tag = None;
+                ix += closing.chars().count();
+                continue;
+            } else {
+                ix += 1;
                 continue;
             }
-            if let Some(query) = trimmed_query_range(text, start, ix) {
+        }
+
+        if at_top_level && ch == ';' {
+            if let Some(query) = trimmed_query_range(text, start, byte_ix) {
+                queries.push(query);
+            }
+            start = byte_ix + ch.len_utf8();
+        } else if at_top_level
+            && ch == '\n'
+            && text[start..byte_ix].trim().is_empty()
+            && line_starts_statement(text, byte_ix + ch.len_utf8())
+        {
+            start = byte_ix + ch.len_utf8();
+        } else if at_top_level && ch == '\n' && !text[start..byte_ix].trim().is_empty() {
+            let next_start = byte_ix + ch.len_utf8();
+            let should_split = line_starts_statement(text, next_start)
+                && !cte_continues_with_main_select(text, start, byte_ix, next_start);
+            if !should_split {
+                ix += 1;
+                continue;
+            }
+            if let Some(query) = trimmed_query_range(text, start, byte_ix) {
                 queries.push(query);
             }
             start = next_start;
@@ -355,8 +368,15 @@ fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
             ')' if !in_single_quote && !in_double_quote => {
                 paren_depth = paren_depth.saturating_sub(1);
             }
+            '$' if !in_single_quote && !in_double_quote => {
+                if let Some(tag) = parse_dollar_quote_tag(&text[byte_ix..]) {
+                    dollar_quote_tag = Some(tag);
+                }
+            }
             _ => {}
         }
+
+        ix += 1;
     }
 
     if let Some(query) = trimmed_query_range(text, start, text.len()) {
@@ -364,6 +384,38 @@ fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
     }
 
     queries
+}
+
+fn parse_dollar_quote_tag(text: &str) -> Option<String> {
+    if !text.starts_with('$') {
+        return None;
+    }
+
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 {
+        return None;
+    }
+
+    if bytes[1] == b'$' {
+        return Some(String::new());
+    }
+
+    let mut end = 1;
+    while end < bytes.len() {
+        if bytes[end] == b'$' {
+            let tag = std::str::from_utf8(&bytes[1..end]).ok()?;
+            if tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !tag.is_empty() {
+                return Some(tag.to_string());
+            }
+            return None;
+        }
+        if !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_' {
+            return None;
+        }
+        end += 1;
+    }
+
+    None
 }
 
 fn fallback_ranges_cover_more_text(fallback: &[QueryRange], parsed: &[QueryRange]) -> bool {
@@ -899,5 +951,85 @@ mod tests {
 
         assert_eq!(queries.len(), 1, "got: {queries:?}");
         assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn does_not_split_do_block_with_dollar_quotes() {
+        let text = r#"DO $$
+BEGIN
+    RAISE NOTICE 'Hello';
+    RAISE NOTICE 'World';
+END $$;"#;
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 1);
+        assert!(queries[0].text.contains("DO $$"));
+        assert!(queries[0].text.contains("END $$"));
+    }
+
+    #[test]
+    fn does_not_split_create_function_with_dollar_quotes() {
+        let text = r#"CREATE OR REPLACE FUNCTION my_func()
+RETURNS void AS $$
+BEGIN
+    INSERT INTO logs VALUES (1);
+    UPDATE stats SET count = count + 1;
+END;
+$$ LANGUAGE plpgsql;"#;
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 1);
+        assert!(queries[0].text.contains("CREATE OR REPLACE FUNCTION"));
+        assert!(queries[0].text.contains("$$ LANGUAGE plpgsql"));
+    }
+
+    #[test]
+    fn does_not_split_function_with_tagged_dollar_quotes() {
+        let text = r#"CREATE FUNCTION add(a integer, b integer)
+RETURNS integer AS $func$
+BEGIN
+    RETURN a + b;
+END;
+$func$ LANGUAGE plpgsql;"#;
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 1);
+        assert!(queries[0].text.contains("CREATE FUNCTION"));
+        assert!(queries[0].text.contains("$func$ LANGUAGE plpgsql"));
+    }
+
+    #[test]
+    fn separates_multiple_statements_with_do_blocks() {
+        let text = r#"DO $$
+BEGIN
+    RAISE NOTICE 'first';
+END $$;
+
+DO $$
+BEGIN
+    RAISE NOTICE 'second';
+END $$;"#;
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 2);
+        assert!(queries[0].text.contains("first"));
+        assert!(queries[1].text.contains("second"));
+    }
+
+    #[test]
+    fn handles_nested_dollar_quotes_in_function() {
+        let text = r#"CREATE FUNCTION log_msg(msg text)
+RETURNS void AS $$
+BEGIN
+    RAISE NOTICE '%', msg;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT 1;"#;
+        let queries = query_ranges_in_text(text);
+
+        assert_eq!(queries.len(), 2);
+        assert!(queries[0].text.contains("CREATE FUNCTION"));
+        assert_eq!(queries[1].text, "SELECT 1");
     }
 }

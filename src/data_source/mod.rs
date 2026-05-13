@@ -1,3 +1,4 @@
+pub mod ddl;
 pub mod manager;
 pub mod postgres;
 pub use manager::create_data_source;
@@ -147,6 +148,9 @@ pub struct ColumnInfo {
     pub ordinal: i32,
     pub is_pk: bool,
     pub is_fk: bool,
+    pub default_value: Option<String>,
+    pub is_generated: bool,
+    pub generation_expression: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -155,6 +159,11 @@ pub struct FunctionInfo {
     pub name: String,
     pub arguments: String,
     pub return_type: String,
+    pub definition: Option<String>,
+    pub language: String,
+    pub body: Option<String>,
+    pub library: Option<String>,
+    pub owner: String,
 }
 
 #[derive(Debug, Clone)]

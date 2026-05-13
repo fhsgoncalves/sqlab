@@ -54,6 +54,9 @@ pub fn schema_to_rows(
                 ordinal: c.ordinal,
                 is_pk: if c.is_pk { 1 } else { 0 },
                 is_fk: if c.is_fk { 1 } else { 0 },
+                default_value: c.default_value.clone(),
+                is_generated: if c.is_generated { 1 } else { 0 },
+                generation_expression: c.generation_expression.clone(),
             });
         }
     }
@@ -65,8 +68,13 @@ pub fn schema_to_rows(
             connection_key: connection_key.to_string(),
             schema_name: f.schema.clone(),
             name: f.name.clone(),
-            arguments: Some(f.arguments.clone()),
+            arguments: f.arguments.clone(),
             return_type: Some(f.return_type.clone()),
+            definition: f.definition.clone(),
+            language: Some(f.language.clone()),
+            body: f.body.clone(),
+            library: f.library.clone(),
+            owner: Some(f.owner.clone()),
         })
         .collect();
 
@@ -187,6 +195,9 @@ pub fn rows_to_schema(
                 ordinal: c.ordinal,
                 is_pk: c.is_pk != 0,
                 is_fk: c.is_fk != 0,
+                default_value: c.default_value,
+                is_generated: c.is_generated != 0,
+                generation_expression: c.generation_expression,
             });
         }
     }
@@ -196,8 +207,13 @@ pub fn rows_to_schema(
         .map(|f| FunctionInfo {
             schema: f.schema_name,
             name: f.name,
-            arguments: f.arguments.unwrap_or_default(),
+            arguments: f.arguments,
             return_type: f.return_type.unwrap_or_default(),
+            definition: f.definition,
+            language: f.language.unwrap_or_else(|| "unknown".to_string()),
+            body: f.body,
+            library: f.library,
+            owner: f.owner.unwrap_or_default(),
         })
         .collect();
 
@@ -289,6 +305,9 @@ pub struct ColumnRow {
     pub ordinal: i32,
     pub is_pk: i32,
     pub is_fk: i32,
+    pub default_value: Option<String>,
+    pub is_generated: i32,
+    pub generation_expression: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -296,8 +315,13 @@ pub struct FunctionRow {
     pub connection_key: String,
     pub schema_name: String,
     pub name: String,
-    pub arguments: Option<String>,
+    pub arguments: String,
     pub return_type: Option<String>,
+    pub definition: Option<String>,
+    pub language: Option<String>,
+    pub body: Option<String>,
+    pub library: Option<String>,
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone)]

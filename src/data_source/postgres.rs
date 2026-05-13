@@ -190,10 +190,13 @@ impl PostgresDataSource {
                             a.attname as column_name,
                             pg_catalog.format_type(a.atttypid, a.atttypmod) as data_type,
                             a.attnotnull,
-                            a.attnum
+                            a.attnum,
+                            pg_get_expr(d.adbin, d.adrelid) as column_default,
+                            a.attgenerated::text as attgenerated
                         from pg_catalog.pg_class c
                         join pg_catalog.pg_namespace n on n.oid = c.relnamespace
                         join pg_catalog.pg_attribute a on a.attrelid = c.oid
+                        left join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
                         where c.relkind in ('r', 'p', 'v', 'm', 'f')
                           and a.attnum > 0
                           and not a.attisdropped
@@ -213,9 +216,15 @@ impl PostgresDataSource {
                             n.nspname as schema_name,
                             p.proname as function_name,
                             pg_catalog.pg_get_function_arguments(p.oid) as arguments,
-                            pg_catalog.pg_get_function_result(p.oid) as return_type
+                            pg_catalog.pg_get_function_result(p.oid) as return_type,
+                            pg_catalog.pg_get_functiondef(p.oid) as definition,
+                            l.lanname as language,
+                            p.prosrc as body,
+                            p.probin as library,
+                            pg_catalog.pg_get_userbyid(p.proowner) as owner
                         from pg_catalog.pg_proc p
                         join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+                        join pg_catalog.pg_language l on l.oid = p.prolang
                         where n.nspname !~ '^pg_'
                           and n.nspname <> 'information_schema'
                           and ($1 = '' or n.nspname = $1)
@@ -415,6 +424,15 @@ impl PostgresDataSource {
             let is_pk = pk_set.contains(&(schema.clone(), table_name.clone(), column_name.clone()));
             let is_fk = fk_set.contains(&(schema.clone(), table_name.clone(), column_name.clone()));
 
+            let default_value: Option<String> = row.get("column_default");
+            let attgenerated: String = row.get::<_, Option<String>>("attgenerated").unwrap_or_default();
+            let is_generated = !attgenerated.is_empty();
+            let generation_expression = if is_generated {
+                default_value.clone()
+            } else {
+                None
+            };
+
             let column = ColumnInfo {
                 name: column_name,
                 data_type: row.get("data_type"),
@@ -422,6 +440,9 @@ impl PostgresDataSource {
                 ordinal: i32::from(row.get::<_, i16>("attnum")),
                 is_pk,
                 is_fk,
+                default_value: if !is_generated { default_value } else { None },
+                is_generated,
+                generation_expression,
             };
 
             if let Some(table) = tables
@@ -444,8 +465,13 @@ impl PostgresDataSource {
             .map(|row| FunctionInfo {
                 schema: row.get("schema_name"),
                 name: row.get("function_name"),
-                arguments: row.get("arguments"),
-                return_type: row.get("return_type"),
+                arguments: row.get::<_, Option<String>>("arguments").unwrap_or_default(),
+                return_type: row.get::<_, Option<String>>("return_type").unwrap_or_default(),
+                definition: row.get("definition"),
+                language: row.get::<_, Option<String>>("language").unwrap_or_else(|| "unknown".to_string()),
+                body: row.get("body"),
+                library: row.get("library"),
+                owner: row.get::<_, Option<String>>("owner").unwrap_or_default(),
             })
             .collect();
 

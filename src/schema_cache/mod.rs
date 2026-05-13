@@ -73,15 +73,15 @@ pub fn save(
 
         for c in &columns {
             conn.execute(
-                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.nullable, c.ordinal, c.is_pk, c.is_fk],
+                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.nullable, c.ordinal, c.is_pk, c.is_fk, c.default_value, c.is_generated, c.generation_expression],
             )?;
         }
 
         for f in &functions {
             conn.execute(
-                "INSERT INTO functions (connection_key, schema_name, name, arguments, return_type) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![f.connection_key, f.schema_name, f.name, f.arguments, f.return_type],
+                "INSERT INTO functions (connection_key, schema_name, name, arguments, return_type, definition, language, body, library, owner) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![f.connection_key, f.schema_name, f.name, f.arguments, f.return_type, f.definition, f.language, f.body, f.library, f.owner],
             )?;
         }
 
@@ -200,7 +200,7 @@ fn load_tables(conn: &rusqlite::Connection, key: &str) -> Result<Vec<TableRow>, 
 
 fn load_columns(conn: &rusqlite::Connection, key: &str) -> Result<Vec<ColumnRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk FROM columns WHERE connection_key = ?1",
+        "SELECT connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression FROM columns WHERE connection_key = ?1",
     )?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(ColumnRow {
@@ -213,6 +213,9 @@ fn load_columns(conn: &rusqlite::Connection, key: &str) -> Result<Vec<ColumnRow>
             ordinal: row.get(6)?,
             is_pk: row.get(7)?,
             is_fk: row.get(8)?,
+            default_value: row.get(9)?,
+            is_generated: row.get(10)?,
+            generation_expression: row.get(11)?,
         })
     })?;
     rows.collect()
@@ -223,7 +226,7 @@ fn load_functions(
     key: &str,
 ) -> Result<Vec<FunctionRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT connection_key, schema_name, name, arguments, return_type FROM functions WHERE connection_key = ?1",
+        "SELECT connection_key, schema_name, name, arguments, return_type, definition, language, body, library, owner FROM functions WHERE connection_key = ?1",
     )?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(FunctionRow {
@@ -232,6 +235,11 @@ fn load_functions(
             name: row.get(2)?,
             arguments: row.get(3)?,
             return_type: row.get(4)?,
+            definition: row.get(5)?,
+            language: row.get(6)?,
+            body: row.get(7)?,
+            library: row.get(8)?,
+            owner: row.get(9)?,
         })
     })?;
     rows.collect()
