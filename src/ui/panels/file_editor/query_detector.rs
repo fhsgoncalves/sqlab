@@ -23,15 +23,19 @@ pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> 
             .any(|query| parser_query_should_stay_first(query, &line_ranges, cursor))
     {
         let mut prioritized_ranges = line_ranges;
-        append_missing_ranges(text, cursor, &mut prioritized_ranges, ranges);
+        append_missing_ranges(cursor, &mut prioritized_ranges, ranges);
         return prioritized_ranges;
     }
 
     for range in line_ranges {
-        if !ranges
-            .iter()
-            .any(|existing| same_query_ignoring_trailing_semicolon(existing, &range))
+        if let Some(existing) = ranges
+            .iter_mut()
+            .find(|existing| existing.trimmed_range.start == range.trimmed_range.start)
         {
+            if range.trimmed_range.end <= existing.trimmed_range.end {
+                *existing = range;
+            }
+        } else {
             ranges.push(range);
         }
     }
@@ -202,7 +206,6 @@ fn range_contains_cursor_inclusive_end(range: &Range<usize>, cursor: usize) -> b
 }
 
 fn append_missing_ranges(
-    text: &str,
     cursor: usize,
     ranges: &mut Vec<QueryRange>,
     candidates: Vec<QueryRange>,
@@ -212,31 +215,17 @@ fn append_missing_ranges(
             continue;
         }
 
-        if !ranges.iter().any(|existing| {
-            same_query_ignoring_trailing_semicolon(existing, &candidate)
-                || candidate_continues_after_terminated_query(text, existing, &candidate)
+        if ranges.iter().any(|existing| {
+            existing.trimmed_range.start == candidate.trimmed_range.start
+                || existing.trimmed_range.start > candidate.trimmed_range.start
         }) {
-            ranges.push(candidate);
+            continue;
         }
+
+        ranges.push(candidate);
     }
 }
 
-fn candidate_continues_after_terminated_query(
-    text: &str,
-    query: &QueryRange,
-    candidate: &QueryRange,
-) -> bool {
-    query.trimmed_range.start == candidate.trimmed_range.start
-        && query.trimmed_range.end < candidate.trimmed_range.end
-        && text
-            .get(query.trimmed_range.end..candidate.trimmed_range.end)
-            .is_some_and(|rest| rest.trim_start().starts_with(';'))
-}
-
-fn same_query_ignoring_trailing_semicolon(left: &QueryRange, right: &QueryRange) -> bool {
-    left.trimmed_range.start == right.trimmed_range.start
-        && canonical_query_text(&left.text) == canonical_query_text(&right.text)
-}
 
 fn canonical_query_key(text: &str, range: &Range<usize>) -> (usize, usize) {
     (range.start, canonical_query_end(text, range))
@@ -425,6 +414,16 @@ fn line_query_is_narrower_current_query(
         && line_query.trimmed_range.end <= query.trimmed_range.end
 }
 
+fn line_query_surpasses_query_at_cursor(
+    line_query: &QueryRange,
+    query: &QueryRange,
+    cursor: usize,
+) -> bool {
+    range_contains_cursor_inclusive_end(&line_query.trimmed_range, cursor)
+        && query.trimmed_range.start < line_query.trimmed_range.start
+        && line_query.trimmed_range.end > query.trimmed_range.end
+}
+
 fn parser_query_should_stay_first(
     query: &QueryRange,
     line_ranges: &[QueryRange],
@@ -435,6 +434,7 @@ fn parser_query_should_stay_first(
             line_query_extends_query(line_query, query)
                 || line_query_splits_overbroad_query(line_query, query)
                 || line_query_is_narrower_current_query(line_query, query, cursor)
+                || line_query_surpasses_query_at_cursor(line_query, query, cursor)
         })
 }
 
@@ -753,5 +753,151 @@ mod tests {
         assert_eq!(queries.len(), 2);
         assert_eq!(queries[0].text, "select 1");
         assert_eq!(queries[1].text, "select 2");
+    }
+
+    #[test]
+    fn only_detects_current_line_when_adjacent_queries_no_semicolons() {
+        let text = "select current_user\nselect current_date";
+        let queries = query_ranges_for_execution(text, 0);
+
+        assert_eq!(queries.len(), 1, "first query only, got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn only_detects_second_query_when_cursor_on_second_line() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find("select current_date").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "second query only, got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_date");
+    }
+
+    #[test]
+    fn only_detects_current_line_when_last_query_has_semicolon() {
+        let text = "select current_user\nselect current_date;";
+        let queries = query_ranges_for_execution(text, 0);
+
+        assert_eq!(queries.len(), 1, "first query only, got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn does_not_detect_other_line_when_cursor_on_first_with_semicolon() {
+        let text = "select current_user\nselect current_date;";
+        let cursor = text.find("select current_date").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "second query only, got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_date");
+    }
+
+    #[test]
+    fn falls_back_to_current_line_when_no_semicolons_and_multi_line() {
+        let text = "select 1\nselect 2\nselect 3";
+        let cursor = text.find("select 2").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "second query only, got: {queries:?}");
+        assert_eq!(queries[0].text, "select 2");
+    }
+
+    #[test]
+    fn cursor_on_second_line_select_keyword_only_first_line_detected() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find("select current_date").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_date");
+    }
+
+    #[test]
+    fn cursor_at_newline_between_two_queries_only_detects_first() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find('\n').unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn cursor_at_end_of_first_line_only_detects_first() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find("current_user").unwrap() + "current_user".len();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn cursor_at_start_of_text_only_detects_first() {
+        let text = "select current_user\nselect current_date";
+        let queries = query_ranges_for_execution(text, 0);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn cursor_mid_first_line_no_semicolons() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find("current_user").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn cursor_on_first_line_select_keyword_no_semicolons() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find("select ").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
+    }
+
+    #[test]
+    fn cursor_on_second_line_select_keyword_no_semicolons() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find("\nselect").unwrap() + 1;
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_date");
+    }
+
+    #[test]
+    fn cursor_on_second_line_body_no_semicolons() {
+        let text = "select current_user\nselect current_date";
+        let cursor = text.find("current_date").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_date");
+    }
+
+    #[test]
+    fn trailing_newline_still_only_one_query() {
+        let text = "select current_user\nselect current_date\n";
+        let cursor = text.find("select current_date").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_date");
+    }
+
+    #[test]
+    fn trailing_newline_cursor_on_first_line() {
+        let text = "select current_user\nselect current_date\n";
+        let queries = query_ranges_for_execution(text, 0);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select current_user");
     }
 }
