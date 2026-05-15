@@ -12,7 +12,6 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    scroll::ScrollableElement,
     tree::TreeItem,
     v_flex,
 };
@@ -109,7 +108,8 @@ impl ConnectionPanel {
     ) {
         let manager = self.manager.clone();
         let name = cx.new(|cx| InputState::new(window, cx).default_value(config.name));
-        let db_type = cx.new(|cx| InputState::new(window, cx).default_value(config.db_type.as_str()));
+        let db_type =
+            cx.new(|cx| InputState::new(window, cx).default_value(config.db_type.as_str()));
         let host = cx.new(|cx| InputState::new(window, cx).default_value(config.host));
         let port = cx.new(|cx| InputState::new(window, cx).default_value(config.port.to_string()));
         let user = cx.new(|cx| InputState::new(window, cx).default_value(config.user));
@@ -183,9 +183,12 @@ impl ConnectionPanel {
                             Err(_) => {
                                 let db_type_display = db_type_str.clone();
                                 window.open_alert_dialog(cx, move |alert, _, _| {
-                                    alert.title("Unsupported Database Type").description(
-                                        format!("The database type '{}' is not supported.", db_type_display),
-                                    )
+                                    alert
+                                        .title("Unsupported Database Type")
+                                        .description(format!(
+                                            "The database type '{}' is not supported.",
+                                            db_type_display
+                                        ))
                                 });
                                 return false;
                             }
@@ -718,7 +721,7 @@ impl ConnectionPanel {
                 let mut funcs_item =
                     TreeItem::new(funcs_id.clone(), SharedString::from("Functions"));
                 for func in functions {
-                    let func_id = format!("{}:func:{}", schema_id, func.name);
+                    let func_id = format!("{}:func:{}:{}", schema_id, func.name, func.arguments);
                     let label =
                         format!("{}({}) -> {}", func.name, func.arguments, func.return_type);
                     funcs_item =
@@ -790,10 +793,7 @@ impl ConnectionPanel {
         }
     }
 
-    fn build_visible_entries(
-        &self,
-        configs: &[DataSourceConfig],
-    ) -> Vec<String> {
+    fn build_visible_entries(&self, configs: &[DataSourceConfig]) -> Vec<String> {
         let mut entries = Vec::new();
 
         for config in configs {
@@ -822,7 +822,12 @@ impl ConnectionPanel {
         entries
     }
 
-    fn select_relative(&mut self, offset: isize, configs: &[DataSourceConfig], cx: &mut Context<Self>) {
+    fn select_relative(
+        &mut self,
+        offset: isize,
+        configs: &[DataSourceConfig],
+        cx: &mut Context<Self>,
+    ) {
         let entries = self.build_visible_entries(configs);
         if entries.is_empty() {
             return;
@@ -832,7 +837,9 @@ impl ConnectionPanel {
         let current_ix = if let Some(selected_node) = &self.selected_node {
             entries.iter().position(|id| id == selected_node)
         } else if let Some(selected_conn) = &self.selected_connection {
-            entries.iter().position(|id| *id == format!("conn:{}", selected_conn))
+            entries
+                .iter()
+                .position(|id| *id == format!("conn:{}", selected_conn))
         } else {
             None
         };
@@ -848,7 +855,7 @@ impl ConnectionPanel {
         };
 
         let selected_id = &entries[next_ix];
-        
+
         // Determine if it's a connection or a node
         // Connection entries are exactly "conn:name" (2 parts), everything else is a node
         let parts: Vec<&str> = selected_id.split(':').collect();
@@ -861,7 +868,7 @@ impl ConnectionPanel {
             self.selected_node = Some(selected_id.clone());
             self.selected_connection = None;
         }
-        
+
         cx.notify();
     }
 
@@ -957,9 +964,10 @@ impl ConnectionPanel {
             let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
             let schema_name = segments.get(schema_name_idx + 1)?;
 
-            let table = schema.tables.iter().find(|t| {
-                t.schema == *schema_name && t.name == *table_name
-            })?;
+            let table = schema
+                .tables
+                .iter()
+                .find(|t| t.schema == *schema_name && t.name == *table_name)?;
             let col = table.columns.iter().find(|c| c.name == col_name)?;
             return Some(generator.generate_column_ddl(table, col));
         }
@@ -970,9 +978,10 @@ impl ConnectionPanel {
             let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
             let schema_name = segments.get(schema_name_idx + 1)?;
 
-            let table = schema.tables.iter().find(|t| {
-                t.schema == *schema_name && t.name == *table_name
-            })?;
+            let table = schema
+                .tables
+                .iter()
+                .find(|t| t.schema == *schema_name && t.name == *table_name)?;
             return Some(generator.generate_table_ddl(schema, table));
         }
 
@@ -982,9 +991,10 @@ impl ConnectionPanel {
             let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
             let schema_name = segments.get(schema_name_idx + 1)?;
 
-            let table = schema.tables.iter().find(|t| {
-                t.schema == *schema_name && t.name == view_name
-            })?;
+            let table = schema
+                .tables
+                .iter()
+                .find(|t| t.schema == *schema_name && t.name == view_name)?;
             return Some(generator.generate_view_ddl(schema, table));
         }
 
@@ -994,9 +1004,10 @@ impl ConnectionPanel {
             let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
             let schema_name = segments.get(schema_name_idx + 1)?;
 
-            let func = schema.functions.iter().find(|f| {
-                f.schema == *schema_name && f.name == **func_name
-            })?;
+            let func = schema
+                .functions
+                .iter()
+                .find(|f| f.schema == *schema_name && f.name == **func_name)?;
             return Some(generator.generate_function_ddl(func));
         }
 
@@ -1006,9 +1017,10 @@ impl ConnectionPanel {
             let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
             let schema_name = segments.get(schema_name_idx + 1)?;
 
-            let idx = schema.indexes.iter().find(|i| {
-                i.schema == *schema_name && i.name == **idx_name
-            })?;
+            let idx = schema
+                .indexes
+                .iter()
+                .find(|i| i.schema == *schema_name && i.name == **idx_name)?;
             return Some(generator.generate_index_ddl(idx));
         }
 
@@ -1018,9 +1030,10 @@ impl ConnectionPanel {
             let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
             let schema_name = segments.get(schema_name_idx + 1)?;
 
-            let trig = schema.triggers.iter().find(|t| {
-                t.schema == *schema_name && t.name == **trig_name
-            })?;
+            let trig = schema
+                .triggers
+                .iter()
+                .find(|t| t.schema == *schema_name && t.name == **trig_name)?;
             return Some(generator.generate_trigger_ddl(trig));
         }
 
@@ -1030,9 +1043,10 @@ impl ConnectionPanel {
             let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
             let schema_name = segments.get(schema_name_idx + 1)?;
 
-            let seq = schema.sequences.iter().find(|s| {
-                s.schema == *schema_name && s.name == **seq_name
-            })?;
+            let seq = schema
+                .sequences
+                .iter()
+                .find(|s| s.schema == *schema_name && s.name == **seq_name)?;
             return Some(generator.generate_sequence_ddl(seq));
         }
 
@@ -1521,50 +1535,59 @@ impl Render for ConnectionPanel {
             .size_full()
             .items_start()
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
-                match event.keystroke.key.as_str() {
-                    "up" => {
-                        let configs = this.manager.read(cx).configs().to_vec();
-                        this.select_relative(-1, &configs, cx);
-                    }
-                    "down" => {
-                        let configs = this.manager.read(cx).configs().to_vec();
-                        this.select_relative(1, &configs, cx);
-                    }
-                    "right" => {
-                        if let Some(id) = &this.selected_node {
-                            if !this.expanded_nodes.contains(id) {
-                                this.expanded_nodes.insert(id.clone());
-                                cx.notify();
-                            }
-                        } else if let Some(id) = &this.selected_connection {
-                            if !this.expanded_connections.contains(id) {
-                                this.expanded_connections.insert(id.clone());
-                                // Auto-expand the database folder when first opening a connection
-                                let db_folder_id = format!("conn:{}:schemas", id);
-                                this.expanded_nodes.insert(db_folder_id);
-                                cx.notify();
+            .on_key_down(
+                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "up" => {
+                            let configs = this.manager.read(cx).configs().to_vec();
+                            this.select_relative(-1, &configs, cx);
+                        }
+                        "down" => {
+                            let configs = this.manager.read(cx).configs().to_vec();
+                            this.select_relative(1, &configs, cx);
+                        }
+                        "right" => {
+                            if let Some(id) = &this.selected_node {
+                                if !this.expanded_nodes.contains(id) {
+                                    this.expanded_nodes.insert(id.clone());
+                                    cx.notify();
+                                }
+                            } else if let Some(id) = &this.selected_connection {
+                                if !this.expanded_connections.contains(id) {
+                                    this.expanded_connections.insert(id.clone());
+                                    // Auto-expand the database folder when first opening a connection
+                                    let db_folder_id = format!("conn:{}:schemas", id);
+                                    this.expanded_nodes.insert(db_folder_id);
+                                    cx.notify();
+                                }
                             }
                         }
-                    }
-                    "left" => {
-                        if let Some(id) = &this.selected_node {
-                            if this.expanded_nodes.contains(id) {
-                                this.expanded_nodes.remove(id);
-                                cx.notify();
-                            }
-                        } else if let Some(id) = &this.selected_connection {
-                            if this.expanded_connections.contains(id) {
-                                this.expanded_connections.remove(id);
-                                cx.notify();
+                        "left" => {
+                            if let Some(id) = &this.selected_node {
+                                if this.expanded_nodes.contains(id) {
+                                    this.expanded_nodes.remove(id);
+                                    cx.notify();
+                                }
+                            } else if let Some(id) = &this.selected_connection {
+                                if this.expanded_connections.contains(id) {
+                                    this.expanded_connections.remove(id);
+                                    cx.notify();
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                }
-            }))
-            .child(v_flex().children(children).text_sm().p_1().min_w_full())
-            .overflow_scrollbar()
+                }),
+            )
+            .child(
+                v_flex()
+                    .id("connection-panel-inner")
+                    .children(children)
+                    .text_sm()
+                    .p_1()
+                    .min_w_full(),
+            )
+            .overflow_scroll()
     }
 }
 

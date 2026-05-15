@@ -137,10 +137,11 @@ impl DdlGenerator for PostgresDdlGenerator {
 
         if let Some(ref definition) = func.definition {
             // pg_get_functiondef returns the full CREATE FUNCTION statement
-            if definition.ends_with(';') {
-                ddl.push_str(&format!("{}\n", definition));
+            let cleaned = definition.replace("$function$", "$$");
+            if cleaned.ends_with(';') {
+                ddl.push_str(&format!("{}\n", cleaned));
             } else {
-                ddl.push_str(&format!("{};\n", definition));
+                ddl.push_str(&format!("{};\n", cleaned));
             }
         } else if let Some(ref body) = func.body {
             // Reconstruct CREATE FUNCTION from components
