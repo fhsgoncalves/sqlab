@@ -16,9 +16,9 @@ use gpui_component::{
 
 use super::query_detector::{QueryRange, query_ranges_for_execution};
 use super::sql_completion::{SqlCompletionProvider, sql_diagnostics_at};
-use crate::data_source::manager::DataSourceManager;
 use crate::schema_cache;
 use crate::ui::search::{SearchOptions, TextMatch, find_text_matches};
+use zql_drivers_core::manager::DataSourceManager;
 
 actions!(
     editor,

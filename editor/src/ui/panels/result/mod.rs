@@ -16,11 +16,11 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::data_source::postgres::PostgresDataSource;
-use crate::data_source::{ColumnMetadata, DataSourceConfig, QueryResult};
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
+use zql_drivers_core::{ColumnMetadata, DataSourceConfig, QueryResult};
+use zql_drivers_postgres::PostgresDataSource;
 
 actions!(
     results_panel,

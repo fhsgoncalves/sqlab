@@ -16,13 +16,15 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::data_source::ddl::create_ddl_generator;
-use crate::data_source::manager::{DataSourceManager, IntrospectionStatus};
-use crate::data_source::{
-    ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind, create_data_source,
-};
+use crate::credentials;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
+use zql_drivers_core::ddl::create_ddl_generator;
+use zql_drivers_core::{
+    ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind,
+    manager::{DataSourceManager, IntrospectionStatus, create_data_source},
+};
+use zql_drivers_postgres::create_postgres_data_source;
 
 pub struct ConnectionPanel {
     manager: Entity<DataSourceManager>,
@@ -77,7 +79,12 @@ impl ConnectionPanel {
         cx: &mut Context<Self>,
     ) {
         let recovery_error = self.manager.update(cx, |manager, cx| {
-            let error = manager.ensure_password_loaded(&old_name).err();
+            let error = manager
+                .ensure_password_loaded(&old_name, |n| {
+                    credentials::load_password(n)
+                        .map_err(|e| credentials::recovery_error_message(&e))
+                })
+                .err();
             cx.notify();
             error
         });
@@ -228,6 +235,9 @@ impl ConnectionPanel {
                             } else {
                                 manager.add(config.clone());
                             }
+                            if let Err(e) = credentials::save_password(&config.name, &config.password) {
+                                manager.set_credential_error(&config.name, credentials::recovery_error_message(&e));
+                            }
                             let save_result = manager.save();
                             match &save_result {
                                 Ok(()) => manager.clear_credential_error(&name),
@@ -273,7 +283,12 @@ impl ConnectionPanel {
                     let name = name.clone();
                     move |_, window: &mut Window, cx: &mut App| {
                         let save_result = manager.update(cx, |manager, cx| {
-                            manager.remove(&name);
+                            manager.remove(
+                                &name,
+                                |config| schema_cache::cache_key(config),
+                                |key| schema_cache::clear(key).map_err(|e| e.to_string()),
+                                |n| credentials::delete_password(n).map_err(|e| e.to_string()),
+                            );
                             let save_result = manager.save();
                             cx.notify();
                             save_result.map_err(|error| error.to_string())
@@ -394,7 +409,7 @@ impl ConnectionPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut source = create_data_source(&config)?;
+                    let mut source = create_data_source(create_postgres_data_source, &config)?;
                     source.connect().await?;
                     let schema = source.introspect_schema().await?;
                     source.disconnect().await?;
@@ -430,7 +445,9 @@ impl ConnectionPanel {
             manager.set_active(Some(config_name.clone()));
             manager.set_status(&config_name, ConnectionStatus::Idle);
             manager.clear_last_error(&config_name);
-            if let Err(error) = manager.ensure_password_loaded(&config_name) {
+            if let Err(error) = manager.ensure_password_loaded(&config_name, |n| {
+                credentials::load_password(n).map_err(|e| credentials::recovery_error_message(&e))
+            }) {
                 manager.set_status(&config_name, ConnectionStatus::Failed);
                 manager.set_last_error(&config_name, error);
                 cx.notify();
@@ -456,7 +473,7 @@ impl ConnectionPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut source = create_data_source(&config)?;
+                    let mut source = create_data_source(create_postgres_data_source, &config)?;
                     source.connect().await?;
                     source.disconnect().await?;
                     Ok::<(), DataSourceError>(())
@@ -522,7 +539,7 @@ impl ConnectionPanel {
     fn build_schema_tree_items(
         connection_name: &str,
         database_name: &str,
-        schema: &crate::data_source::DatabaseSchema,
+        schema: &zql_drivers_core::DatabaseSchema,
         expanded: &HashSet<String>,
     ) -> Vec<TreeItem> {
         let mut root_items = Vec::new();
@@ -530,12 +547,10 @@ impl ConnectionPanel {
         // Group tables by schema and by kind
         let mut schema_tables: std::collections::HashMap<
             String,
-            Vec<&crate::data_source::TableInfo>,
+            Vec<&zql_drivers_core::TableInfo>,
         > = std::collections::HashMap::new();
-        let mut schema_views: std::collections::HashMap<
-            String,
-            Vec<&crate::data_source::TableInfo>,
-        > = std::collections::HashMap::new();
+        let mut schema_views: std::collections::HashMap<String, Vec<&zql_drivers_core::TableInfo>> =
+            std::collections::HashMap::new();
         for table in &schema.tables {
             if matches!(table.kind, TableKind::View | TableKind::MaterializedView) {
                 schema_views
@@ -552,7 +567,7 @@ impl ConnectionPanel {
 
         let mut schema_functions: std::collections::HashMap<
             String,
-            Vec<&crate::data_source::FunctionInfo>,
+            Vec<&zql_drivers_core::FunctionInfo>,
         > = std::collections::HashMap::new();
         for func in &schema.functions {
             schema_functions
@@ -563,7 +578,7 @@ impl ConnectionPanel {
 
         let mut schema_sequences: std::collections::HashMap<
             String,
-            Vec<&crate::data_source::SequenceInfo>,
+            Vec<&zql_drivers_core::SequenceInfo>,
         > = std::collections::HashMap::new();
         for seq in &schema.sequences {
             schema_sequences
@@ -574,7 +589,7 @@ impl ConnectionPanel {
 
         let mut schema_indexes: std::collections::HashMap<
             String,
-            Vec<&crate::data_source::IndexInfo>,
+            Vec<&zql_drivers_core::IndexInfo>,
         > = std::collections::HashMap::new();
         for idx in &schema.indexes {
             schema_indexes
@@ -585,7 +600,7 @@ impl ConnectionPanel {
 
         let mut schema_triggers: std::collections::HashMap<
             String,
-            Vec<&crate::data_source::TriggerInfo>,
+            Vec<&zql_drivers_core::TriggerInfo>,
         > = std::collections::HashMap::new();
         for trig in &schema.triggers {
             schema_triggers
@@ -948,7 +963,7 @@ impl ConnectionPanel {
     fn generate_ddl_for_node(
         node_id: &str,
         _label: &str,
-        schema: &crate::data_source::DatabaseSchema,
+        schema: &zql_drivers_core::DatabaseSchema,
     ) -> Option<String> {
         let generator = create_ddl_generator(schema.db_type);
 
@@ -1067,7 +1082,7 @@ impl ConnectionPanel {
     fn schema_node_context_menu(
         node_id: String,
         _label: String,
-        schema: crate::data_source::DatabaseSchema,
+        schema: zql_drivers_core::DatabaseSchema,
     ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
         move |menu, _window, _cx| {
             let ddl_node_id = node_id.clone();

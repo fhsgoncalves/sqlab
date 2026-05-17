@@ -12,8 +12,7 @@ use rustls::ClientConfig;
 use tokio::runtime::Runtime;
 use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Client, Row};
-
-use crate::data_source::{
+use zql_drivers_core::{
     ColumnInfo, ColumnMetadata, DataSource, DataSourceConfig, DataSourceError, Database,
     DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
     TableInfo, TableKind, TriggerInfo,
@@ -587,6 +586,13 @@ impl DataSource for PostgresDataSource {
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError> {
         self.introspect_schema_blocking()
     }
+}
+
+/// Factory function for creating a PostgresDataSource
+pub fn create_postgres_data_source(
+    config: &DataSourceConfig,
+) -> Result<Box<dyn DataSource>, DataSourceError> {
+    Ok(Box::new(PostgresDataSource::new(config.clone())?))
 }
 
 fn make_rustls_connector() -> Result<MakeTlsConnector, DataSourceError> {

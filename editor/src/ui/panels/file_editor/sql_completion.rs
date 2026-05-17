@@ -11,9 +11,9 @@ use lsp_types::{
 };
 use serde_json::json;
 
-use crate::data_source::manager::DataSourceManager;
-use crate::data_source::{DataSourceConfig, Database, DatabaseSchema, TableInfo};
 use crate::schema_cache;
+use zql_drivers_core::manager::DataSourceManager;
+use zql_drivers_core::{DataSourceConfig, Database, DatabaseSchema, TableInfo};
 
 const SQL_KEYWORDS: &[&str] = &[
     "select",
@@ -1363,7 +1363,7 @@ fn limit_items(mut items: Vec<ScoredCompletion>) -> Vec<CompletionItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_source::{ColumnInfo, TableKind};
+    use zql_drivers_core::{ColumnInfo, TableKind};
 
     #[test]
     fn detects_table_reference_scope_with_partial_prefix() {

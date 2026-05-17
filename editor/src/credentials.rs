@@ -26,11 +26,18 @@ pub fn recovery_error_message(error: &CredentialError) -> String {
     )
 }
 
-pub fn saving_error_message(error: &CredentialError) -> String {
-    format!(
-        "Password saving failed because zql could not access the system keychain.\n\n{}",
-        error
-    )
+pub fn save_password(account: &str, password: &str) -> Result<(), CredentialError> {
+    if account.is_empty() {
+        return Ok(());
+    }
+
+    let mut passwords = load_passwords()?;
+    if password.is_empty() {
+        passwords.remove(account);
+    } else {
+        passwords.insert(account.to_string(), password.to_string());
+    }
+    save_password_map(passwords)
 }
 
 pub fn load_password(account: &str) -> Result<Option<String>, CredentialError> {
@@ -58,20 +65,6 @@ pub fn load_passwords() -> Result<HashMap<String, String>, CredentialError> {
 
     *password_cache().lock().expect("password cache poisoned") = Some(passwords.clone());
     Ok(passwords)
-}
-
-pub fn save_passwords_from_configs<'a>(
-    configs: impl IntoIterator<Item = (&'a str, &'a str)>,
-) -> Result<(), CredentialError> {
-    let mut passwords = load_passwords()?;
-
-    for (account, password) in configs {
-        if !account.is_empty() && !password.is_empty() {
-            passwords.insert(account.to_string(), password.to_string());
-        }
-    }
-
-    save_password_map(passwords)
 }
 
 pub fn delete_password(account: &str) -> Result<(), CredentialError> {

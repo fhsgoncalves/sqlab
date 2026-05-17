@@ -1,7 +1,5 @@
 pub mod ddl;
 pub mod manager;
-pub mod postgres;
-pub use manager::create_data_source;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

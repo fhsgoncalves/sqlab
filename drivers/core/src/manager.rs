@@ -1,12 +1,6 @@
 use std::collections::HashMap;
 
-use crate::config::Config;
-use crate::credentials;
-use crate::data_source::postgres::PostgresDataSource;
-use crate::data_source::{
-    ConnectionStatus, DataSource, DataSourceConfig, DataSourceError, Database,
-};
-use crate::schema_cache::{self, cache_key};
+use crate::{ConnectionStatus, DataSource, DataSourceConfig, DataSourceError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntrospectionStatus {
@@ -28,7 +22,7 @@ pub struct DataSourceManager {
 
 impl DataSourceManager {
     pub fn load() -> anyhow::Result<Self> {
-        let config = Config::load()?;
+        let config = crate::manager::Config::load()?;
         Ok(Self {
             configs: config.data_sources,
             active_name: None,
@@ -53,7 +47,7 @@ impl DataSourceManager {
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
-        Config {
+        crate::manager::Config {
             data_sources: self.configs.clone(),
         }
         .save()
@@ -122,7 +116,11 @@ impl DataSourceManager {
         self.global_credential_error = None;
     }
 
-    pub fn ensure_password_loaded(&mut self, name: &str) -> Result<(), String> {
+    pub fn ensure_password_loaded(
+        &mut self,
+        name: &str,
+        load_password: impl Fn(&str) -> Result<Option<String>, String>,
+    ) -> Result<(), String> {
         let Some(config) = self.configs.iter_mut().find(|config| config.name == name) else {
             return Ok(());
         };
@@ -132,7 +130,7 @@ impl DataSourceManager {
             return Ok(());
         }
 
-        match credentials::load_password(name) {
+        match load_password(name) {
             Ok(Some(password)) => {
                 config.password = password;
                 self.clear_credential_error(name);
@@ -145,9 +143,8 @@ impl DataSourceManager {
                 Ok(())
             }
             Err(error) => {
-                let message = credentials::recovery_error_message(&error);
-                self.set_credential_error(name, message.clone());
-                Err(message)
+                self.set_credential_error(name, error.clone());
+                Err(error)
             }
         }
     }
@@ -164,7 +161,7 @@ impl DataSourceManager {
     }
 
     pub fn add(&mut self, config: DataSourceConfig) {
-        self.remove(&config.name);
+        self.remove_internal(&config.name);
         self.configs.push(config);
     }
 
@@ -172,7 +169,7 @@ impl DataSourceManager {
         let was_active = self.active_name.as_deref() == Some(old_name);
         let old_status = self.status(old_name);
 
-        self.remove(old_name);
+        self.remove_internal(old_name);
         self.add(config.clone());
 
         if was_active {
@@ -181,23 +178,33 @@ impl DataSourceManager {
         }
     }
 
-    pub fn remove(&mut self, name: &str) {
-        if let Some(config) = self.configs.iter().find(|c| c.name == name) {
-            let key = cache_key(config);
-            if let Err(e) = schema_cache::clear(&key) {
-                eprintln!("failed to clear schema cache for {}: {}", name, e);
-            }
-        }
+    fn remove_internal(&mut self, name: &str) {
         self.configs.retain(|config| config.name != name);
         self.statuses.remove(name);
         self.introspection_statuses.remove(name);
         self.last_errors.remove(name);
         self.credential_errors.remove(name);
-        if let Err(e) = credentials::delete_password(name) {
-            eprintln!("failed to delete keychain password for {}: {}", name, e);
-        }
         if self.active_name.as_deref() == Some(name) {
             self.active_name = None;
+        }
+    }
+
+    pub fn remove(
+        &mut self,
+        name: &str,
+        cache_key: impl Fn(&DataSourceConfig) -> String,
+        clear_cache: impl Fn(&str) -> Result<(), String>,
+        delete_password: impl Fn(&str) -> Result<(), String>,
+    ) {
+        if let Some(config) = self.configs.iter().find(|c| c.name == name) {
+            let key = cache_key(config);
+            if let Err(e) = clear_cache(&key) {
+                eprintln!("failed to clear schema cache for {}: {}", name, e);
+            }
+        }
+        self.remove_internal(name);
+        if let Err(e) = delete_password(name) {
+            eprintln!("failed to delete keychain password for {}: {}", name, e);
         }
     }
 
@@ -229,10 +236,59 @@ impl DataSourceManager {
     }
 }
 
+/// Type alias for the factory function that creates a DataSource
+pub type DataSourceFactory = fn(&DataSourceConfig) -> Result<Box<dyn DataSource>, DataSourceError>;
+
+/// Creates a data source using the provided factory function
 pub fn create_data_source(
+    factory: DataSourceFactory,
     config: &DataSourceConfig,
 ) -> Result<Box<dyn DataSource>, DataSourceError> {
-    match config.db_type {
-        Database::Postgres => Ok(Box::new(PostgresDataSource::new(config.clone())?)),
+    factory(config)
+}
+
+// Re-export Config for manager operations
+mod config {
+    use serde::{Deserialize, Serialize};
+    use std::path::PathBuf;
+
+    use crate::DataSourceConfig;
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct Config {
+        #[serde(default)]
+        pub data_sources: Vec<DataSourceConfig>,
+    }
+
+    impl Config {
+        pub fn path() -> PathBuf {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".zql")
+                .join("config.toml")
+        }
+
+        pub fn load() -> anyhow::Result<Self> {
+            let path = Self::path();
+            if path.exists() {
+                let content = std::fs::read_to_string(&path)?;
+                let config: Self = toml::from_str(&content)?;
+                Ok(config)
+            } else {
+                Ok(Self::default())
+            }
+        }
+
+        pub fn save(&self) -> anyhow::Result<()> {
+            let path = Self::path();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, toml::to_string_pretty(self)?)?;
+            Ok(())
+        }
     }
 }
+
+pub use config::Config;

@@ -1,0 +1,52 @@
+[package]
+name = "zql"
+version = "0.1.0"
+edition = "2024"
+description = "A SQL editor written in Rust using GPUI."
+repository = "https://github.com/fhsgoncalves/zql"
+
+[package.metadata.bundle]
+name = "zql"
+identifier = "io.github.fhsgoncalves.zql"
+icon = ["assets/app-icon.svg", "assets/app-icon.icns"]
+category = "Developer Tool"
+short_description = "A SQL editor written in Rust using GPUI."
+long_description = """
+zql is a SQL editor written in Rust using GPUI.
+"""
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration", features = ["tree-sitter-sql"] }
+gpui-component-assets = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration" }
+zql-drivers-core = { path = "../drivers/core" }
+zql-drivers-postgres = { path = "../drivers/postgres" }
+image = "0.25.1"
+keyring-core = "1"
+tree-sitter = "0.26"
+tree-sitter-sequel = "0.3.8"
+rusqlite = { workspace = true }
+rust-embed = "8"
+alacritty_terminal = "0.25"
+async-channel = "2"
+nucleo = "0.5"
+ignore = "0.4"
+regex = "1.12.3"
+lsp-types = "0.97"
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }

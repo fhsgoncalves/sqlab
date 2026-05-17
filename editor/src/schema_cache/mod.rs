@@ -6,14 +6,12 @@ use std::hash::{Hash, Hasher};
 
 use rusqlite::params;
 
-use crate::data_source::DataSourceConfig;
-use crate::data_source::Database;
-use crate::data_source::DatabaseSchema;
 use crate::schema_cache::db::with_conn;
 use crate::schema_cache::models::{
     ColumnRow, ForeignKeyRow, FunctionRow, IndexRow, SchemaRow, SequenceRow, TableRow, TriggerRow,
     rows_to_schema, schema_to_rows,
 };
+use zql_drivers_core::{DataSourceConfig, Database, DatabaseSchema};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaCacheError {

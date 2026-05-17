@@ -8531,7 +8531,6 @@ dependencies = [
  "anyhow",
  "apple-native-keyring-store",
  "async-channel 2.5.0",
- "async-trait",
  "chrono",
  "gpui",
  "gpui-component",
@@ -8542,23 +8541,50 @@ dependencies = [
  "keyring-core",
  "lsp-types",
  "nucleo",
- "postgres_rustls",
  "regex",
  "rusqlite",
  "rust-embed",
- "rustls",
- "rustls-native-certs 0.7.3",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
- "tokio",
- "tokio-postgres",
  "toml 0.8.23",
  "tree-sitter",
  "tree-sitter-sequel",
  "uuid",
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
+ "zql-drivers-core",
+ "zql-drivers-postgres",
+]
+
+[[package]]
+name = "zql-drivers-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "toml 0.8.23",
+ "uuid",
+]
+
+[[package]]
+name = "zql-drivers-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "postgres_rustls",
+ "rustls",
+ "rustls-native-certs 0.7.3",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+ "zql-drivers-core",
 ]
 
 [[package]]

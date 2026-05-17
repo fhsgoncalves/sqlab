@@ -1,4 +1,4 @@
-use crate::data_source::{
+use zql_drivers_core::{
     ColumnInfo, Database, DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, SchemaInfo,
     SequenceInfo, TableInfo, TableKind, TriggerInfo,
 };

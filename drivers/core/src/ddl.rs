@@ -1,6 +1,6 @@
-use crate::data_source::{
-    ColumnInfo, DatabaseSchema, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo, TableInfo,
-    TableKind, TriggerInfo,
+use crate::{
+    ColumnInfo, Database, DatabaseSchema, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo,
+    TableInfo, TableKind, TriggerInfo,
 };
 
 /// Trait for generating DDL statements for database objects.
@@ -477,16 +477,15 @@ fn qualified_name(schema: &str, name: &str) -> String {
 }
 
 /// DDL generator factory based on database type.
-pub fn create_ddl_generator(db_type: crate::data_source::Database) -> Box<dyn DdlGenerator> {
+pub fn create_ddl_generator(db_type: Database) -> Box<dyn DdlGenerator> {
     match db_type {
-        crate::data_source::Database::Postgres => Box::new(PostgresDdlGenerator),
+        Database::Postgres => Box::new(PostgresDdlGenerator),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_source::Database;
 
     #[test]
     fn test_quote_identifier_simple() {

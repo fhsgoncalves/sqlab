@@ -15,10 +15,6 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::data_source::manager::DataSourceManager;
-use crate::data_source::{
-    ColumnMetadata, ConnectionStatus, DataSourceError, QueryResult, create_data_source,
-};
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::bottom_panel::{BottomPanel, BottomPanelMode, ToggleBottomPanelMode};
 use crate::ui::panels::connection::ConnectionPanel;
@@ -30,6 +26,11 @@ use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEven
 use crate::ui::panels::project_search::{ProjectSearch, ProjectSearchEvent, ToggleProjectSearch};
 use crate::ui::panels::result::ResultPanel;
 use crate::ui::panels::terminal::TerminalPanel;
+use zql_drivers_core::{
+    ColumnMetadata, ConnectionStatus, DataSourceError, QueryResult,
+    manager::{DataSourceManager, create_data_source},
+};
+use zql_drivers_postgres::create_postgres_data_source;
 
 actions!(workspace, [OpenFolder, ToggleSearchReplace]);
 
@@ -450,7 +451,7 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut source = create_data_source(&config)?;
+                    let mut source = create_data_source(create_postgres_data_source, &config)?;
                     source.connect().await?;
                     let result = source.execute_query(&query_for_task).await;
                     source.disconnect().await?;
