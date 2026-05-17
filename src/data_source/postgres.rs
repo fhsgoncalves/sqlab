@@ -14,9 +14,9 @@ use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Client, Row};
 
 use crate::data_source::{
-    ColumnInfo, DataSource, DataSourceConfig, DataSourceError, Database, DatabaseSchema,
-    ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo, TableInfo,
-    TableKind, TriggerInfo,
+    ColumnInfo, ColumnMetadata, DataSource, DataSourceConfig, DataSourceError, Database,
+    DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
+    TableInfo, TableKind, TriggerInfo,
 };
 
 pub struct PostgresDataSource {
@@ -94,17 +94,24 @@ impl PostgresDataSource {
     ) -> Result<QueryResult, DataSourceError> {
         let client = self.client.as_ref().ok_or(DataSourceError::NotConnected)?;
         let start = Instant::now();
-        let (columns, rows) = self
+        let (columns, column_metadata, rows) = self
             .runtime
             .block_on(async {
                 let statement = client.prepare(query).await?;
-                let columns = statement
+                let column_metadata: Vec<ColumnMetadata> = statement
                     .columns()
                     .iter()
-                    .map(|column| column.name().to_string())
-                    .collect::<Vec<_>>();
+                    .map(|column| ColumnMetadata {
+                        name: column.name().to_string(),
+                        data_type: column.type_().name().to_string(),
+                        is_pk: false,
+                        is_fk: false,
+                    })
+                    .collect();
+                let columns: Vec<String> =
+                    column_metadata.iter().map(|cm| cm.name.clone()).collect();
                 let rows = client.query(&statement, &[]).await?;
-                Ok::<_, tokio_postgres::Error>((columns, rows))
+                Ok::<_, tokio_postgres::Error>((columns, column_metadata, rows))
             })
             .map_err(|e| DataSourceError::QueryFailed(format_postgres_error(e)))?;
 
@@ -117,6 +124,7 @@ impl PostgresDataSource {
 
         Ok(QueryResult {
             columns,
+            column_metadata,
             rows,
             row_count,
             execution_time_ms: start.elapsed().as_millis(),

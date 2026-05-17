@@ -16,7 +16,9 @@ use gpui_component::{
 };
 
 use crate::data_source::manager::DataSourceManager;
-use crate::data_source::{ConnectionStatus, DataSourceError, QueryResult, create_data_source};
+use crate::data_source::{
+    ColumnMetadata, ConnectionStatus, DataSourceError, QueryResult, create_data_source,
+};
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::bottom_panel::{BottomPanel, BottomPanelMode, ToggleBottomPanelMode};
 use crate::ui::panels::connection::ConnectionPanel;
@@ -843,6 +845,12 @@ fn error_result(error: DataSourceError) -> QueryResult {
     };
     QueryResult {
         columns: vec!["error".into()],
+        column_metadata: vec![ColumnMetadata {
+            name: "error".into(),
+            data_type: "text".into(),
+            is_pk: false,
+            is_fk: false,
+        }],
         rows: vec![vec![error_msg]],
         row_count: 1,
         execution_time_ms: 0,

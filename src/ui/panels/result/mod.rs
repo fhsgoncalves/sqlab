@@ -17,7 +17,8 @@ use gpui_component::{
 };
 
 use crate::data_source::postgres::PostgresDataSource;
-use crate::data_source::{DataSourceConfig, QueryResult};
+use crate::data_source::{ColumnMetadata, DataSourceConfig, QueryResult};
+use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 
@@ -42,6 +43,7 @@ pub struct ResultPanel {
 #[derive(Clone)]
 pub struct ResultsTableDelegate {
     pub columns: Vec<String>,
+    pub column_metadata: Vec<ColumnMetadata>,
     pub rows: Vec<Vec<String>>,
 }
 
@@ -58,6 +60,42 @@ impl TableDelegate for ResultsTableDelegate {
         Column::new(&self.columns[col_ix], &self.columns[col_ix])
             .width(gpui::px(140.))
             .sortable()
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let meta = self.column_metadata.get(col_ix);
+        let is_pk = meta.map(|m| m.is_pk).unwrap_or(false);
+        let is_fk = meta.map(|m| m.is_fk).unwrap_or(false);
+        let data_type = meta.map(|m| m.data_type.clone()).unwrap_or_default();
+
+        let muted = cx.theme().muted_foreground;
+        let foreground = cx.theme().foreground;
+
+        h_flex()
+            .size_full()
+            .gap_1()
+            .children(if is_pk {
+                Some(div().text_color(muted).child("★"))
+            } else if is_fk {
+                Some(div().text_color(muted).text_xs().child("→"))
+            } else {
+                None
+            })
+            .child(
+                div()
+                    .text_color(foreground)
+                    .child(self.columns[col_ix].clone()),
+            )
+            .children(if !data_type.is_empty() {
+                Some(div().text_color(muted).text_xs().child(data_type))
+            } else {
+                None
+            })
     }
 
     fn perform_sort(
@@ -119,6 +157,7 @@ impl ResultPanel {
     ) -> Self {
         let delegate = ResultsTableDelegate {
             columns: Vec::new(),
+            column_metadata: Vec::new(),
             rows: Vec::new(),
         };
         let table_state = cx.new(|cx| {
@@ -192,6 +231,7 @@ impl ResultPanel {
                     "shown".into(),
                     "time_ms".into(),
                 ],
+                column_metadata: vec![],
                 rows: self
                     .executions
                     .iter()
@@ -216,8 +256,13 @@ impl ResultPanel {
             }
         } else {
             let execution = &self.executions[self.active_tab - 1];
+            let enriched_metadata = enrich_column_metadata(
+                execution.config.as_ref(),
+                execution.result.column_metadata.clone(),
+            );
             ResultsTableDelegate {
                 columns: execution.result.columns.clone(),
+                column_metadata: enriched_metadata,
                 rows: execution.result.rows.clone(),
             }
         };
@@ -703,4 +748,45 @@ fn truncate_query(query: &str, max_chars: usize) -> String {
         truncated.push_str("...");
         truncated
     }
+}
+
+fn enrich_column_metadata(
+    config: Option<&DataSourceConfig>,
+    metadata: Vec<ColumnMetadata>,
+) -> Vec<ColumnMetadata> {
+    let Some(config) = config else {
+        return metadata;
+    };
+
+    let cache_key = schema_cache::cache_key(config);
+    let Ok(Some(schema)) = schema_cache::load(&cache_key) else {
+        return metadata;
+    };
+
+    let mut pk_columns = std::collections::HashSet::new();
+    let mut fk_columns = std::collections::HashSet::new();
+
+    for table in &schema.tables {
+        for col in &table.columns {
+            if col.is_pk {
+                pk_columns.insert(col.name.clone());
+            }
+            if col.is_fk {
+                fk_columns.insert(col.name.clone());
+            }
+        }
+    }
+
+    metadata
+        .into_iter()
+        .map(|mut m| {
+            if pk_columns.contains(&m.name) {
+                m.is_pk = true;
+            }
+            if fk_columns.contains(&m.name) {
+                m.is_fk = true;
+            }
+            m
+        })
+        .collect()
 }

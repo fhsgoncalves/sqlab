@@ -99,8 +99,17 @@ fn default_postgres_schema() -> String {
 }
 
 #[derive(Debug, Clone)]
+pub struct ColumnMetadata {
+    pub name: String,
+    pub data_type: String,
+    pub is_pk: bool,
+    pub is_fk: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct QueryResult {
     pub columns: Vec<String>,
+    pub column_metadata: Vec<ColumnMetadata>,
     pub rows: Vec<Vec<String>>,
     pub row_count: usize,
     pub execution_time_ms: u128,

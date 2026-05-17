@@ -48,7 +48,7 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 ## Roadmap
 
 - [ ] App distribution
-- [ ] Show type information on data table columns (result panel)
+- [ ] Better marketing (focus on query detector + file editor + terminal for git versioning and coding agents)
 - [ ] Export results to more formats
 - [ ] Copy selected content as CSV / JSON
 - [ ] Allow in-place editing in the data table
