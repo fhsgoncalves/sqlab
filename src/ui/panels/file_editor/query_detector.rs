@@ -232,14 +232,43 @@ fn procedural_block_contains_cursor(text: &str, query: &QueryRange, cursor: usiz
         break;
     }
 
-    cursor <= terminator_end
-        || text
-            .get(query.trimmed_range.end..cursor)
-            .is_some_and(|gap| {
-                gap.trim_start()
-                    .strip_prefix(';')
-                    .is_some_and(|after_semicolon| after_semicolon.chars().all(char::is_whitespace))
-            })
+    if cursor <= terminator_end {
+        return true;
+    }
+
+    let Some(gap) = text.get(query.trimmed_range.end..cursor) else {
+        return false;
+    };
+
+    let Some(gap_after_semicolon) = gap.trim_start().strip_prefix(';') else {
+        return false;
+    };
+
+    if !gap_after_semicolon.chars().all(char::is_whitespace) {
+        return false;
+    }
+
+    let after_cursor = text.get(cursor..).unwrap_or_default().trim_start();
+    if let Some(keyword) = first_keyword(after_cursor) {
+        return !matches!(
+            keyword,
+            "select"
+                | "with"
+                | "insert"
+                | "update"
+                | "delete"
+                | "create"
+                | "drop"
+                | "alter"
+                | "truncate"
+                | "grant"
+                | "begin"
+                | "commit"
+                | "rollback"
+        );
+    }
+
+    true
 }
 
 fn current_line(text: &str, cursor: usize) -> &str {
@@ -1448,5 +1477,46 @@ SELECT 1;"#;
         assert_eq!(queries.len(), 2);
         assert!(queries[0].text.contains("CREATE FUNCTION"));
         assert_eq!(queries[1].text, "SELECT 1");
+    }
+
+    #[test]
+    fn selects_query_after_function_not_function_itself() {
+        let text = r#"CREATE OR REPLACE FUNCTION "public".armor(bytea, text[], text[])
+RETURNS text
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Function body not available
+END;
+$$;
+
+select
+    n.nspname as schema_name,
+    p.proname as function_name,
+    l.lanname as language,
+    p.prosrc as body,
+    p.probin as library
+from pg_catalog.pg_proc p
+join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+join pg_catalog.pg_language l on l.oid = p.prolang
+where n.nspname !~ '^pg_'
+  and n.nspname <> 'information_schema'
+  and (n.nspname = 'public')
+order by n.nspname, p.proname;"#;
+
+        let cursor = text.find("select\n").unwrap();
+        let queries = query_ranges_for_execution(text, cursor);
+
+        assert!(!queries.is_empty(), "got: {queries:?}");
+        assert!(
+            queries[0].text.contains("n.nspname"),
+            "expected select query, got: {}",
+            queries[0].text
+        );
+        assert!(
+            !queries[0].text.contains("CREATE OR REPLACE FUNCTION"),
+            "should not include function, got: {}",
+            queries[0].text
+        );
     }
 }
