@@ -4,6 +4,8 @@ A fast, native SQL editor built in Rust using [GPUI](https://www.gpui.rs) — th
 
 > **Note:** This is a hobby project and it is actively being built using **Spec-Driven Development** powered by coding agents.
 
+The long-term goal is to provide a fully open-source alternative to DBeaver and DataGrip, supporting any databases with great performance and awesome experience.
+
 ## Install
 
 ```bash
@@ -46,14 +48,16 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 ## Roadmap
 
 - [ ] App distribution
-- [ ] Find text (using fuzzy search - https://github.com/skim-rs/skim)
 - [ ] Show type information on data table columns (result panel)
 - [ ] Export results to more formats
 - [ ] Copy selected content as CSV / JSON
 - [ ] Allow in-place editing in the data table
 - [ ] Refactor connection panel layout (IntelliJ-style)
+- [ ] Support diagrams
 - [ ] Support MySQL
 - [ ] Support SQLite
+- [ ] Support duckdb
+- [ ] Support Databend
 
 ## Tech Stack
 
@@ -63,6 +67,11 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 - **tree-sitter-sql** — syntax highlighting
 - **tokio / tokio-postgres** — async PostgreSQL driver
 - **rustls** — TLS for database connections
+
+## Alternative projects
+
+- [dbflux](https://github.com/0xErwin1/dbflux)
+- [zqlz](https://github.com/samurmaykrr/zqlz)
 
 ## License
 

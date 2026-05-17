@@ -1,8 +1,8 @@
 use chrono::Local;
 use gpui::{
     App, AppContext, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, actions,
-    div, rgb,
+    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, actions, div, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
@@ -21,7 +21,10 @@ use crate::data_source::{DataSourceConfig, QueryResult};
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 
-actions!(results_panel, [CopyResultSelection, CycleTabForward, CycleTabBackward]);
+actions!(
+    results_panel,
+    [CopyResultSelection, CycleTabForward, CycleTabBackward]
+);
 
 pub struct ResultPanel {
     focus_handle: FocusHandle,
@@ -364,14 +367,21 @@ impl ResultPanel {
         cx: &mut Context<Self>,
     ) {
         if self.executions.len() + 1 > 1 {
-            self.active_tab = (self.active_tab + self.executions.len()) % (self.executions.len() + 1);
+            self.active_tab =
+                (self.active_tab + self.executions.len()) % (self.executions.len() + 1);
             self.rebuild_table(window, cx);
             cx.notify();
             window.focus(&self.focus_handle, cx);
         }
     }
 
-    fn reorder_tab(&mut self, from_ix: usize, to_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn reorder_tab(
+        &mut self,
+        from_ix: usize,
+        to_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if from_ix >= self.executions.len() || to_ix >= self.executions.len() || from_ix == to_ix {
             return;
         }

@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions, div, prelude::FluentBuilder,
-    px, rgb,
+    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions, div,
+    prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, IconName, Sizable,
@@ -62,6 +62,22 @@ impl EditorTabs {
         cx.notify();
     }
 
+    pub fn open_file_at_position(
+        &mut self,
+        path: PathBuf,
+        line_number: usize,
+        column: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_file(path, window, cx);
+        if let Some(editor) = self.editors.get(self.active_ix) {
+            editor.update(cx, |editor, cx| {
+                editor.go_to_position(line_number, column, window, cx);
+            });
+        }
+    }
+
     fn close_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix < self.editors.len() {
             self.editors.remove(ix);
@@ -82,7 +98,20 @@ impl EditorTabs {
         self.editors.get(self.active_ix)
     }
 
-    fn cycle_tab_forward(&mut self, _: &CycleTabForward, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_replace_in_active_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.editors.get(self.active_ix) {
+            editor.update(cx, |editor, cx| {
+                editor.toggle_search_replace(window, cx);
+            });
+        }
+    }
+
+    fn cycle_tab_forward(
+        &mut self,
+        _: &CycleTabForward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.editors.len() > 1 {
             self.active_ix = (self.active_ix + 1) % self.editors.len();
             cx.notify();
@@ -93,7 +122,12 @@ impl EditorTabs {
         }
     }
 
-    fn cycle_tab_backward(&mut self, _: &CycleTabBackward, window: &mut Window, cx: &mut Context<Self>) {
+    fn cycle_tab_backward(
+        &mut self,
+        _: &CycleTabBackward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.editors.len() > 1 {
             self.active_ix = (self.active_ix + self.editors.len() - 1) % self.editors.len();
             cx.notify();

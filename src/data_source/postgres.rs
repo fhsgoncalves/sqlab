@@ -425,7 +425,9 @@ impl PostgresDataSource {
             let is_fk = fk_set.contains(&(schema.clone(), table_name.clone(), column_name.clone()));
 
             let default_value: Option<String> = row.get("column_default");
-            let attgenerated: String = row.get::<_, Option<String>>("attgenerated").unwrap_or_default();
+            let attgenerated: String = row
+                .get::<_, Option<String>>("attgenerated")
+                .unwrap_or_default();
             let is_generated = !attgenerated.is_empty();
             let generation_expression = if is_generated {
                 default_value.clone()
@@ -465,10 +467,16 @@ impl PostgresDataSource {
             .map(|row| FunctionInfo {
                 schema: row.get("schema_name"),
                 name: row.get("function_name"),
-                arguments: row.get::<_, Option<String>>("arguments").unwrap_or_default(),
-                return_type: row.get::<_, Option<String>>("return_type").unwrap_or_default(),
+                arguments: row
+                    .get::<_, Option<String>>("arguments")
+                    .unwrap_or_default(),
+                return_type: row
+                    .get::<_, Option<String>>("return_type")
+                    .unwrap_or_default(),
                 definition: row.get("definition"),
-                language: row.get::<_, Option<String>>("language").unwrap_or_else(|| "unknown".to_string()),
+                language: row
+                    .get::<_, Option<String>>("language")
+                    .unwrap_or_else(|| "unknown".to_string()),
                 body: row.get("body"),
                 library: row.get("library"),
                 owner: row.get::<_, Option<String>>("owner").unwrap_or_default(),

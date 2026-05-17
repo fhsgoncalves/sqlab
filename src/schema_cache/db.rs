@@ -146,11 +146,8 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         [],
     )
     .ok();
-    conn.execute(
-        "ALTER TABLE columns ADD COLUMN default_value TEXT",
-        [],
-    )
-    .ok();
+    conn.execute("ALTER TABLE columns ADD COLUMN default_value TEXT", [])
+        .ok();
     conn.execute(
         "ALTER TABLE columns ADD COLUMN is_generated INTEGER NOT NULL DEFAULT 0",
         [],
@@ -161,35 +158,19 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         [],
     )
     .ok();
-    conn.execute(
-        "ALTER TABLE functions ADD COLUMN definition TEXT",
-        [],
-    )
-    .ok();
-    conn.execute(
-        "ALTER TABLE functions ADD COLUMN language TEXT",
-        [],
-    )
-    .ok();
-    conn.execute(
-        "ALTER TABLE functions ADD COLUMN body TEXT",
-        [],
-    )
-    .ok();
-    conn.execute(
-        "ALTER TABLE functions ADD COLUMN library TEXT",
-        [],
-    )
-    .ok();
-    conn.execute(
-        "ALTER TABLE functions ADD COLUMN owner TEXT",
-        [],
-    )
-    .ok();
+    conn.execute("ALTER TABLE functions ADD COLUMN definition TEXT", [])
+        .ok();
+    conn.execute("ALTER TABLE functions ADD COLUMN language TEXT", [])
+        .ok();
+    conn.execute("ALTER TABLE functions ADD COLUMN body TEXT", [])
+        .ok();
+    conn.execute("ALTER TABLE functions ADD COLUMN library TEXT", [])
+        .ok();
+    conn.execute("ALTER TABLE functions ADD COLUMN owner TEXT", [])
+        .ok();
 
     // Migrate functions table to ensure arguments is NOT NULL (fixes overloaded function support)
-    conn.execute("DROP TABLE IF EXISTS functions_new", [])
-    .ok();
+    conn.execute("DROP TABLE IF EXISTS functions_new", []).ok();
     conn.execute(
         "CREATE TABLE functions_new (
             connection_key TEXT NOT NULL,
@@ -212,10 +193,9 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         [],
     )
     .ok();
-    conn.execute("DROP TABLE IF EXISTS functions", [])
-    .ok();
+    conn.execute("DROP TABLE IF EXISTS functions", []).ok();
     conn.execute("ALTER TABLE functions_new RENAME TO functions", [])
-    .ok();
+        .ok();
 
     Ok(())
 }

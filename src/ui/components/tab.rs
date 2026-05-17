@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext, ClickEvent, InteractiveElement, IntoElement, MouseButton, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    AnyElement, App, AppContext, ClickEvent, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, h_flex};
@@ -95,7 +95,10 @@ impl Tab {
         self
     }
 
-    pub fn on_tab_drop(mut self, on_tab_drop: impl Fn(usize, usize, &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_tab_drop(
+        mut self,
+        on_tab_drop: impl Fn(usize, usize, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_tab_drop = Some(Rc::new(on_tab_drop));
         self
     }
@@ -211,9 +214,7 @@ impl RenderOnce for Tab {
                 .on_drop(move |dragged: &TabDragData, window, cx| {
                     on_tab_drop(dragged.0, tab_index, window, cx);
                 })
-                .drag_over(|style, _: &TabDragData, _, cx| {
-                    style.bg(cx.theme().accent.opacity(0.3))
-                })
+                .drag_over(|style, _: &TabDragData, _, cx| style.bg(cx.theme().accent.opacity(0.3)))
             })
     }
 }
@@ -268,7 +269,10 @@ impl TabBar {
         self
     }
 
-    pub fn on_reorder(mut self, on_reorder: impl Fn(&(usize, usize), &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_reorder(
+        mut self,
+        on_reorder: impl Fn(&(usize, usize), &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_reorder = Some(Rc::new(on_reorder));
         self
     }

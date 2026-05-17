@@ -30,7 +30,10 @@ use gpui_component::{
 
 use crate::ui::components::tab::{Tab, TabBar};
 
-actions!(terminal_panel, [NewTerminalTab, CycleTabForward, CycleTabBackward]);
+actions!(
+    terminal_panel,
+    [NewTerminalTab, CycleTabForward, CycleTabBackward]
+);
 
 const CELL_WIDTH: f32 = 9.0;
 const CELL_HEIGHT: f32 = 18.0;
@@ -128,7 +131,10 @@ impl ScrollbarHandle for TerminalScrollHandle {
         let display_offset = term.grid().display_offset();
         let history_size = term.history_size();
         let lines_from_top = history_size.saturating_sub(display_offset);
-        point(px(0.), px(-(lines_from_top as f32) * f32::from(self.cell_height)))
+        point(
+            px(0.),
+            px(-(lines_from_top as f32) * f32::from(self.cell_height)),
+        )
     }
 
     fn set_offset(&self, offset: gpui::Point<gpui::Pixels>) {
@@ -1150,8 +1156,7 @@ impl Render for TerminalPanel {
                                         .right_0()
                                         .bottom_0()
                                         .child(
-                                            Scrollbar::vertical(&handle)
-                                                .scroll_size(scroll_size),
+                                            Scrollbar::vertical(&handle).scroll_size(scroll_size),
                                         ),
                                 )
                             }),

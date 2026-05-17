@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use crate::config::Config;
 use crate::credentials;
 use crate::data_source::postgres::PostgresDataSource;
-use crate::data_source::{ConnectionStatus, DataSource, DataSourceConfig, DataSourceError, Database};
+use crate::data_source::{
+    ConnectionStatus, DataSource, DataSourceConfig, DataSourceError, Database,
+};
 use crate::schema_cache::{self, cache_key};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 use crate::data_source::{
-    ColumnInfo, DatabaseSchema, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo,
-    TableInfo, TableKind, TriggerInfo,
+    ColumnInfo, DatabaseSchema, FunctionInfo, IndexInfo, SchemaInfo, SequenceInfo, TableInfo,
+    TableKind, TriggerInfo,
 };
 
 /// Trait for generating DDL statements for database objects.
@@ -21,7 +21,10 @@ pub struct PostgresDdlGenerator;
 impl DdlGenerator for PostgresDdlGenerator {
     fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
         let mut ddl = String::new();
-        ddl.push_str(&format!("CREATE SCHEMA {};\n", quote_identifier(&schema.name)));
+        ddl.push_str(&format!(
+            "CREATE SCHEMA {};\n",
+            quote_identifier(&schema.name)
+        ));
         if !schema.owner.is_empty() && schema.owner != "postgres" {
             ddl.push_str(&format!(
                 "ALTER SCHEMA {} OWNER TO {};\n",
@@ -94,10 +97,7 @@ impl DdlGenerator for PostgresDdlGenerator {
 
         match table.kind {
             TableKind::MaterializedView => {
-                ddl.push_str(&format!(
-                    "-- Materialized View: {}\n",
-                    view_qualified_name
-                ));
+                ddl.push_str(&format!("-- Materialized View: {}\n", view_qualified_name));
                 ddl.push_str(&format!(
                     "-- To recreate: CREATE MATERIALIZED VIEW {} AS\n",
                     view_qualified_name
@@ -145,7 +145,10 @@ impl DdlGenerator for PostgresDdlGenerator {
             }
         } else if let Some(ref body) = func.body {
             // Reconstruct CREATE FUNCTION from components
-            ddl.push_str(&format!("CREATE OR REPLACE FUNCTION {}(", func_qualified_name));
+            ddl.push_str(&format!(
+                "CREATE OR REPLACE FUNCTION {}(",
+                func_qualified_name
+            ));
 
             // Arguments
             if !func.arguments.is_empty() {
@@ -191,7 +194,10 @@ impl DdlGenerator for PostgresDdlGenerator {
             }
         } else {
             // Fallback: generate a skeleton
-            ddl.push_str(&format!("CREATE OR REPLACE FUNCTION {}(", func_qualified_name));
+            ddl.push_str(&format!(
+                "CREATE OR REPLACE FUNCTION {}(",
+                func_qualified_name
+            ));
 
             // Arguments
             if !func.arguments.is_empty() {
@@ -211,7 +217,11 @@ impl DdlGenerator for PostgresDdlGenerator {
 
         // Add owner command if available
         if !func.owner.is_empty() {
-            ddl.push_str(&format!("\nALTER FUNCTION {} OWNER TO {};\n", func_qualified_name, quote_identifier(&func.owner)));
+            ddl.push_str(&format!(
+                "\nALTER FUNCTION {} OWNER TO {};\n",
+                func_qualified_name,
+                quote_identifier(&func.owner)
+            ));
         }
 
         ddl
@@ -226,16 +236,10 @@ impl DdlGenerator for PostgresDdlGenerator {
 
         ddl.push_str(&format!(
             "CREATE {}INDEX {} ON {} (",
-            unique,
-            idx_qualified_name,
-            table_name
+            unique, idx_qualified_name, table_name
         ));
 
-        let columns: Vec<String> = idx
-            .columns
-            .iter()
-            .map(|c| quote_identifier(c))
-            .collect();
+        let columns: Vec<String> = idx.columns.iter().map(|c| quote_identifier(c)).collect();
         ddl.push_str(&columns.join(", "));
         ddl.push_str(");\n");
 
@@ -371,16 +375,98 @@ fn needs_quoting(name: &str) -> bool {
 
     // Check for reserved words (common SQL reserved words)
     let reserved_words = [
-        "select", "from", "where", "insert", "update", "delete", "create", "drop", "alter",
-        "table", "index", "view", "schema", "function", "trigger", "sequence", "primary", "key",
-        "foreign", "references", "constraint", "default", "null", "not", "and", "or", "in",
-        "is", "like", "between", "exists", "case", "when", "then", "else", "end", "as", "on",
-        "join", "inner", "outer", "left", "right", "full", "cross", "natural", "group", "by",
-        "order", "having", "limit", "offset", "union", "all", "distinct", "into", "values",
-        "set", "returning", "with", "recursive", "grant", "revoke", "public", "owner", "to",
-        "user", "role", "authorization", "begin", "commit", "rollback", "transaction", "work",
-        "language", "plpgsql", "sql", "returns", "declare", "execute", "perform", "raise",
-        "new", "old", "for", "each", "row", "statement", "before", "after", "instead", "of",
+        "select",
+        "from",
+        "where",
+        "insert",
+        "update",
+        "delete",
+        "create",
+        "drop",
+        "alter",
+        "table",
+        "index",
+        "view",
+        "schema",
+        "function",
+        "trigger",
+        "sequence",
+        "primary",
+        "key",
+        "foreign",
+        "references",
+        "constraint",
+        "default",
+        "null",
+        "not",
+        "and",
+        "or",
+        "in",
+        "is",
+        "like",
+        "between",
+        "exists",
+        "case",
+        "when",
+        "then",
+        "else",
+        "end",
+        "as",
+        "on",
+        "join",
+        "inner",
+        "outer",
+        "left",
+        "right",
+        "full",
+        "cross",
+        "natural",
+        "group",
+        "by",
+        "order",
+        "having",
+        "limit",
+        "offset",
+        "union",
+        "all",
+        "distinct",
+        "into",
+        "values",
+        "set",
+        "returning",
+        "with",
+        "recursive",
+        "grant",
+        "revoke",
+        "public",
+        "owner",
+        "to",
+        "user",
+        "role",
+        "authorization",
+        "begin",
+        "commit",
+        "rollback",
+        "transaction",
+        "work",
+        "language",
+        "plpgsql",
+        "sql",
+        "returns",
+        "declare",
+        "execute",
+        "perform",
+        "raise",
+        "new",
+        "old",
+        "for",
+        "each",
+        "row",
+        "statement",
+        "before",
+        "after",
+        "instead",
+        "of",
     ];
 
     reserved_words.contains(&name.to_lowercase().as_str())
@@ -418,10 +504,7 @@ mod tests {
     #[test]
     fn test_qualified_name() {
         assert_eq!(qualified_name("public", "users"), "\"public\".users");
-        assert_eq!(
-            qualified_name("public", "user"),
-            "\"public\".\"user\""
-        );
+        assert_eq!(qualified_name("public", "user"), "\"public\".\"user\"");
     }
 
     #[test]

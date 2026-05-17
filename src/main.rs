@@ -17,12 +17,20 @@ mod workspace;
 
 use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
-    ConfirmSelectedQuery, CycleTabBackward, CycleTabForward, ExecuteQuery, SaveFile, SelectNextQuery, SelectPreviousQuery,
+    ConfirmSelectedQuery, CycleTabBackward, CycleTabForward, ExecuteQuery, SaveFile,
+    SelectNextQuery, SelectPreviousQuery, ToggleEditorReplace, ToggleEditorSearch,
 };
 use ui::panels::file_search::ToggleFileSearch;
-use ui::panels::result::{CopyResultSelection, CycleTabBackward as ResultCycleTabBackward, CycleTabForward as ResultCycleTabForward};
-use ui::panels::terminal::{CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward, NewTerminalTab};
-use workspace::{OpenFolder, Workspace};
+use ui::panels::project_search::ToggleProjectSearch;
+use ui::panels::result::{
+    CopyResultSelection, CycleTabBackward as ResultCycleTabBackward,
+    CycleTabForward as ResultCycleTabForward,
+};
+use ui::panels::terminal::{
+    CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward,
+    NewTerminalTab,
+};
+use workspace::{OpenFolder, ToggleSearchReplace, Workspace};
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
     let bytes = include_bytes!("../assets/app-icon.png");
@@ -40,7 +48,10 @@ fn set_app_menus(cx: &mut gpui::App) {
         Menu::new("zql").items(vec![app_theme::themes_menu_item(cx)]),
         Menu::new("File").items(vec![MenuItem::action("Open Folder...", OpenFolder)]),
         Menu::new("Edit\u{200B}").items(vec![
-            MenuItem::action("Search File...", ToggleFileSearch),
+            MenuItem::action("Find", ToggleEditorSearch),
+            MenuItem::action("Find in Files...", ToggleProjectSearch),
+            MenuItem::separator(),
+            MenuItem::action("Replace", ToggleEditorReplace),
             MenuItem::separator(),
             MenuItem::action("Save", SaveFile),
         ]),
@@ -71,7 +82,9 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
         ui::panels::file_tree::init(cx);
+        ui::panels::file_editor::editor::init(cx);
         ui::panels::file_search::init(cx);
+        ui::panels::project_search::init(cx);
 
         app_theme::init(cx);
 
@@ -86,6 +99,9 @@ fn main() {
         cx.bind_keys(vec![
             KeyBinding::new("cmd-w", ClosePanel, None),
             KeyBinding::new("cmd-e", ToggleFileSearch, None),
+            KeyBinding::new("cmd-f", ToggleEditorSearch, Some("Input")),
+            KeyBinding::new("cmd-shift-f", ToggleProjectSearch, None),
+            KeyBinding::new("cmd-shift-h", ToggleSearchReplace, None),
             KeyBinding::new("cmd-enter", ExecuteQuery, Some("Input")),
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-c", CopyResultSelection, None),
@@ -94,9 +110,17 @@ fn main() {
             KeyBinding::new("ctrl-tab", CycleTabForward, None),
             KeyBinding::new("ctrl-shift-tab", CycleTabBackward, None),
             KeyBinding::new("ctrl-tab", TerminalCycleTabForward, Some("terminal_panel")),
-            KeyBinding::new("ctrl-shift-tab", TerminalCycleTabBackward, Some("terminal_panel")),
+            KeyBinding::new(
+                "ctrl-shift-tab",
+                TerminalCycleTabBackward,
+                Some("terminal_panel"),
+            ),
             KeyBinding::new("ctrl-tab", ResultCycleTabForward, Some("results_panel")),
-            KeyBinding::new("ctrl-shift-tab", ResultCycleTabBackward, Some("results_panel")),
+            KeyBinding::new(
+                "ctrl-shift-tab",
+                ResultCycleTabBackward,
+                Some("results_panel"),
+            ),
             KeyBinding::new("up", SelectPreviousQuery, None),
             KeyBinding::new("down", SelectNextQuery, None),
             KeyBinding::new("enter", ConfirmSelectedQuery, None),

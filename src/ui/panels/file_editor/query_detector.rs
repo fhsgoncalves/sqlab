@@ -10,6 +10,10 @@ pub struct QueryRange {
 }
 
 pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> {
+    if let Some(ranges) = procedural_block_ranges_at_cursor(text, cursor) {
+        return ranges;
+    }
+
     if current_line(text, cursor).trim().is_empty() {
         return Vec::new();
     }
@@ -44,6 +48,10 @@ pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> 
 }
 
 pub fn query_ranges_at_cursor(text: &str, cursor: usize) -> Vec<QueryRange> {
+    if let Some(ranges) = procedural_block_ranges_at_cursor(text, cursor) {
+        return ranges;
+    }
+
     if current_line(text, cursor).trim().is_empty() {
         return Vec::new();
     }
@@ -169,6 +177,71 @@ fn query_ranges_on_line(text: &str, cursor: usize) -> Vec<QueryRange> {
     ranges
 }
 
+fn procedural_block_ranges_at_cursor(text: &str, cursor: usize) -> Option<Vec<QueryRange>> {
+    let cursor = cursor.min(text.len());
+    let block = fallback_queries_in_text(text).into_iter().find(|query| {
+        is_procedural_block(&query.text) && procedural_block_contains_cursor(text, query, cursor)
+    })?;
+
+    let variable_names = plpgsql_variable_names(&block.text);
+    let mut ranges = vec![block.clone()];
+    let mut seen_ranges =
+        std::collections::HashSet::from([canonical_query_key(text, &block.trimmed_range)]);
+
+    for query in parse_queries(text, cursor).unwrap_or_default() {
+        if query.trimmed_range == block.trimmed_range
+            || !range_contains_range(&block.trimmed_range, &query.trimmed_range)
+            || !is_standalone_inner_sql(&query.text, &variable_names)
+        {
+            continue;
+        }
+
+        let key = canonical_query_key(text, &query.trimmed_range);
+        if seen_ranges.insert(key) {
+            ranges.push(query);
+        }
+    }
+
+    Some(ranges)
+}
+
+fn procedural_block_contains_cursor(text: &str, query: &QueryRange, cursor: usize) -> bool {
+    if range_contains_cursor_inclusive_end(&query.trimmed_range, cursor) {
+        return true;
+    }
+
+    if cursor < query.trimmed_range.start {
+        return text
+            .get(cursor..query.trimmed_range.start)
+            .is_some_and(|gap| gap.chars().all(char::is_whitespace));
+    }
+
+    let mut terminator_end = query.trimmed_range.end;
+    let Some(after_query) = text.get(query.trimmed_range.end..) else {
+        return false;
+    };
+
+    for (offset, ch) in after_query.char_indices() {
+        if ch.is_whitespace() {
+            continue;
+        }
+
+        if ch == ';' {
+            terminator_end = query.trimmed_range.end + offset + ch.len_utf8();
+        }
+        break;
+    }
+
+    cursor <= terminator_end
+        || text
+            .get(query.trimmed_range.end..cursor)
+            .is_some_and(|gap| {
+                gap.trim_start()
+                    .strip_prefix(';')
+                    .is_some_and(|after_semicolon| after_semicolon.chars().all(char::is_whitespace))
+            })
+}
+
 fn current_line(text: &str, cursor: usize) -> &str {
     let cursor = cursor.min(text.len());
     &text[line_start(text, cursor)..line_end(text, cursor)]
@@ -197,11 +270,7 @@ fn range_contains_cursor_inclusive_end(range: &Range<usize>, cursor: usize) -> b
     range.start <= cursor && cursor <= range.end
 }
 
-fn append_missing_ranges(
-    cursor: usize,
-    ranges: &mut Vec<QueryRange>,
-    candidates: Vec<QueryRange>,
-) {
+fn append_missing_ranges(cursor: usize, ranges: &mut Vec<QueryRange>, candidates: Vec<QueryRange>) {
     for candidate in candidates {
         if !range_contains_cursor_inclusive_end(&candidate.trimmed_range, cursor) {
             continue;
@@ -217,7 +286,6 @@ fn append_missing_ranges(
         ranges.push(candidate);
     }
 }
-
 
 fn canonical_query_key(text: &str, range: &Range<usize>) -> (usize, usize) {
     (range.start, canonical_query_end(text, range))
@@ -318,10 +386,8 @@ fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
     let mut ix = 0;
     while ix < chars.len() {
         let (byte_ix, ch) = chars[ix];
-        let at_top_level = paren_depth == 0
-            && !in_single_quote
-            && !in_double_quote
-            && dollar_quote_tag.is_none();
+        let at_top_level =
+            paren_depth == 0 && !in_single_quote && !in_double_quote && dollar_quote_tag.is_none();
 
         if let Some(ref tag) = dollar_quote_tag {
             let closing = format!("${}$", tag);
@@ -416,6 +482,204 @@ fn parse_dollar_quote_tag(text: &str) -> Option<String> {
     }
 
     None
+}
+
+fn is_procedural_block(text: &str) -> bool {
+    let lower = text.trim_start().to_ascii_lowercase();
+    if first_word(&lower) == Some("do") {
+        return contains_dollar_quote(text);
+    }
+
+    first_word(&lower) == Some("create")
+        && contains_dollar_quote(text)
+        && (contains_word(&lower, "function") || contains_word(&lower, "procedure"))
+}
+
+fn contains_dollar_quote(text: &str) -> bool {
+    text.char_indices()
+        .any(|(ix, ch)| ch == '$' && parse_dollar_quote_tag(&text[ix..]).is_some())
+}
+
+fn is_standalone_inner_sql(
+    query: &str,
+    variable_names: &std::collections::HashSet<String>,
+) -> bool {
+    if !matches!(
+        first_word(query).map(|keyword| keyword.to_ascii_lowercase()),
+        Some(keyword)
+            if matches!(
+                keyword.as_str(),
+                "select" | "with" | "insert" | "update" | "delete"
+            )
+    ) {
+        return false;
+    }
+
+    let tokens = identifier_tokens(query);
+    !tokens.iter().any(|token| {
+        token.starts_with("v_")
+            || variable_names.contains(token)
+            || token == "into"
+            || token == "returning"
+    })
+}
+
+fn plpgsql_variable_names(text: &str) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    collect_declared_variables(text, &mut names);
+    collect_for_loop_variables(text, &mut names);
+    collect_function_arguments(text, &mut names);
+    names
+}
+
+fn collect_declared_variables(text: &str, names: &mut std::collections::HashSet<String>) {
+    let mut in_declare = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if first_word(trimmed).is_some_and(|word| word.eq_ignore_ascii_case("declare")) {
+            in_declare = true;
+            continue;
+        }
+
+        if in_declare && first_word(trimmed).is_some_and(|word| word.eq_ignore_ascii_case("begin"))
+        {
+            break;
+        }
+
+        if !in_declare || trimmed.is_empty() || trimmed.starts_with("--") {
+            continue;
+        }
+
+        if let Some(name) = first_word(trimmed) {
+            names.insert(name.to_ascii_lowercase());
+        }
+    }
+}
+
+fn collect_for_loop_variables(text: &str, names: &mut std::collections::HashSet<String>) {
+    let tokens = identifier_tokens(text);
+    for window in tokens.windows(3) {
+        if window[0] == "for" && window[2] == "in" {
+            names.insert(window[1].clone());
+        }
+    }
+}
+
+fn collect_function_arguments(text: &str, names: &mut std::collections::HashSet<String>) {
+    let lower = text.trim_start().to_ascii_lowercase();
+    if first_word(&lower) != Some("create")
+        || (!contains_word(&lower, "function") && !contains_word(&lower, "procedure"))
+    {
+        return;
+    }
+
+    let Some(open_paren) = text.find('(') else {
+        return;
+    };
+    let Some(close_paren) = matching_close_paren(text, open_paren) else {
+        return;
+    };
+
+    for argument in text[open_paren + 1..close_paren].split(',') {
+        let mut tokens = identifier_tokens(argument);
+        if tokens
+            .first()
+            .is_some_and(|token| matches!(token.as_str(), "in" | "out" | "inout" | "variadic"))
+        {
+            tokens.remove(0);
+        }
+
+        if tokens.len() >= 2 && !is_common_type_name(&tokens[0]) {
+            names.insert(tokens[0].clone());
+        }
+    }
+}
+
+fn matching_close_paren(text: &str, open_paren: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (ix, ch) in text[open_paren..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(open_paren + ix);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn identifier_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token_start = None;
+
+    for (ix, ch) in text.char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token_start.get_or_insert(ix);
+        } else if let Some(start) = token_start.take() {
+            tokens.push(text[start..ix].to_ascii_lowercase());
+        }
+    }
+
+    if let Some(start) = token_start {
+        tokens.push(text[start..].to_ascii_lowercase());
+    }
+
+    tokens
+}
+
+fn contains_word(text: &str, word: &str) -> bool {
+    identifier_tokens(text).iter().any(|token| token == word)
+}
+
+fn first_word(text: &str) -> Option<&str> {
+    text.trim_start()
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .find(|word| !word.is_empty())
+}
+
+fn is_common_type_name(token: &str) -> bool {
+    matches!(
+        token,
+        "bigint"
+            | "bigserial"
+            | "bool"
+            | "boolean"
+            | "bytea"
+            | "character"
+            | "date"
+            | "decimal"
+            | "double"
+            | "int"
+            | "int2"
+            | "int4"
+            | "int8"
+            | "integer"
+            | "interval"
+            | "json"
+            | "jsonb"
+            | "numeric"
+            | "precision"
+            | "real"
+            | "record"
+            | "serial"
+            | "serial4"
+            | "serial8"
+            | "setof"
+            | "smallint"
+            | "table"
+            | "text"
+            | "time"
+            | "timestamp"
+            | "timestamptz"
+            | "uuid"
+            | "varchar"
+            | "void"
+    )
 }
 
 fn fallback_ranges_cover_more_text(fallback: &[QueryRange], parsed: &[QueryRange]) -> bool {
@@ -968,6 +1232,145 @@ END $$;"#;
     }
 
     #[test]
+    fn do_block_prefers_whole_block_when_cursor_is_on_plpgsql_variable_query() {
+        let text = r#"DO $$
+DECLARE
+    v_order_id bigint;
+BEGIN
+    INSERT INTO orders (id) VALUES (v_order_id)
+    RETURNING id INTO v_order_id;
+END $$;"#;
+        let queries = query_ranges_for_execution(text, text.find("v_order_id)").unwrap());
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, text.trim_end_matches(';'));
+    }
+
+    #[test]
+    fn do_block_keeps_whole_block_first_and_appends_complete_inner_query() {
+        let text = r#"DO $$
+BEGIN
+    SELECT count(*) FROM orders;
+END $$;"#;
+        let queries = query_ranges_for_execution(text, text.find("count").unwrap());
+
+        assert!(queries.len() >= 2, "got: {queries:?}");
+        assert_eq!(queries[0].text, text.trim_end_matches(';'));
+        assert_eq!(queries[1].text, "SELECT count(*) FROM orders");
+    }
+
+    #[test]
+    fn do_block_is_selected_from_blank_line_inside_block() {
+        let text = r#"DO $$
+BEGIN
+
+    RAISE NOTICE 'Hello';
+END $$;"#;
+        let queries = query_ranges_for_execution(text, text.find("\n\n").unwrap() + 1);
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, text.trim_end_matches(';'));
+    }
+
+    #[test]
+    fn large_do_block_prefers_whole_block_at_representative_cursor_positions() {
+        let text = r#"DO $$
+DECLARE
+    v_customer_id uuid;
+    v_order_id bigint;
+    v_num_orders int;
+    v_num_items int;
+    v_status text;
+    v_created_at timestamptz;
+    v_product_id int;
+    v_quantity int;
+    v_unit_price numeric(10,2);
+    v_customer_count int := 0;
+BEGIN
+    -- Loop through each customer and create a random number of orders
+    FOR v_customer_id IN
+        SELECT id FROM customers ORDER BY random()
+    LOOP
+        -- Random number of orders per customer: weighted toward more variation
+        -- Using floor(random() * 12) + 1 gives 1 to 12 orders
+        -- Adding extra weight: some customers get significantly more
+        v_num_orders := floor(random() * 15)::int + 1;
+
+        -- Occasionally give a customer a much larger batch (random spike)
+        IF random() < 0.25 THEN
+            v_num_orders := v_num_orders + floor(random() * 20)::int + 5;
+        END IF;
+
+        v_customer_count := v_customer_count + 1;
+        RAISE NOTICE 'Customer %: creating % orders', v_customer_count, v_num_orders;
+
+        FOR i IN 1..v_num_orders LOOP
+            -- Random status weighted toward paid/shipped
+            v_status := (ARRAY['draft', 'paid', 'shipped', 'cancelled'])[1 + floor(random() * 4)::int];
+
+            -- Random date within the last 2 years
+            v_created_at := now() - (floor(random() * 730)::int || ' days')::interval
+                            - (floor(random() * 86400)::int || ' seconds')::interval;
+
+            INSERT INTO orders (customer_id, status, created_at)
+            VALUES (v_customer_id, v_status, v_created_at)
+            RETURNING id INTO v_order_id;
+
+            -- Random number of items per order: 1 to 4
+            v_num_items := floor(random() * 4)::int + 1;
+
+            FOR j IN 1..v_num_items LOOP
+                SELECT id, price
+                INTO v_product_id, v_unit_price
+                FROM products
+                WHERE active = true
+                ORDER BY random()
+                LIMIT 1;
+
+                v_quantity := floor(random() * 5)::int + 1;
+
+                INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+                VALUES (v_order_id, v_product_id, v_quantity, v_unit_price)
+                ON CONFLICT (order_id, product_id) DO NOTHING;
+            END LOOP;
+        END LOOP;
+    END LOOP;
+END $$;
+"#;
+
+        for cursor in [
+            0,
+            text.find("DECLARE").unwrap(),
+            text.find("v_unit_price").unwrap(),
+            text.find("SELECT id FROM customers").unwrap(),
+            text.find("INSERT INTO orders").unwrap(),
+            text.find("SELECT id, price").unwrap(),
+            text.find("ON CONFLICT").unwrap(),
+            text.find("END $$;").unwrap() + "END $$".len(),
+            text.find("END $$;").unwrap() + "END $$;".len(),
+            text.len(),
+        ] {
+            let queries = query_ranges_for_execution(text, cursor);
+            assert!(!queries.is_empty(), "cursor {cursor} got: {queries:?}");
+            assert_eq!(
+                queries[0].text,
+                text.trim_end().trim_end_matches(';').trim_end(),
+                "cursor {cursor}"
+            );
+        }
+
+        for cursor in 0..=text.len() {
+            let queries = query_ranges_for_execution(text, cursor);
+            assert!(!queries.is_empty(), "cursor {cursor} got no query");
+            assert_eq!(
+                queries[0].text,
+                text.trim_end().trim_end_matches(';').trim_end(),
+                "cursor {cursor}"
+            );
+        }
+    }
+
+    #[test]
     fn does_not_split_create_function_with_dollar_quotes() {
         let text = r#"CREATE OR REPLACE FUNCTION my_func()
 RETURNS void AS $$
@@ -981,6 +1384,20 @@ $$ LANGUAGE plpgsql;"#;
         assert_eq!(queries.len(), 1);
         assert!(queries[0].text.contains("CREATE OR REPLACE FUNCTION"));
         assert!(queries[0].text.contains("$$ LANGUAGE plpgsql"));
+    }
+
+    #[test]
+    fn function_prefers_whole_block_when_cursor_is_on_argument_query() {
+        let text = r#"CREATE OR REPLACE FUNCTION mark_seen(p_id int)
+RETURNS void AS $$
+BEGIN
+    UPDATE users SET seen = true WHERE id = p_id;
+END;
+$$ LANGUAGE plpgsql;"#;
+        let queries = query_ranges_for_execution(text, text.find("p_id;").unwrap());
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, text.trim_end_matches(';'));
     }
 
     #[test]

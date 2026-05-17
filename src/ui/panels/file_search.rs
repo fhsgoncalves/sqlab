@@ -5,9 +5,12 @@ use gpui::{
     IntoElement, KeyBinding, ParentElement, Render, StatefulInteractiveElement, Styled, Window,
     actions, div, prelude::FluentBuilder, px,
 };
+use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{ActiveTheme, IconName, Selectable, Sizable, h_flex, v_flex};
+
+use crate::ui::search::{SearchOptions, score_text};
 
 actions!(
     file_search,
@@ -40,6 +43,10 @@ pub struct FileSearch {
     visible: bool,
     root: PathBuf,
     include_ignored: bool,
+    case_sensitive: bool,
+    use_regex: bool,
+    whole_word: bool,
+    use_fuzzy: bool,
     focus_handle: FocusHandle,
     _input_subscription: gpui::Subscription,
 }
@@ -54,23 +61,19 @@ impl EventEmitter<FileSearchEvent> for FileSearch {}
 impl FileSearch {
     pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search files by name...")
-        });
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search files by name..."));
 
         let all_files = Self::collect_files(&root, false);
 
         let input_subscription = cx.subscribe_in(&input, window, {
-            move |this: &mut FileSearch, _input, event: &InputEvent, window, cx| {
-                match event {
-                    InputEvent::Change => {
-                        this.filter_results(cx);
-                    }
-                    InputEvent::PressEnter { .. } => {
-                        this.confirm_selection(window, cx);
-                    }
-                    _ => {}
+            move |this: &mut FileSearch, _input, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    this.filter_results(cx);
                 }
+                InputEvent::PressEnter { .. } => {
+                    this.confirm_selection(window, cx);
+                }
+                _ => {}
             }
         });
 
@@ -85,6 +88,10 @@ impl FileSearch {
             visible: false,
             root,
             include_ignored: false,
+            case_sensitive: false,
+            use_regex: false,
+            whole_word: false,
+            use_fuzzy: true,
             focus_handle,
             _input_subscription: input_subscription,
         }
@@ -169,15 +176,14 @@ impl FileSearch {
             return;
         }
 
-        let mut matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let pattern = nucleo::pattern::Pattern::new(
-            &query,
-            nucleo::pattern::CaseMatching::Ignore,
-            nucleo::pattern::Normalization::Smart,
-            nucleo::pattern::AtomKind::Fuzzy,
-        );
+        let options = SearchOptions {
+            case_sensitive: self.case_sensitive,
+            use_regex: self.use_regex,
+            whole_word: self.whole_word,
+            use_fuzzy: self.use_fuzzy && !self.use_regex,
+        };
 
-        let mut scored: Vec<(usize, Option<u32>)> = self
+        let mut scored: Vec<(usize, Option<i64>)> = self
             .all_files
             .iter()
             .enumerate()
@@ -191,26 +197,19 @@ impl FileSearch {
                     .and_then(|n| n.to_str())
                     .unwrap_or(&relative);
 
-                // Match against filename first, boost score
-                let mut buf = Vec::new();
-                let haystack = nucleo::Utf32Str::new(file_name, &mut buf);
-                let file_score = pattern.score(haystack, &mut matcher);
-
-                match file_score {
-                    Some(score) => (i, Some(score.saturating_add(100))),
-                    None => {
-                        // Try matching against the full relative path
-                        let mut buf = Vec::new();
-                        let haystack = nucleo::Utf32Str::new(&relative, &mut buf);
-                        let path_score = pattern.score(haystack, &mut matcher);
-                        (i, path_score)
-                    }
+                match score_text(&query, file_name, options) {
+                    Some(score) => (i, Some(score + 1_000)),
+                    None => (i, score_text(&query, &relative, options)),
                 }
             })
             .collect();
 
         scored.retain(|(_, score)| score.is_some());
-        scored.sort_by(|a, b| b.1.unwrap_or(0).cmp(&a.1.unwrap_or(0)));
+        scored.sort_by(|a, b| {
+            b.1.unwrap_or(0)
+                .cmp(&a.1.unwrap_or(0))
+                .then_with(|| self.all_files[a.0].cmp(&self.all_files[b.0]))
+        });
 
         self.filtered_indices = scored.into_iter().map(|(i, _)| i).collect();
         self.selected_ix = 0;
@@ -233,18 +232,16 @@ impl FileSearch {
         if self.filtered_indices.is_empty() {
             return;
         }
-        self.selected_ix = (self.selected_ix + 1).min(self.filtered_indices.len().saturating_sub(1));
+        self.selected_ix =
+            (self.selected_ix + 1).min(self.filtered_indices.len().saturating_sub(1));
         cx.notify();
     }
 
     fn confirm_selection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let path = if self.input.read(cx).value().is_empty() {
             // When query is empty, select from recent files if available
-            let existing_recent: Vec<&PathBuf> = self
-                .recent_files
-                .iter()
-                .filter(|p| p.exists())
-                .collect();
+            let existing_recent: Vec<&PathBuf> =
+                self.recent_files.iter().filter(|p| p.exists()).collect();
             if let Some(p) = existing_recent.get(self.selected_ix) {
                 Some((**p).clone())
             } else {
@@ -328,85 +325,127 @@ impl Render for FileSearch {
                                     .child(">"),
                             )
                             .child(
-                                div()
-                                    .flex_1()
-                                    .child(Input::new(&self.input)),
+                                div().flex_1().child(
+                                    Input::new(&self.input).suffix(
+                                        h_flex()
+                                            .gap_1()
+                                            .child(
+                                                Button::new("file-case-sensitive")
+                                                    .selected(self.case_sensitive)
+                                                    .xsmall()
+                                                    .compact()
+                                                    .ghost()
+                                                    .icon(IconName::CaseSensitive)
+                                                    .tooltip("Match Case")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.case_sensitive = !this.case_sensitive;
+                                                        this.filter_results(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                Button::new("file-whole-word")
+                                                    .selected(self.whole_word)
+                                                    .xsmall()
+                                                    .compact()
+                                                    .ghost()
+                                                    .label("W")
+                                                    .tooltip("Whole Word")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.whole_word = !this.whole_word;
+                                                        this.filter_results(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                Button::new("file-regex")
+                                                    .selected(self.use_regex)
+                                                    .xsmall()
+                                                    .compact()
+                                                    .ghost()
+                                                    .label(".*")
+                                                    .tooltip("Use Regex")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.use_regex = !this.use_regex;
+                                                        if this.use_regex {
+                                                            this.use_fuzzy = false;
+                                                        }
+                                                        this.filter_results(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                Button::new("file-fuzzy")
+                                                    .selected(self.use_fuzzy)
+                                                    .xsmall()
+                                                    .compact()
+                                                    .ghost()
+                                                    .label("fz")
+                                                    .tooltip("Fuzzy Search")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.use_fuzzy = !this.use_fuzzy;
+                                                        if this.use_fuzzy {
+                                                            this.use_regex = false;
+                                                        }
+                                                        this.filter_results(cx);
+                                                    })),
+                                            ),
+                                    ),
+                                ),
                             ),
                     ),
             )
             .child(
                 // Scrollable results
-                div()
-                    .flex_1()
-                    .overflow_y_scrollbar()
-                    .children(
-                        // Recent files section
-                        if show_recent_section {
-                            let mut children: Vec<gpui::AnyElement> = Vec::new();
+                div().flex_1().overflow_y_scrollbar().children(
+                    // Recent files section
+                    if show_recent_section {
+                        let mut children: Vec<gpui::AnyElement> = Vec::new();
 
+                        children.push(
+                            div()
+                                .px_3()
+                                .pt_1p5()
+                                .pb_0p5()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Recent Files")
+                                .into_any_element(),
+                        );
+
+                        for (ix, path) in &recent_entries {
+                            let selected = *ix == self.selected_ix;
+                            children.push(self.render_file_row(path, *ix, selected, cx));
+                        }
+                        children
+                    } else {
+                        let mut children: Vec<gpui::AnyElement> = Vec::new();
+
+                        let entries: Vec<(usize, PathBuf)> = results
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(ix, &file_ix)| {
+                                self.all_files.get(file_ix).map(|p| (ix, p.clone()))
+                            })
+                            .collect();
+
+                        if entries.is_empty() && !query_is_empty {
                             children.push(
                                 div()
                                     .px_3()
-                                    .pt_1p5()
-                                    .pb_0p5()
-                                    .text_xs()
+                                    .py_6()
+                                    .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Recent Files")
+                                    .child("No matching files found")
                                     .into_any_element(),
                             );
-
-                            for (ix, path) in &recent_entries {
-                                let selected = *ix == self.selected_ix;
-                                children.push(
-                                    self.render_file_row(
-                                        path,
-                                        *ix,
-                                        selected,
-                                        cx,
-                                    ),
-                                );
-                            }
-                            children
                         } else {
-                            let mut children: Vec<gpui::AnyElement> = Vec::new();
-
-                            let entries: Vec<(usize, PathBuf)> = results
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(ix, &file_ix)| {
-                                    self.all_files
-                                        .get(file_ix)
-                                        .map(|p| (ix, p.clone()))
-                                })
-                                .collect();
-
-                            if entries.is_empty() && !query_is_empty {
-                                children.push(
-                                    div()
-                                        .px_3()
-                                        .py_6()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("No matching files found")
-                                        .into_any_element(),
-                                );
-                            } else {
-                                for (ix, path) in &entries {
-                                    let selected = *ix == self.selected_ix;
-                                    children.push(
-                                        self.render_file_row(
-                                            path,
-                                            *ix,
-                                            selected,
-                                            cx,
-                                        ),
-                                    );
-                                }
+                            for (ix, path) in &entries {
+                                let selected = *ix == self.selected_ix;
+                                children.push(self.render_file_row(path, *ix, selected, cx));
                             }
+                        }
 
-                            children
-                        },
-                    ),
+                        children
+                    },
+                ),
             )
             .into_any_element()
     }

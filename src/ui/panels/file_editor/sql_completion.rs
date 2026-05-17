@@ -12,7 +12,7 @@ use lsp_types::{
 use serde_json::json;
 
 use crate::data_source::manager::DataSourceManager;
-use crate::data_source::{Database, DataSourceConfig, DatabaseSchema, TableInfo};
+use crate::data_source::{DataSourceConfig, Database, DatabaseSchema, TableInfo};
 use crate::schema_cache;
 
 const SQL_KEYWORDS: &[&str] = &[
@@ -1486,7 +1486,13 @@ mod tests {
         let name_item = items.iter().find(|i| i.item.label == "c.name").unwrap();
 
         assert_eq!(
-            name_item.item.label_details.as_ref().unwrap().detail.as_deref(),
+            name_item
+                .item
+                .label_details
+                .as_ref()
+                .unwrap()
+                .detail
+                .as_deref(),
             Some("(customers)")
         );
     }

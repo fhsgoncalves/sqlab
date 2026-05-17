@@ -4,7 +4,7 @@ pub mod query_selector;
 pub mod sql_completion;
 pub mod tabs;
 
-pub use editor::{ExecuteQuery, SaveFile};
+pub use editor::{ExecuteQuery, SaveFile, ToggleEditorReplace, ToggleEditorSearch};
 pub use query_selector::{
     ConfirmSelectedQuery, QueryChoice, QuerySelected, QuerySelector, SelectNextQuery,
     SelectPreviousQuery,
