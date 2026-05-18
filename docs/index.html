@@ -241,178 +241,26 @@ h1 .slash { color: var(--accent); font-weight: 500; }
   letter-spacing: 0.05em;
 }
 
-/* EDITOR MOCKUP */
-.editor-wrap {
-  padding: 0 2.5rem 5rem;
-  max-width: 1100px;
-  margin: 0 auto;
+/* LIGHTBOX */
+.lightbox {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(8px);
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  cursor: zoom-out;
 }
-
-.editor {
-  border: 1px solid var(--border2);
+.lightbox.open { display: flex; }
+.lightbox img {
+  max-width: 95vw;
+  max-height: 95vh;
   border-radius: 8px;
-  overflow: hidden;
-  background: var(--bg2);
-  font-family: var(--mono);
-  font-size: 12px;
+  box-shadow: 0 20px 80px rgba(0,0,0,0.5);
 }
-
-.editor-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px;
-  height: 38px;
-  background: var(--bg3);
-  border-bottom: 1px solid var(--border);
-}
-.win-dots { display: flex; gap: 6px; }
-.win-dot {
-  width: 10px; height: 10px;
-  border-radius: 50%;
-}
-.dot-r { background: #ff5f57; }
-.dot-y { background: #febc2e; }
-.dot-g { background: #28c840; }
-
-.editor-title {
-  font-size: 11px;
-  color: var(--muted);
-  margin-left: 8px;
-}
-
-.editor-tab-row {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg3);
-}
-.editor-tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  font-size: 11px;
-  color: var(--muted);
-  border-right: 1px solid var(--border);
-  cursor: pointer;
-}
-.editor-tab.active {
-  color: var(--text);
-  background: var(--bg2);
-  border-top: 1.5px solid var(--accent);
-  padding-top: 6.5px;
-}
-.editor-tab svg { opacity: 0.6; }
-.editor-tab.active svg { opacity: 1; }
-
-.editor-body {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  height: 280px;
-}
-
-.editor-sidebar {
-  border-right: 1px solid var(--border);
-  padding: 12px 0;
-  overflow: hidden;
-}
-.sidebar-section {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  padding: 0 12px 6px;
-  opacity: 0.6;
-}
-.sidebar-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 12px;
-  font-size: 11px;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-.sidebar-item:hover, .sidebar-item.active { background: var(--accent-dim); color: var(--text); }
-.sidebar-item svg { flex-shrink: 0; opacity: 0.7; }
-.sidebar-group { padding-left: 20px; }
-.sidebar-table {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 12px 3px 28px;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.code-panel {
-  display: flex;
-  flex-direction: column;
-}
-
-.code-area {
-  flex: 1;
-  padding: 16px 20px;
-  overflow: hidden;
-  line-height: 1.75;
-}
-.line { display: flex; gap: 20px; }
-.ln { color: rgba(255,255,255,0.2); min-width: 16px; text-align: right; user-select: none; }
-.kw { color: #79b8ff; }
-.fn { color: var(--accent); }
-.str { color: #f7c948; }
-.cm { color: #6f7896; }
-.op { color: var(--muted); }
-
-.result-bar {
-  border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 0;
-}
-.result-tab {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 14px;
-  font-size: 10.5px;
-  color: var(--muted);
-  border-right: 1px solid var(--border);
-}
-.result-tab.active { color: var(--text); }
-.result-ok { color: var(--accent); margin-left: auto; padding-right: 14px; font-size: 10px; }
-
-.result-table-wrap {
-  border-top: 1px solid var(--border);
-  overflow: auto;
-  max-height: 120px;
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
-}
-th {
-  text-align: left;
-  padding: 6px 16px;
-  color: var(--muted);
-  font-weight: 400;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg3);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-td {
-  padding: 5px 16px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-tr:last-child td { border-bottom: none; }
-tr:hover td { background: var(--accent-dim); }
 
 /* SECTION HEADING */
 .section { padding: 5rem 2.5rem; max-width: 1100px; margin: 0 auto; }
@@ -442,10 +290,42 @@ h2 {
   font-weight: 300;
 }
 
+/* GALLERY */
+.gallery-section {
+  padding: 5rem 2.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+.gallery-item {
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg2);
+  cursor: zoom-in;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.gallery-item:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.gallery-item img {
+  width: 100%;
+  display: block;
+}
+
+@media (max-width: 760px) {
+  .gallery-grid { grid-template-columns: 1fr; }
+}
+
 /* FEATURE GRID */
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 1px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -548,14 +428,8 @@ h2 {
 /* DEVELOPER WORKFLOW */
 .workflow-section {
   padding: 5rem 2.5rem;
-  max-width: 1100px;
+  max-width: 700px;
   margin: 0 auto;
-}
-.workflow-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
-  gap: 3rem;
-  align-items: center;
 }
 .workflow-copy h2 { margin-bottom: 1rem; }
 .workflow-copy p {
@@ -598,105 +472,6 @@ h2 {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
-}
-.workflow-visual {
-  border: 1px solid var(--border2);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--bg2);
-  font-family: var(--mono);
-  box-shadow: 0 18px 60px rgba(0,0,0,0.2);
-}
-.workflow-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 36px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg3);
-  color: var(--muted);
-  font-size: 11px;
-}
-.workflow-pane {
-  display: grid;
-  grid-template-columns: 0.9fr 1.1fr;
-  min-height: 330px;
-}
-.schema-preview {
-  border-right: 1px solid var(--border);
-  padding: 16px;
-}
-.preview-label {
-  color: var(--muted);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: 12px;
-}
-.tree-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 11px;
-  margin-bottom: 8px;
-}
-.tree-line.active { color: var(--accent); }
-.tool-preview {
-  padding: 16px;
-  position: relative;
-}
-.search-box {
-  border: 1px solid var(--border2);
-  background: var(--bg3);
-  border-radius: 6px;
-  padding: 10px 12px;
-  color: var(--text);
-  font-size: 12px;
-  margin-bottom: 14px;
-}
-.search-result {
-  border-left: 2px solid var(--accent);
-  padding-left: 10px;
-  margin-bottom: 12px;
-}
-.search-result-title {
-  color: var(--text);
-  font-size: 11px;
-  margin-bottom: 2px;
-}
-.search-result-line {
-  color: var(--muted);
-  font-size: 10px;
-}
-.completion-box {
-  margin-top: 18px;
-  border: 1px solid var(--border2);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.completion-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
-  color: var(--muted);
-  font-size: 11px;
-  border-bottom: 1px solid var(--border);
-}
-.completion-row:last-child { border-bottom: none; }
-.completion-row.active {
-  background: var(--accent-dim);
-  color: var(--text);
-}
-.secure-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-  color: var(--muted);
-  font-size: 10px;
 }
 
 /* QUOTE */
@@ -786,29 +561,29 @@ footer {
   margin: 0;
 }
 
+@media (max-width: 900px) {
+  .feature-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
 @media (max-width: 760px) {
   nav { padding: 0 1rem; }
   .nav-links { gap: 1rem; }
   .nav-links a:not(.nav-cta) { display: none; }
-  .hero, .editor-wrap, .db-section, .section, .workflow-section, .quote-section, .cta-section {
+  .hero, .gallery-section, .db-section, .section, .workflow-section, .quote-section, .cta-section {
     padding-left: 1rem;
     padding-right: 1rem;
   }
-  .stats-bar, .workflow-layout, .workflow-pane {
-    grid-template-columns: 1fr;
-  }
+  .feature-grid { grid-template-columns: 1fr; }
   .stats-bar {
     display: grid;
+    grid-template-columns: 1fr 1fr;
   }
   .stat {
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
-  .stat:last-child { border-bottom: none; }
-  .editor-sidebar { display: none; }
-  .editor-body { grid-template-columns: 1fr; }
-  .workflow-layout { gap: 2rem; }
-  .schema-preview { border-right: none; border-bottom: 1px solid var(--border); }
+  .stat:nth-child(odd) { border-right: 1px solid var(--border); }
+  .stat:nth-last-child(-n+2) { border-bottom: none; }
   footer { align-items: flex-start; }
 }
 
@@ -818,7 +593,7 @@ footer {
   to   { opacity: 1; transform: translateY(0); }
 }
 .hero { animation: fadein 0.5s ease both; }
-.editor-wrap { animation: fadein 0.5s 0.15s ease both; }
+.gallery-section { animation: fadein 0.5s 0.15s ease both; }
 </style>
 </head>
 <body id="top">
@@ -827,6 +602,7 @@ footer {
 <nav>
   <a href="#top" class="nav-logo">sq<span>/</span>lab</a>
   <ul class="nav-links">
+    <li><a href="#screenshots">Screenshots</a></li>
     <li><a href="#features">Features</a></li>
     <li><a href="#workflow">Workflow</a></li>
     <li><a href="#about">About</a></li>
@@ -873,108 +649,22 @@ footer {
   </div>
 </section>
 
-<!-- EDITOR MOCKUP -->
-<div class="editor-wrap">
-  <div class="editor">
-    <div class="editor-bar">
-      <div class="win-dots">
-        <div class="win-dot dot-r"></div>
-        <div class="win-dot dot-y"></div>
-        <div class="win-dot dot-g"></div>
-      </div>
-      <span class="editor-title">sq/lab — analytics/revenue_monthly.sql</span>
+<!-- SCREENSHOTS -->
+<section class="gallery-section" id="screenshots">
+  <div class="section-eyebrow">// screenshots</div>
+  <h2>See it in action.</h2>
+  <p class="section-desc">A glimpse of the sq/lab workspace — fast, native, and distraction-free.</p>
+  <div class="gallery-grid">
+    <div class="gallery-item" data-src="screenshots/screenshot-banner.png">
+      <img src="screenshots/screenshot-banner.png" alt="sq/lab main editor view" loading="lazy">
     </div>
-    <div class="editor-tab-row">
-      <div class="editor-tab active">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        revenue_monthly.sql
-      </div>
-      <div class="editor-tab">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        terminal
-      </div>
-      <div class="editor-tab">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
-        git
-      </div>
-      <div class="editor-tab">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        agent
-      </div>
-    </div>
-    <div class="editor-body">
-      <div class="editor-sidebar">
-        <div class="sidebar-section">Connections</div>
-        <div class="sidebar-item">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
-          db-aurora-prd
-        </div>
-        <div class="sidebar-item active">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
-          db-dev
-        </div>
-        <div class="sidebar-group">
-          <div class="sidebar-table">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-            orders
-          </div>
-          <div class="sidebar-table">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-            customers
-          </div>
-          <div class="sidebar-table" style="color: var(--accent);">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-            transactions
-          </div>
-          <div class="sidebar-table">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-            products
-          </div>
-        </div>
-      </div>
-      <div class="code-panel">
-        <div class="code-area">
-          <div class="line"><span class="ln">1</span><span class="cm">-- monthly revenue by product line</span></div>
-          <div class="line"><span class="ln">2</span><span class="kw">SELECT</span></div>
-          <div class="line"><span class="ln">3</span>&nbsp;&nbsp;<span class="fn">date_trunc</span>(<span class="str">'month'</span>, created_at) <span class="kw">AS</span> month,</div>
-          <div class="line"><span class="ln">4</span>&nbsp;&nbsp;product_type,</div>
-          <div class="line"><span class="ln">5</span>&nbsp;&nbsp;<span class="fn">sum</span>(amount) <span class="kw">AS</span> revenue</div>
-          <div class="line"><span class="ln">6</span><span class="kw">FROM</span> transactions</div>
-          <div class="line"><span class="ln">7</span><span class="kw">WHERE</span> status <span class="op">=</span> <span class="str">'settled'</span></div>
-          <div class="line"><span class="ln">8</span>&nbsp;&nbsp;<span class="kw">AND</span> created_at <span class="op">&gt;</span> <span class="fn">now</span>() <span class="op">-</span> <span class="str">'1 year'</span>::interval</div>
-          <div class="line"><span class="ln">9</span><span class="kw">GROUP BY</span> <span class="op">1</span>, <span class="op">2</span></div>
-          <div class="line"><span class="ln">10</span><span class="kw">ORDER BY</span> <span class="op">1</span> <span class="kw">DESC</span>;</div>
-        </div>
-        <div class="result-bar">
-          <div class="result-tab active">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-            results
-          </div>
-          <div class="result-tab">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            38ms
-          </div>
-          <div class="result-tab">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-            14 MB RSS
-          </div>
-          <span class="result-ok">4 rows · db-dev</span>
-        </div>
-        <div class="result-table-wrap">
-          <table>
-            <thead><tr><th>month</th><th>product_type</th><th>revenue</th></tr></thead>
-            <tbody>
-              <tr><td>2025-04-01</td><td>pix</td><td>R$ 284,920.00</td></tr>
-              <tr><td>2025-04-01</td><td>boleto</td><td>R$ 91,340.50</td></tr>
-              <tr><td>2025-03-01</td><td>pix</td><td>R$ 261,480.00</td></tr>
-              <tr><td>2025-03-01</td><td>boleto</td><td>R$ 88,720.00</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+    <div class="gallery-item" data-src="screenshots/screenshot-autocomplete-1.png">
+      <img src="screenshots/screenshot-autocomplete-1.png" alt="sq/lab autocomplete" loading="lazy">
     </div>
   </div>
-</div>
+</section>
+
+<hr class="divider">
 
 <!-- DB SUPPORT -->
 <div class="db-section">
@@ -1055,85 +745,38 @@ footer {
 
 <!-- WORKFLOW -->
 <section class="workflow-section" id="workflow">
-  <div class="workflow-layout">
-    <div class="workflow-copy">
-      <div class="section-eyebrow">// beyond the pillars</div>
-      <h2>Everything around the query matters.</h2>
-      <p>
-        sq/lab keeps the daily database workflow in one native workspace:
-        inspect schemas, jump across files, complete SQL from real metadata,
-        and store credentials in the operating system keychain.
-      </p>
-      <div class="workflow-list">
-        <div class="workflow-item">
-          <div class="workflow-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M14 14h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg>
-          </div>
-          <div><strong>Live schema tree</strong><span>Browse schemas, tables, views, indexes, triggers, functions, and columns from the connection panel.</span></div>
+  <div class="workflow-copy">
+    <div class="section-eyebrow">// beyond the pillars</div>
+    <h2>Everything around the query matters.</h2>
+    <p>
+      sq/lab keeps the daily database workflow in one native workspace:
+      inspect schemas, jump across files, complete SQL from real metadata,
+      and store credentials in the operating system keychain.
+    </p>
+    <div class="workflow-list">
+      <div class="workflow-item">
+        <div class="workflow-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M14 14h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg>
         </div>
-        <div class="workflow-item">
-          <div class="workflow-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-          </div>
-          <div><strong>File search</strong><span>Find SQL files and project references quickly without leaving the editor.</span></div>
-        </div>
-        <div class="workflow-item">
-          <div class="workflow-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
-          </div>
-          <div><strong>Metadata-aware autocomplete</strong><span>Complete tables, aliases, and columns from your current database context.</span></div>
-        </div>
-        <div class="workflow-item">
-          <div class="workflow-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          </div>
-          <div><strong>Secure password storage</strong><span>Passwords are stored through native keychain providers instead of plain project files.</span></div>
-        </div>
+        <div><strong>Live schema tree</strong><span>Browse schemas, tables, views, indexes, triggers, functions, and columns from the connection panel.</span></div>
       </div>
-    </div>
-
-    <div class="workflow-visual" aria-label="sq/lab schema browser, file search, autocomplete, and secure credentials preview">
-      <div class="workflow-toolbar">
-        <div class="win-dots">
-          <div class="win-dot dot-r"></div>
-          <div class="win-dot dot-y"></div>
-          <div class="win-dot dot-g"></div>
+      <div class="workflow-item">
+        <div class="workflow-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         </div>
-        developer workspace
+        <div><strong>File search</strong><span>Find SQL files and project references quickly without leaving the editor.</span></div>
       </div>
-      <div class="workflow-pane">
-        <div class="schema-preview">
-          <div class="preview-label">schema tree</div>
-          <div class="tree-line active">▾ public</div>
-          <div class="tree-line">├─ tables</div>
-          <div class="tree-line">│  ├─ customers</div>
-          <div class="tree-line">│  ├─ orders</div>
-          <div class="tree-line active">│  └─ transactions</div>
-          <div class="tree-line">├─ views</div>
-          <div class="tree-line">├─ indexes</div>
-          <div class="tree-line">└─ functions</div>
+      <div class="workflow-item">
+        <div class="workflow-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
         </div>
-        <div class="tool-preview">
-          <div class="preview-label">search and completion</div>
-          <div class="search-box">⌕ revenue_monthly.sql</div>
-          <div class="search-result">
-            <div class="search-result-title">analytics/revenue_monthly.sql</div>
-            <div class="search-result-line">12: SELECT date_trunc('month', created_at)</div>
-          </div>
-          <div class="search-result">
-            <div class="search-result-title">migrations/202605_add_indexes.sql</div>
-            <div class="search-result-line">31: CREATE INDEX transactions_created_at_idx</div>
-          </div>
-          <div class="completion-box">
-            <div class="completion-row active"><span>transactions.amount</span><span>numeric</span></div>
-            <div class="completion-row"><span>transactions.created_at</span><span>timestamptz</span></div>
-            <div class="completion-row"><span>customers.email</span><span>text</span></div>
-          </div>
-          <div class="secure-note">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            password stored in the system keychain
-          </div>
+        <div><strong>Metadata-aware autocomplete</strong><span>Complete tables, aliases, and columns from your current database context.</span></div>
+      </div>
+      <div class="workflow-item">
+        <div class="workflow-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         </div>
+        <div><strong>Secure password storage</strong><span>Passwords are stored through native keychain providers instead of plain project files.</span></div>
       </div>
     </div>
   </div>
@@ -1178,6 +821,25 @@ footer {
   </ul>
   <div class="footer-copy">© 2025 sqlab. Open source under MIT License.</div>
 </footer>
+
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox">
+  <img src="" alt="sq/lab screenshot">
+</div>
+
+<script>
+(function(){
+  var lb=document.getElementById('lightbox'),lbImg=lb.querySelector('img');
+  document.querySelectorAll('.gallery-item').forEach(function(item){
+    item.addEventListener('click',function(){
+      lbImg.src=this.getAttribute('data-src');
+      lb.classList.add('open');
+    });
+  });
+  lb.addEventListener('click',function(){lb.classList.remove('open');});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')lb.classList.remove('open');});
+})();
+</script>
 
 </body>
 </html>
