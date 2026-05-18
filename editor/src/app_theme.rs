@@ -4,7 +4,8 @@ use gpui_component::{Theme, ThemeRegistry};
 use crate::schema_cache::db;
 
 const THEME_SETTING_KEY: &str = "theme";
-const DEFAULT_THEME_NAME: &str = "JetBrains Dark";
+const DEFAULT_THEME_NAME: &str = "Sq/lab Dark Theme";
+const SQ_LAB_LIGHT_THEME_NAME: &str = "Sq/lab Light Theme";
 
 const BUNDLED_THEMES: &[(&str, &str)] = &[
     (
@@ -54,10 +55,6 @@ const BUNDLED_THEMES: &[(&str, &str)] = &[
         include_str!("ui/themes/gpui-component/jellybeans.json"),
     ),
     (
-        "jetbrains-dark",
-        include_str!("ui/themes/jetbrains-dark.json"),
-    ),
-    (
         "kibble",
         include_str!("ui/themes/gpui-component/kibble.json"),
     ),
@@ -85,6 +82,7 @@ const BUNDLED_THEMES: &[(&str, &str)] = &[
         "spaceduck",
         include_str!("ui/themes/gpui-component/spaceduck.json"),
     ),
+    ("sq-lab", include_str!("ui/themes/sq-lab.json")),
     (
         "tokyonight",
         include_str!("ui/themes/gpui-component/tokyonight.json"),
@@ -105,13 +103,24 @@ pub fn init(cx: &mut App) {
 }
 
 pub fn apply_theme_by_name(theme_name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
-    let theme_config = ThemeRegistry::global(cx)
-        .themes()
-        .get(&SharedString::from(theme_name))
-        .cloned();
+    let (theme_config, paired_theme_config) = {
+        let registry = ThemeRegistry::global(cx);
+        let themes = registry.themes();
+        let theme_config = themes.get(&SharedString::from(theme_name)).cloned();
+        let paired_theme_config = paired_sq_lab_theme_name(theme_name)
+            .and_then(|paired_theme_name| themes.get(&SharedString::from(paired_theme_name)))
+            .cloned();
+
+        (theme_config, paired_theme_config)
+    };
 
     if let Some(theme_config) = theme_config {
-        Theme::global_mut(cx).apply_config(&theme_config);
+        let theme = Theme::global_mut(cx);
+        if let Some(paired_theme_config) = paired_theme_config {
+            theme.apply_config(&paired_theme_config);
+        }
+        theme.apply_config(&theme_config);
+
         if let Some(window) = window {
             window.refresh();
         } else {
@@ -159,12 +168,24 @@ fn load_bundled_themes(cx: &mut App) {
 
 fn apply_initial_theme(cx: &mut App) {
     let saved_theme = load_saved_theme_name();
-    let initial_theme = saved_theme.as_deref().unwrap_or(DEFAULT_THEME_NAME);
 
-    if !apply_theme_by_name(initial_theme, None, cx) && initial_theme != DEFAULT_THEME_NAME {
-        if !apply_theme_by_name(DEFAULT_THEME_NAME, None, cx) {
-            eprintln!("Failed to apply default theme: {}", DEFAULT_THEME_NAME);
-        }
+    if saved_theme
+        .as_deref()
+        .is_some_and(|theme_name| apply_theme_by_name(theme_name, None, cx))
+    {
+        return;
+    }
+
+    if !apply_theme_by_name(DEFAULT_THEME_NAME, None, cx) {
+        eprintln!("Failed to apply default theme: {}", DEFAULT_THEME_NAME);
+    }
+}
+
+fn paired_sq_lab_theme_name(theme_name: &str) -> Option<&'static str> {
+    match theme_name {
+        DEFAULT_THEME_NAME => Some(SQ_LAB_LIGHT_THEME_NAME),
+        SQ_LAB_LIGHT_THEME_NAME => Some(DEFAULT_THEME_NAME),
+        _ => None,
     }
 }
 

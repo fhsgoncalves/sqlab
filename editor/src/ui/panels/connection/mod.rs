@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, prelude::FluentBuilder, px, rgb,
+    div, hsla, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, WindowExt,
@@ -1250,7 +1250,13 @@ impl Render for ConnectionPanel {
                     .gap_1()
                     .rounded(cx.theme().radius)
                     .hover(|style| style.bg(cx.theme().accent.opacity(0.1)))
-                    .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.15)))
+                    .when(is_selected, |this| {
+                        this.bg(if cx.theme().is_dark() {
+                            hsla(0.74, 0.45, 0.32, 0.45)
+                        } else {
+                            hsla(0.74, 0.42, 0.70, 0.58)
+                        })
+                    })
                     .child(
                         div()
                             .id(format!("connection-expand-icon-{}", row_name))
@@ -1258,9 +1264,9 @@ impl Render for ConnectionPanel {
                             .flex_none()
                             .child(
                                 Icon::new(if is_expanded {
-                                    IconName::ArrowDown
+                                    IconName::ChevronDown
                                 } else {
-                                    IconName::ArrowRight
+                                    IconName::ChevronRight
                                 })
                                 .size(px(14.))
                                 .text_color(cx.theme().muted_foreground),
@@ -1277,14 +1283,57 @@ impl Render for ConnectionPanel {
                     )
                     .child(div().id(format!("connection-icon-{}", row_name)).child(
                         if config.db_type == Database::Postgres {
-                            Icon::new(IconName::File)
-                                .path("icons/pg.svg")
-                                .size(px(28.))
-                                .text_color(rgb(0x336791))
+                            div()
+                                .relative()
+                                .size(px(20.))
+                                .flex_none()
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(IconName::File)
+                                                .path("icons/pg.svg")
+                                                .size(px(19.))
+                                                .text_color(rgb(0x336791)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(IconName::File)
+                                                .path("icons/pg-details.svg")
+                                                .size(px(20.))
+                                                .text_color(rgb(0x000000)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(IconName::File)
+                                                .path("icons/pg-details.svg")
+                                                .size(px(18.))
+                                                .text_color(rgb(0xffffff)),
+                                        ),
+                                )
                                 .into_any_element()
                         } else {
-                            Icon::new(IconName::HardDrive)
-                                .size(px(26.))
+                            Icon::new(IconName::File)
+                                .path("icons/database-server.svg")
+                                .size(px(17.))
                                 .text_color(status_color)
                                 .into_any_element()
                         },
@@ -1378,7 +1427,13 @@ impl Render for ConnectionPanel {
                                 .pl(px(12.) * depth as f32 + px(4.))
                                 .rounded(cx.theme().radius)
                                 .whitespace_nowrap()
-                                .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.15)))
+                                .when(is_selected, |this| {
+                                    this.bg(if cx.theme().is_dark() {
+                                        hsla(0.74, 0.45, 0.32, 0.45)
+                                    } else {
+                                        hsla(0.74, 0.42, 0.70, 0.58)
+                                    })
+                                })
                                 .child(
                                     h_flex()
                                         .gap_1()
@@ -1389,9 +1444,9 @@ impl Render for ConnectionPanel {
                                                 .flex_none()
                                                 .child(if !is_leaf {
                                                     Icon::new(if is_node_expanded {
-                                                        IconName::ArrowDown
+                                                        IconName::ChevronDown
                                                     } else {
-                                                        IconName::ArrowRight
+                                                        IconName::ChevronRight
                                                     })
                                                     .size(px(14.))
                                                     .text_color(cx.theme().muted_foreground)

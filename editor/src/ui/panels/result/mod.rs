@@ -521,33 +521,6 @@ impl Render for ResultPanel {
             })
             .unwrap_or_else(|| format!("{} queries", self.executions.len()));
 
-        let bottom_btn = self.dock_area.as_ref().and_then(|dock_area| {
-            let dock_area = dock_area.upgrade()?;
-            let is_open = dock_area.read(cx).is_dock_open(DockPlacement::Bottom, cx);
-            let icon = if is_open {
-                IconName::PanelBottom
-            } else {
-                IconName::PanelBottomOpen
-            };
-            Some(
-                Button::new("toggle-bottom")
-                    .icon(icon)
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if is_open { "Collapse" } else { "Expand" })
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(dock_area) = this.dock_area.as_ref() {
-                            if let Some(dock_area) = dock_area.upgrade() {
-                                dock_area.update(cx, |dock_area, cx| {
-                                    dock_area.toggle_dock(DockPlacement::Bottom, window, cx);
-                                });
-                            }
-                        }
-                        cx.notify();
-                    })),
-            )
-        });
-
         let entity = cx.entity();
         let tab_bar = TabBar::new("results-tab-bar")
             .selected_index(self.active_tab)
@@ -599,7 +572,6 @@ impl Render for ResultPanel {
                     .bg(cx.theme().tab_bar)
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().p_1().children(bottom_btn))
                     .child(tab_bar),
             )
             .child(

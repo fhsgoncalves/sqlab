@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, Window, actions, div, prelude::FluentBuilder, px,
+    ParentElement, Render, Styled, Window, actions, div, hsla, prelude::FluentBuilder, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::{
-    IconName, Root, Sizable, TitleBar, WindowExt,
+    Icon, IconName, Root, Sizable, TitleBar, WindowExt,
     button::{Button, ButtonVariants as _},
-    dock::{DockArea, DockItem},
+    dock::{DockArea, DockItem, DockPlacement},
     h_flex,
     spinner::Spinner,
     v_flex,
@@ -45,6 +45,7 @@ pub struct Workspace {
     activity_tracker: Entity<ActivityTracker>,
     focus_handle: FocusHandle,
     terminal_panel: Entity<TerminalPanel>,
+    bottom_panel_size: gpui::Pixels,
 }
 
 impl Workspace {
@@ -133,6 +134,15 @@ impl Workspace {
             tabs.set_dock_area(weak_dock_area.clone());
             tabs
         });
+
+        let file_tree_for_active_path = file_tree_panel.clone();
+        cx.observe(&editor_tabs, move |_, editor_tabs, cx| {
+            let active_path = editor_tabs.read(cx).active_path(cx);
+            file_tree_for_active_path.update(cx, |tree, cx| {
+                tree.set_active_editor_path(active_path, cx);
+            });
+        })
+        .detach();
 
         // Subscribe to file search results (after editor_tabs is created)
         let editor_tabs_for_focus = editor_tabs.clone();
@@ -234,17 +244,18 @@ impl Workspace {
         });
 
         // Set up bottom dock: wrapper panel
+        let bottom_panel_size = px(200.);
         let bottom_panels = DockItem::panel(Arc::new(bottom_panel.clone()));
 
         dock_area.update(cx, |dock_area, cx| {
             dock_area.set_center(center_panels, window, cx);
             dock_area.set_left_dock(left_panels, Some(px(240.)), true, window, cx);
             dock_area.set_right_dock(right_panels, Some(px(260.)), true, window, cx);
-            dock_area.set_bottom_dock(bottom_panels, Some(px(200.)), true, window, cx);
+            dock_area.set_bottom_dock(bottom_panels, Some(bottom_panel_size), true, window, cx);
             dock_area.set_dock_collapsible(
                 gpui::Edges {
                     left: true,
-                    bottom: true,
+                    bottom: false,
                     right: true,
                     ..Default::default()
                 },
@@ -264,6 +275,7 @@ impl Workspace {
             activity_tracker,
             focus_handle,
             terminal_panel,
+            bottom_panel_size,
         };
 
         cx.subscribe_in(
@@ -554,39 +566,61 @@ impl Workspace {
             return;
         }
 
+        self.toggle_bottom_panel(BottomPanelMode::Terminal, window, cx);
+    }
+
+    fn toggle_bottom_panel(
+        &mut self,
+        mode: BottomPanelMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_open = self
+            .dock_area
+            .read(cx)
+            .is_dock_open(DockPlacement::Bottom, cx);
+        let current_mode = self.bottom_panel.read(cx).mode();
+
+        if is_open && current_mode == mode {
+            self.dock_area.update(cx, |dock_area, cx| {
+                if let Some(bottom_dock) = dock_area.bottom_dock() {
+                    self.bottom_panel_size = bottom_dock.read(cx).size();
+                }
+                dock_area.remove_bottom_dock(window, cx);
+            });
+            return;
+        }
+
         self.bottom_panel.update(cx, |panel, cx| {
-            panel.set_mode(BottomPanelMode::Terminal, cx);
+            panel.set_mode(mode, cx);
         });
 
-        self.terminal_panel.update(cx, |panel, cx| {
-            panel.ensure_has_tab(window, cx);
-        });
+        if !is_open {
+            let bottom_panel = self.bottom_panel.clone();
+            let bottom_panel_size = self.bottom_panel_size;
+            self.dock_area.update(cx, |dock_area, cx| {
+                dock_area.set_bottom_dock(
+                    DockItem::panel(Arc::new(bottom_panel)),
+                    Some(bottom_panel_size),
+                    true,
+                    window,
+                    cx,
+                );
+            });
+        }
+
+        if mode == BottomPanelMode::Terminal {
+            self.terminal_panel.update(cx, |panel, cx| {
+                panel.ensure_has_tab(window, cx);
+            });
+        }
 
         self.bottom_panel.update(cx, |panel, cx| {
             window.focus(&panel.focus_handle(cx), cx);
         });
-
-        self.dock_area.update(cx, |dock_area, cx| {
-            dock_area.toggle_dock(gpui_component::dock::DockPlacement::Bottom, window, cx);
-        });
     }
 
     fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_connection = self
-            .data_source_manager
-            .read(cx)
-            .active_name()
-            .map(|name| {
-                let status = self.data_source_manager.read(cx).status(name);
-                let status = match status {
-                    ConnectionStatus::Idle => "idle",
-                    ConnectionStatus::Connected => "connected",
-                    ConnectionStatus::Failed => "failed",
-                };
-                format!("{} ({})", name, status)
-            })
-            .unwrap_or_else(|| "No active connection".into());
-
         let (is_busy, activity_label, activity_count) = {
             let tracker = self.activity_tracker.read(cx);
             (
@@ -603,10 +637,24 @@ impl Workspace {
 
         let bottom_panel_mode = self.bottom_panel.read(cx).mode();
         let is_terminal_active = bottom_panel_mode == BottomPanelMode::Terminal;
+        let is_results_active = bottom_panel_mode == BottomPanelMode::Results;
+        let is_left_open = self
+            .dock_area
+            .read(cx)
+            .is_dock_open(DockPlacement::Left, cx);
+        let is_right_open = self
+            .dock_area
+            .read(cx)
+            .is_dock_open(DockPlacement::Right, cx);
         let is_dock_open = self
             .dock_area
             .read(cx)
-            .is_dock_open(gpui_component::dock::DockPlacement::Bottom, cx);
+            .is_dock_open(DockPlacement::Bottom, cx);
+        let active_bottom_button_fg = if cx.theme().is_dark() {
+            hsla(0.74, 0.78, 0.58, 1.0)
+        } else {
+            hsla(0.74, 0.78, 0.42, 1.0)
+        };
 
         h_flex()
             .id("workspace-bottom-bar")
@@ -620,64 +668,31 @@ impl Workspace {
             .bg(cx.theme().tab_bar)
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .child(div().truncate().child(active_connection))
+            .child(
+                Button::new("toggle-left-dock")
+                    .icon(if is_left_open {
+                        IconName::PanelLeft
+                    } else {
+                        IconName::PanelLeftOpen
+                    })
+                    .xsmall()
+                    .ghost()
+                    .tooltip(if is_left_open {
+                        "Collapse Left Panel"
+                    } else {
+                        "Expand Left Panel"
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dock_area.update(cx, |dock_area, cx| {
+                            dock_area.toggle_dock(DockPlacement::Left, window, cx);
+                        });
+                    })),
+            )
             .child(div().flex_1())
             .child(
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .child({
-                        let btn = Button::new("terminal-toggle")
-                            .icon(IconName::Inbox) // Using Inbox for Terminal
-                            .xsmall()
-                            .ghost()
-                            .tooltip("Terminal");
-
-                        let btn = if is_terminal_active && is_dock_open {
-                            btn.text_color(cx.theme().accent)
-                        } else {
-                            btn
-                        };
-
-                        btn.on_click(cx.listener(|this, _, window, cx| {
-                            let mut is_open = false;
-                            this.dock_area.update(cx, |dock_area, cx| {
-                                is_open = dock_area
-                                    .is_dock_open(gpui_component::dock::DockPlacement::Bottom, cx);
-                            });
-
-                            this.bottom_panel.update(cx, |panel, cx| {
-                                let mode = panel.mode();
-                                if is_open {
-                                    if mode == BottomPanelMode::Terminal {
-                                        // Switch to results and keep dock open
-                                        panel.set_mode(BottomPanelMode::Results, cx);
-                                    } else {
-                                        // Switch to terminal
-                                        panel.set_mode(BottomPanelMode::Terminal, cx);
-                                    }
-                                } else {
-                                    // Open dock and set terminal
-                                    panel.set_mode(BottomPanelMode::Terminal, cx);
-                                    this.dock_area.update(cx, |dock_area, cx| {
-                                        dock_area.toggle_dock(
-                                            gpui_component::dock::DockPlacement::Bottom,
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }
-                            });
-
-                            this.terminal_panel.update(cx, |panel, cx| {
-                                panel.ensure_has_tab(window, cx);
-                            });
-
-                            this.bottom_panel.update(cx, |panel, cx| {
-                                window.focus(&panel.focus_handle(cx), cx);
-                            });
-                        }))
-                    })
                     .child(
                         h_flex()
                             .items_center()
@@ -691,6 +706,60 @@ impl Workspace {
                             } else {
                                 div().size(px(12.)).into_any_element()
                             }),
+                    )
+                    .child({
+                        let btn = Button::new("results-toggle")
+                            .icon(Icon::new(IconName::File).path("icons/results-table.svg"))
+                            .xsmall()
+                            .ghost()
+                            .tooltip("Query Results");
+
+                        let btn = if is_results_active && is_dock_open {
+                            btn.text_color(active_bottom_button_fg)
+                        } else {
+                            btn
+                        };
+
+                        btn.on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_bottom_panel(BottomPanelMode::Results, window, cx);
+                        }))
+                    })
+                    .child({
+                        let btn = Button::new("terminal-toggle")
+                            .icon(Icon::new(IconName::File).path("icons/square-terminal.svg"))
+                            .xsmall()
+                            .ghost()
+                            .tooltip("Terminal");
+
+                        let btn = if is_terminal_active && is_dock_open {
+                            btn.text_color(active_bottom_button_fg)
+                        } else {
+                            btn
+                        };
+
+                        btn.on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_bottom_panel(BottomPanelMode::Terminal, window, cx);
+                        }))
+                    })
+                    .child(
+                        Button::new("toggle-right-dock")
+                            .icon(if is_right_open {
+                                IconName::PanelRight
+                            } else {
+                                IconName::PanelRightOpen
+                            })
+                            .xsmall()
+                            .ghost()
+                            .tooltip(if is_right_open {
+                                "Collapse Right Panel"
+                            } else {
+                                "Expand Right Panel"
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.dock_area.update(cx, |dock_area, cx| {
+                                    dock_area.toggle_dock(DockPlacement::Right, window, cx);
+                                });
+                            })),
                     ),
             )
     }
@@ -731,10 +800,18 @@ impl Render for Workspace {
                         .w_full()
                         .justify_between()
                         .child(
-                            div()
-                                .child("sq/lab")
+                            h_flex()
+                                .gap_0()
                                 .text_color(cx.theme().foreground)
-                                .font_weight(gpui::FontWeight::MEDIUM),
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child("sq")
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().primary)
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .child("/"),
+                                )
+                                .child("lab"),
                         )
                         .child(
                             Button::new("theme-toggle")

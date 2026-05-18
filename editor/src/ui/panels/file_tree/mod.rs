@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder,
+    StatefulInteractiveElement, Styled, Window, actions, div, hsla, prelude::FluentBuilder,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, WindowExt,
@@ -100,6 +100,7 @@ pub struct FileTreePanel {
     renaming_id: Option<String>,
     rename_input: Option<Entity<InputState>>,
     pending_new: Option<PendingNewEntry>,
+    active_editor_path: Option<String>,
 }
 
 impl EventEmitter<OpenFileEvent> for FileTreePanel {}
@@ -143,11 +144,17 @@ impl FileTreePanel {
             renaming_id: None,
             rename_input: None,
             pending_new: None,
+            active_editor_path: None,
         }
     }
 
     pub fn root(&self) -> &PathBuf {
         &self.root
+    }
+
+    pub fn set_active_editor_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.active_editor_path = path.map(|path| path.to_string_lossy().to_string());
+        cx.notify();
     }
 
     pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
@@ -859,6 +866,8 @@ impl Render for FileTreePanel {
                             .as_ref()
                             .map(|s| s == item.id.as_ref())
                             .unwrap_or(false);
+                        let is_active_editor =
+                            self.active_editor_path.as_deref() == Some(item.id.as_str());
                         let is_expanded = item.is_expanded();
                         let is_cut = self
                             .cut_buffer
@@ -908,7 +917,13 @@ impl Render for FileTreePanel {
                             .px_2()
                             .pl(gpui::px(16.) * depth as f32 + gpui::px(8.))
                             .rounded(cx.theme().radius)
-                            .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.15)))
+                            .when(is_selected, |this| {
+                                this.bg(if cx.theme().is_dark() {
+                                    hsla(0.74, 0.48, 0.38, 0.58)
+                                } else {
+                                    hsla(0.74, 0.42, 0.70, 0.58)
+                                })
+                            })
                             .when(is_cut, |this| this.text_color(cx.theme().muted_foreground))
                             .child(h_flex().gap_2().child(icon).child(
                                 if is_renaming || is_pending {
@@ -919,7 +934,16 @@ impl Render for FileTreePanel {
                                             div().child(item.label.clone()).into_any_element()
                                         })
                                 } else {
-                                    div().child(item.label.clone()).into_any_element()
+                                    div()
+                                        .when(is_active_editor, |this| {
+                                            this.text_color(if cx.theme().is_dark() {
+                                                hsla(0.74, 0.88, 0.74, 1.0)
+                                            } else {
+                                                hsla(0.74, 0.78, 0.42, 1.0)
+                                            })
+                                        })
+                                        .child(item.label.clone())
+                                        .into_any_element()
                                 },
                             ))
                             .on_click(cx.listener(

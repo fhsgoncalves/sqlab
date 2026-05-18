@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, hsla,
     prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, h_flex};
@@ -113,6 +113,12 @@ impl ParentElement for Tab {
 
 impl RenderOnce for Tab {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let active_accent = if cx.theme().is_dark() {
+            hsla(0.74, 0.78, 0.58, 1.0)
+        } else {
+            hsla(0.74, 0.78, 0.46, 1.0)
+        };
+
         let (bg, fg, border_color) = if self.selected {
             (
                 cx.theme().tab_active,
@@ -143,6 +149,7 @@ impl RenderOnce for Tab {
             .items_center()
             .gap_0p5()
             .flex_shrink_0()
+            .relative()
             .h(px(32.))
             .pl_3()
             .pr_1()
@@ -154,6 +161,17 @@ impl RenderOnce for Tab {
             .cursor_pointer()
             .when(!self.selected, |this| {
                 this.hover(|style| style.bg(hover_bg))
+            })
+            .when(self.selected, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.))
+                        .bg(active_accent),
+                )
             })
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(
@@ -256,11 +274,6 @@ impl TabBar {
 
     pub fn on_click(mut self, on_click: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_click = Some(Rc::new(on_click));
-        self
-    }
-
-    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
-        self.prefix = Some(prefix.into_any_element());
         self
     }
 

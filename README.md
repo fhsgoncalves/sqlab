@@ -50,11 +50,10 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 ## Roadmap
 
 - [ ] App distribution
-- [ ] Better marketing (focus on query detector + file editor + terminal for git versioning and coding agents)
-- [ ] Export results to more formats
-- [ ] Copy selected content as CSV / JSON
+- [ ] Allow exporting results to more formats (markdown, json, xml, excel (xlsx), SQL Inserts, SQL Updates, WHERE clause)
+- [ ] Copy selected content as any of the supported export formats (only the selected columns and rows)
 - [ ] Allow in-place editing in the data table
-- [ ] Refactor connection panel layout (IntelliJ-style)
+- [ ] Format current query (cmd+option+l)
 - [ ] Support diagrams
 - [ ] Support MySQL
 - [ ] Support SQLite

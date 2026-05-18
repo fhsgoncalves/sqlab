@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions, div,
+    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions, div, hsla,
     prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
@@ -14,7 +14,7 @@ use gpui_component::{
 
 use super::editor::{EditorPanel, ExecuteQuery};
 use crate::ui::components::tab::{Tab, TabBar};
-use sqlab_drivers_core::manager::DataSourceManager;
+use sqlab_drivers_core::{ConnectionStatus, manager::DataSourceManager};
 
 actions!(editor_tabs, [CycleTabForward, CycleTabBackward]);
 
@@ -76,6 +76,12 @@ impl EditorTabs {
                 editor.go_to_position(line_number, column, window, cx);
             });
         }
+    }
+
+    pub fn active_path(&self, cx: &App) -> Option<PathBuf> {
+        self.editors
+            .get(self.active_ix)
+            .map(|editor| editor.read(cx).path().clone())
     }
 
     fn close_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -187,62 +193,6 @@ impl Render for EditorTabs {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
 
-        let left_btn = self.dock_area.as_ref().and_then(|dock_area| {
-            let dock_area = dock_area.upgrade()?;
-            let is_open = dock_area.read(cx).is_dock_open(DockPlacement::Left, cx);
-            let icon = if is_open {
-                IconName::PanelLeft
-            } else {
-                IconName::PanelLeftOpen
-            };
-            Some(
-                Button::new("toggle-left")
-                    .icon(icon)
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if is_open {
-                        "Collapse Sidebar"
-                    } else {
-                        "Expand Sidebar"
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(dock_area) = this.dock_area.as_ref() {
-                            _ = dock_area.update(cx, |dock_area, cx| {
-                                dock_area.toggle_dock(DockPlacement::Left, window, cx);
-                            });
-                        }
-                    })),
-            )
-        });
-
-        let right_btn = self.dock_area.as_ref().and_then(|dock_area| {
-            let dock_area = dock_area.upgrade()?;
-            let is_open = dock_area.read(cx).is_dock_open(DockPlacement::Right, cx);
-            let icon = if is_open {
-                IconName::PanelRight
-            } else {
-                IconName::PanelRightOpen
-            };
-            Some(
-                Button::new("toggle-right")
-                    .icon(icon)
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if is_open {
-                        "Collapse Sidebar"
-                    } else {
-                        "Expand Sidebar"
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(dock_area) = this.dock_area.as_ref() {
-                            _ = dock_area.update(cx, |dock_area, cx| {
-                                dock_area.toggle_dock(DockPlacement::Right, window, cx);
-                            });
-                        }
-                    })),
-            )
-        });
-
         let zoom_btn = self.dock_area.as_ref().map(|_| {
             let is_zoomed = self.is_zoomed;
             Button::new("toggle-zoom")
@@ -289,8 +239,7 @@ impl Render for EditorTabs {
 
         let tab_bar = TabBar::new("editor-tab-bar")
             .selected_index(self.active_ix)
-            .prefix(h_flex().gap_1().children(left_btn))
-            .suffix(h_flex().gap_1().children(zoom_btn).children(right_btn))
+            .suffix(h_flex().gap_1().children(zoom_btn))
             .on_click(cx.listener(|this, ix: &usize, _, cx| {
                 this.active_ix = *ix;
                 cx.notify();
@@ -326,6 +275,27 @@ impl Render for EditorTabs {
                 )
             });
 
+        let active_connection = self.data_source_manager.read(cx).active_name().map(|name| {
+            let status = self.data_source_manager.read(cx).status(name);
+            let status_label = match status {
+                ConnectionStatus::Idle => "idle",
+                ConnectionStatus::Connected => "connected",
+                ConnectionStatus::Failed => "failed",
+            };
+            format!("{} ({})", name, status_label)
+        });
+
+        let active_connection_bg = if cx.theme().is_dark() {
+            hsla(0.72, 0.72, 0.68, 0.22)
+        } else {
+            hsla(0.74, 0.55, 0.74, 0.48)
+        };
+        let active_connection_fg = if cx.theme().is_dark() {
+            hsla(0.72, 0.90, 0.78, 1.0)
+        } else {
+            hsla(0.74, 0.70, 0.42, 1.0)
+        };
+
         let editor_toolbar = h_flex()
             .id("editor-toolbar")
             .h(px(32.))
@@ -345,7 +315,22 @@ impl Render for EditorTabs {
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(ExecuteQuery), cx);
                     }),
-            );
+            )
+            .child(div().flex_1())
+            .when_some(active_connection, |toolbar, connection| {
+                toolbar.child(
+                    div()
+                        .px_2()
+                        .py_0p5()
+                        .rounded(cx.theme().radius)
+                        .bg(active_connection_bg)
+                        .text_color(active_connection_fg)
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .truncate()
+                        .child(connection),
+                )
+            });
 
         v_flex()
             .id("editor-tabs")
