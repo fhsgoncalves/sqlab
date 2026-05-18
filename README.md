@@ -53,7 +53,6 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 ## Roadmap
 
 - [ ] App distribution
-- [ ] Smooth scroll on file editor + decorator for big queries
 - [ ] Allow in-place editing in the data table
 - [ ] Format current query (cmd+option+l)
 - [ ] Support diagrams

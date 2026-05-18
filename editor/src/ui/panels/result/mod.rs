@@ -501,7 +501,6 @@ impl ResultPanel {
                     "created_at".into(),
                     "query".into(),
                     "rows".into(),
-                    "shown".into(),
                     "time_ms".into(),
                 ],
                 vec![],
@@ -520,7 +519,6 @@ impl ResultPanel {
                             execution.created_at.clone(),
                             truncate_query(&execution.query, 120),
                             execution.result.row_count.to_string(),
-                            execution.result.rows.len().to_string(),
                             execution.result.execution_time_ms.to_string(),
                         ]
                     })
@@ -880,13 +878,7 @@ impl Render for ResultPanel {
             .unwrap_or_default();
         let data_source_label = active_execution.map(QueryExecution::data_source_name);
         let row_label = active_execution
-            .map(|execution| {
-                format!(
-                    "{} rows (showing {})",
-                    execution.result.row_count,
-                    execution.result.rows.len()
-                )
-            })
+            .map(|execution| format!("{} rows", execution.result.row_count))
             .unwrap_or_else(|| format!("{} queries", self.executions.len()));
 
         let entity = cx.entity();

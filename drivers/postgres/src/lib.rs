@@ -14,9 +14,14 @@ use sqlab_drivers_core::{
     DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
     TableInfo, TableKind, TriggerInfo,
 };
+use sqlparser::ast::Statement;
+use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::parser::Parser;
 use tokio::runtime::Runtime;
 use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Client, Row};
+
+const DEFAULT_ROW_LIMIT: usize = 1000;
 
 pub struct PostgresDataSource {
     config: DataSourceConfig,
@@ -89,14 +94,19 @@ impl PostgresDataSource {
     pub fn execute_query_blocking(
         &self,
         query: &str,
-        row_limit: Option<usize>,
+        apply_limit: bool,
     ) -> Result<QueryResult, DataSourceError> {
         let client = self.client.as_ref().ok_or(DataSourceError::NotConnected)?;
+        let query = if apply_limit {
+            apply_limit_if_missing(query, DEFAULT_ROW_LIMIT)
+        } else {
+            query.to_string()
+        };
         let start = Instant::now();
         let (columns, column_metadata, rows) = self
             .runtime
             .block_on(async {
-                let statement = client.prepare(query).await?;
+                let statement = client.prepare(&query).await?;
                 let column_metadata: Vec<ColumnMetadata> = statement
                     .columns()
                     .iter()
@@ -117,7 +127,6 @@ impl PostgresDataSource {
         let row_count = rows.len();
         let rows = rows
             .iter()
-            .take(row_limit.unwrap_or(usize::MAX))
             .map(row_to_strings)
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -135,7 +144,7 @@ impl PostgresDataSource {
         query: &str,
         path: impl AsRef<Path>,
     ) -> Result<(), DataSourceError> {
-        let result = self.execute_query_blocking(query, None)?;
+        let result = self.execute_query_blocking(query, false)?;
         let mut file =
             File::create(path).map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
 
@@ -580,7 +589,7 @@ impl DataSource for PostgresDataSource {
     }
 
     async fn execute_query(&self, query: &str) -> Result<QueryResult, DataSourceError> {
-        self.execute_query_blocking(query, Some(500))
+        self.execute_query_blocking(query, true)
     }
 
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError> {
@@ -607,6 +616,21 @@ fn make_rustls_connector() -> Result<MakeTlsConnector, DataSourceError> {
         .with_root_certificates(std::sync::Arc::new(root_store))
         .with_no_client_auth();
     Ok(MakeTlsConnector::new(std::sync::Arc::new(config).into()))
+}
+
+fn apply_limit_if_missing(query: &str, limit: usize) -> String {
+    let dialect = PostgreSqlDialect {};
+    let Ok(statements) = Parser::parse_sql(&dialect, query) else {
+        return query.to_string();
+    };
+    let Some(Statement::Query(query_ast)) = statements.last() else {
+        return query.to_string();
+    };
+    if query_ast.limit_clause.is_some() {
+        query.to_string()
+    } else {
+        format!("{query} LIMIT {limit}")
+    }
 }
 
 fn table_kind(relkind: &str) -> TableKind {
@@ -1013,5 +1037,60 @@ fn format_postgres_error(e: tokio_postgres::Error) -> String {
         msg
     } else {
         e.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_limit_to_simple_select() {
+        let result = apply_limit_if_missing("SELECT * FROM users", 1000);
+        assert_eq!(result, "SELECT * FROM users LIMIT 1000");
+    }
+
+    #[test]
+    fn does_not_add_limit_when_already_present() {
+        let result = apply_limit_if_missing("SELECT * FROM users LIMIT 50", 1000);
+        assert_eq!(result, "SELECT * FROM users LIMIT 50");
+    }
+
+    #[test]
+    fn does_not_add_limit_with_offset() {
+        let result = apply_limit_if_missing("SELECT * FROM users LIMIT 10 OFFSET 5", 1000);
+        assert_eq!(result, "SELECT * FROM users LIMIT 10 OFFSET 5");
+    }
+
+    #[test]
+    fn adds_limit_with_order_by() {
+        let result = apply_limit_if_missing("SELECT * FROM users ORDER BY id", 1000);
+        assert!(result.contains("LIMIT 1000"));
+    }
+
+    #[test]
+    fn adds_limit_to_cte_query() {
+        let result =
+            apply_limit_if_missing("WITH cte AS (SELECT * FROM posts) SELECT * FROM cte", 1000);
+        assert!(result.contains("LIMIT 1000"));
+    }
+
+    #[test]
+    fn does_not_count_inner_limit_in_subquery() {
+        let result =
+            apply_limit_if_missing("SELECT * FROM (SELECT * FROM posts LIMIT 5) AS sub", 1000);
+        assert!(result.contains("LIMIT 1000"));
+    }
+
+    #[test]
+    fn returns_original_on_parse_failure() {
+        let result = apply_limit_if_missing("INVALID SQL QUERY {{{", 1000);
+        assert_eq!(result, "INVALID SQL QUERY {{{");
+    }
+
+    #[test]
+    fn returns_original_for_non_select_statement() {
+        let result = apply_limit_if_missing("DELETE FROM users WHERE id = 1", 1000);
+        assert_eq!(result, "DELETE FROM users WHERE id = 1");
     }
 }

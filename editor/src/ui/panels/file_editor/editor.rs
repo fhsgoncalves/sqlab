@@ -1,9 +1,9 @@
-use std::{ops::Range, path::PathBuf};
+use std::{ops::Range, path::PathBuf, sync::Arc, time::Duration};
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, Styled, Subscription, Window, actions, div,
-    hsla, prelude::FluentBuilder, px,
+    IntoElement, KeyBinding, ParentElement, Render, Styled, Subscription, Task, Window, actions,
+    div, hsla, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IconName, Selectable, Sizable,
@@ -15,9 +15,10 @@ use gpui_component::{
 };
 
 use super::query_detector::{QueryRange, query_ranges_for_execution};
-use super::sql_completion::{SqlCompletionProvider, sql_diagnostics_at};
+use super::sql_completion::{SqlCompletionProvider, SqlDiagnostic, sql_diagnostics_at};
 use crate::schema_cache;
 use crate::ui::search::{SearchOptions, TextMatch, find_text_matches};
+use sqlab_drivers_core::DatabaseSchema;
 use sqlab_drivers_core::manager::DataSourceManager;
 
 actions!(
@@ -69,6 +70,11 @@ pub struct EditorPanel {
     search_matches: Vec<TextMatch>,
     selected_match_ix: usize,
     _subscriptions: Vec<Subscription>,
+    schema_cache: Option<(String, Arc<DatabaseSchema>)>,
+    last_diagnostics: Vec<SqlDiagnostic>,
+    diagnostics_epoch: u64,
+    pending_diagnostics_task: Option<Task<()>>,
+    last_observed_snapshot: Option<EditorSnapshot>,
 }
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
@@ -207,6 +213,7 @@ impl EditorPanel {
         let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder("Replace"));
 
         let editor_focus_handle = editor.read(cx).focus_handle(cx);
+        let data_source_manager_for_obs = data_source_manager.clone();
         let mut panel = Self {
             path,
             editor: editor.clone(),
@@ -227,11 +234,37 @@ impl EditorPanel {
             search_matches: Vec::new(),
             selected_match_ix: 0,
             _subscriptions: vec![
-                cx.observe(&editor, |this, _, cx| {
-                    this.refresh_active_query(cx);
-                    if this.search_open {
+                cx.subscribe(&editor, |this, _, event: &InputEvent, cx| match event {
+                    InputEvent::Change => {
+                        this.refresh_active_query(cx);
                         this.update_search_matches(cx);
+                        this.schedule_diagnostics(cx);
                     }
+                    InputEvent::PressEnter { .. } => {
+                        this.refresh_active_query(cx);
+                        this.schedule_diagnostics(cx);
+                    }
+                    InputEvent::Focus | InputEvent::Blur => {}
+                }),
+                cx.observe(&editor, |this, _, cx| {
+                    let snapshot = {
+                        let state = this.editor.read(cx);
+                        EditorSnapshot {
+                            text: state.value().to_string(),
+                            cursor: state.cursor(),
+                            selected: state.selected_value().to_string(),
+                        }
+                    };
+                    if this.last_observed_snapshot.as_ref() == Some(&snapshot) {
+                        return;
+                    }
+                    this.last_observed_snapshot = Some(snapshot);
+                    this.refresh_active_query(cx);
+                    this.schedule_diagnostics(cx);
+                }),
+                cx.observe(&data_source_manager_for_obs, |this, _, cx| {
+                    this.refresh_schema_cache(cx);
+                    this.schedule_diagnostics(cx);
                 }),
                 cx.on_focus_out(&editor_focus_handle, window, |this, _, _, cx| {
                     this.save(cx);
@@ -257,8 +290,14 @@ impl EditorPanel {
                     }
                 }),
             ],
+            schema_cache: None,
+            last_diagnostics: Vec::new(),
+            diagnostics_epoch: 0,
+            pending_diagnostics_task: None,
+            last_observed_snapshot: None,
         };
         panel.refresh_active_query(cx);
+        panel.refresh_schema_cache(cx);
         panel
     }
     pub fn query_context(&self, cx: &App) -> (String, Vec<QueryRange>) {
@@ -308,6 +347,93 @@ impl EditorPanel {
         self.apply_query_decoration(active_query, cx);
     }
 
+    fn refresh_schema_cache(&mut self, cx: &mut Context<Self>) {
+        let schema_cache = self
+            .data_source_manager
+            .read(cx)
+            .active_config()
+            .and_then(|config| {
+                let key = schema_cache::cache_key(config);
+                if let Some((cached_key, cached_schema)) = &self.schema_cache {
+                    if cached_key == &key {
+                        return Some((key, cached_schema.clone()));
+                    }
+                }
+                schema_cache::load(&key)
+                    .ok()
+                    .flatten()
+                    .map(|schema| (key, Arc::new(schema)))
+            });
+
+        if let Some((key, schema)) = schema_cache {
+            self.schema_cache = Some((key, schema));
+        }
+    }
+
+    fn schedule_diagnostics(&mut self, cx: &mut Context<Self>) {
+        self.diagnostics_epoch += 1;
+        let epoch = self.diagnostics_epoch;
+        let editor = self.editor.clone();
+        let schema = self.schema_cache.clone().map(|(_, s)| s);
+
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(150))
+                .await;
+
+            let (text, cursor) =
+                editor.read_with(cx, |state, _| (state.value().to_string(), state.cursor()));
+
+            let diagnostics = schema
+                .as_ref()
+                .map(|schema| sql_diagnostics_at(&text, schema, Some(cursor)))
+                .unwrap_or_default();
+
+            this.update(cx, |this, cx| {
+                if this.diagnostics_epoch == epoch {
+                    this.last_diagnostics = diagnostics;
+                    this.apply_current_decorations(cx);
+                }
+            })
+            .ok();
+        });
+
+        self.pending_diagnostics_task = Some(task);
+    }
+
+    fn apply_current_decorations(&mut self, cx: &mut Context<Self>) {
+        let active_query = self.active_query.clone();
+        let mut decorations = active_query
+            .as_ref()
+            .map(|query| InputDecoration {
+                range: query.trimmed_range.clone(),
+                fill: None,
+                border: Some(hsla(0.76, 0.73, 0.72, 0.85)),
+                border_width: px(1.),
+                underline: None,
+                underline_wavy: false,
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        decorations.extend(
+            self.last_diagnostics
+                .iter()
+                .map(|diagnostic| InputDecoration {
+                    range: diagnostic.range.clone(),
+                    fill: None,
+                    border: None,
+                    border_width: px(1.),
+                    underline: Some(hsla(0.0, 0.76, 0.62, 0.95)),
+                    underline_wavy: true,
+                }),
+        );
+
+        self.editor.update(cx, |state, cx| {
+            state.set_decorations(decorations, cx);
+        });
+    }
+
     pub fn override_query_decoration(
         &mut self,
         active_query: Option<QueryRange>,
@@ -341,36 +467,18 @@ impl EditorPanel {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let (text, cursor, schema) = {
-            let state = self.editor.read(cx);
-            let text = state.value().to_string();
-            let cursor = state.cursor();
-            let schema = self
-                .data_source_manager
-                .read(cx)
-                .active_config()
-                .and_then(|config| {
-                    schema_cache::load(&schema_cache::cache_key(config))
-                        .ok()
-                        .flatten()
-                });
-            (text, cursor, schema)
-        };
-
-        if let Some(schema) = schema {
-            decorations.extend(
-                sql_diagnostics_at(&text, &schema, Some(cursor))
-                    .into_iter()
-                    .map(|diagnostic| InputDecoration {
-                        range: diagnostic.range,
-                        fill: None,
-                        border: None,
-                        border_width: px(1.),
-                        underline: Some(hsla(0.0, 0.76, 0.62, 0.95)),
-                        underline_wavy: true,
-                    }),
-            );
-        }
+        decorations.extend(
+            self.last_diagnostics
+                .iter()
+                .map(|diagnostic| InputDecoration {
+                    range: diagnostic.range.clone(),
+                    fill: None,
+                    border: None,
+                    border_width: px(1.),
+                    underline: Some(hsla(0.0, 0.76, 0.62, 0.95)),
+                    underline_wavy: true,
+                }),
+        );
 
         self.editor.update(cx, |state, cx| {
             state.set_decorations(decorations, cx);
