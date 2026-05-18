@@ -1,4 +1,4 @@
-use zql_drivers_core::{
+use sqlab_drivers_core::{
     ColumnInfo, Database, DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, SchemaInfo,
     SequenceInfo, TableInfo, TableKind, TriggerInfo,
 };

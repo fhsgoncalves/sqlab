@@ -1,4 +1,4 @@
-# zql
+# sqlab
 This project is a SQL Editor written in rust, using gpui library (zed editor lib for graphics on GPU).
 
 References:

@@ -19,12 +19,12 @@ use gpui_component::{
 use crate::credentials;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
-use zql_drivers_core::ddl::create_ddl_generator;
-use zql_drivers_core::{
+use sqlab_drivers_core::ddl::create_ddl_generator;
+use sqlab_drivers_core::{
     ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind,
     manager::{DataSourceManager, IntrospectionStatus, create_data_source},
 };
-use zql_drivers_postgres::create_postgres_data_source;
+use sqlab_drivers_postgres::create_postgres_data_source;
 
 pub struct ConnectionPanel {
     manager: Entity<DataSourceManager>,
@@ -235,8 +235,13 @@ impl ConnectionPanel {
                             } else {
                                 manager.add(config.clone());
                             }
-                            if let Err(e) = credentials::save_password(&config.name, &config.password) {
-                                manager.set_credential_error(&config.name, credentials::recovery_error_message(&e));
+                            if let Err(e) =
+                                credentials::save_password(&config.name, &config.password)
+                            {
+                                manager.set_credential_error(
+                                    &config.name,
+                                    credentials::recovery_error_message(&e),
+                                );
                             }
                             let save_result = manager.save();
                             match &save_result {
@@ -539,7 +544,7 @@ impl ConnectionPanel {
     fn build_schema_tree_items(
         connection_name: &str,
         database_name: &str,
-        schema: &zql_drivers_core::DatabaseSchema,
+        schema: &sqlab_drivers_core::DatabaseSchema,
         expanded: &HashSet<String>,
     ) -> Vec<TreeItem> {
         let mut root_items = Vec::new();
@@ -547,10 +552,12 @@ impl ConnectionPanel {
         // Group tables by schema and by kind
         let mut schema_tables: std::collections::HashMap<
             String,
-            Vec<&zql_drivers_core::TableInfo>,
+            Vec<&sqlab_drivers_core::TableInfo>,
         > = std::collections::HashMap::new();
-        let mut schema_views: std::collections::HashMap<String, Vec<&zql_drivers_core::TableInfo>> =
-            std::collections::HashMap::new();
+        let mut schema_views: std::collections::HashMap<
+            String,
+            Vec<&sqlab_drivers_core::TableInfo>,
+        > = std::collections::HashMap::new();
         for table in &schema.tables {
             if matches!(table.kind, TableKind::View | TableKind::MaterializedView) {
                 schema_views
@@ -567,7 +574,7 @@ impl ConnectionPanel {
 
         let mut schema_functions: std::collections::HashMap<
             String,
-            Vec<&zql_drivers_core::FunctionInfo>,
+            Vec<&sqlab_drivers_core::FunctionInfo>,
         > = std::collections::HashMap::new();
         for func in &schema.functions {
             schema_functions
@@ -578,7 +585,7 @@ impl ConnectionPanel {
 
         let mut schema_sequences: std::collections::HashMap<
             String,
-            Vec<&zql_drivers_core::SequenceInfo>,
+            Vec<&sqlab_drivers_core::SequenceInfo>,
         > = std::collections::HashMap::new();
         for seq in &schema.sequences {
             schema_sequences
@@ -589,7 +596,7 @@ impl ConnectionPanel {
 
         let mut schema_indexes: std::collections::HashMap<
             String,
-            Vec<&zql_drivers_core::IndexInfo>,
+            Vec<&sqlab_drivers_core::IndexInfo>,
         > = std::collections::HashMap::new();
         for idx in &schema.indexes {
             schema_indexes
@@ -600,7 +607,7 @@ impl ConnectionPanel {
 
         let mut schema_triggers: std::collections::HashMap<
             String,
-            Vec<&zql_drivers_core::TriggerInfo>,
+            Vec<&sqlab_drivers_core::TriggerInfo>,
         > = std::collections::HashMap::new();
         for trig in &schema.triggers {
             schema_triggers
@@ -963,7 +970,7 @@ impl ConnectionPanel {
     fn generate_ddl_for_node(
         node_id: &str,
         _label: &str,
-        schema: &zql_drivers_core::DatabaseSchema,
+        schema: &sqlab_drivers_core::DatabaseSchema,
     ) -> Option<String> {
         let generator = create_ddl_generator(schema.db_type);
 
@@ -1082,7 +1089,7 @@ impl ConnectionPanel {
     fn schema_node_context_menu(
         node_id: String,
         _label: String,
-        schema: zql_drivers_core::DatabaseSchema,
+        schema: sqlab_drivers_core::DatabaseSchema,
     ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
         move |menu, _window, _cx| {
             let ddl_node_id = node_id.clone();

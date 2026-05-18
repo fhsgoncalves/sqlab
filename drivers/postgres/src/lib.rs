@@ -9,14 +9,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat};
 use postgres_rustls::MakeTlsConnector;
 use rustls::ClientConfig;
-use tokio::runtime::Runtime;
-use tokio_postgres::types::{FromSql, Type};
-use tokio_postgres::{Client, Row};
-use zql_drivers_core::{
+use sqlab_drivers_core::{
     ColumnInfo, ColumnMetadata, DataSource, DataSourceConfig, DataSourceError, Database,
     DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
     TableInfo, TableKind, TriggerInfo,
 };
+use tokio::runtime::Runtime;
+use tokio_postgres::types::{FromSql, Type};
+use tokio_postgres::{Client, Row};
 
 pub struct PostgresDataSource {
     config: DataSourceConfig,

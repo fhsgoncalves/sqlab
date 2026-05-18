@@ -26,11 +26,11 @@ use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEven
 use crate::ui::panels::project_search::{ProjectSearch, ProjectSearchEvent, ToggleProjectSearch};
 use crate::ui::panels::result::ResultPanel;
 use crate::ui::panels::terminal::TerminalPanel;
-use zql_drivers_core::{
+use sqlab_drivers_core::{
     ColumnMetadata, ConnectionStatus, DataSourceError, QueryResult,
     manager::{DataSourceManager, create_data_source},
 };
-use zql_drivers_postgres::create_postgres_data_source;
+use sqlab_drivers_postgres::create_postgres_data_source;
 
 actions!(workspace, [OpenFolder, ToggleSearchReplace]);
 
@@ -732,7 +732,7 @@ impl Render for Workspace {
                         .justify_between()
                         .child(
                             div()
-                                .child("zql")
+                                .child("sq/lab")
                                 .text_color(cx.theme().foreground)
                                 .font_weight(gpui::FontWeight::MEDIUM),
                         )

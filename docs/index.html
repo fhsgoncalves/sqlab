@@ -1,1443 +1,1183 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>ZQL — SQL Editor Built in Rust</title>
-        <link rel="icon" type="image/png" href="favicon.png" />
-        <meta
-            name="description"
-            content="ZQL is a blazing-fast, memory-efficient SQL editor powered by GPUI. Open source. Built in Rust."
-        />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Ubuntu+Mono:wght@400;700&family=Ubuntu:wght@400;500;700&display=swap"
-            rel="stylesheet"
-        />
-        <style>
-            *,
-            *::before,
-            *::after {
-                box-sizing: border-box;
-                margin: 0;
-                padding: 0;
-            }
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="sq/lab is an open-source SQL editor built in Rust with GPUI. Run the query under your cursor, edit .sql files in your repo, use a built-in terminal, and work with PostgreSQL today.">
+<meta name="keywords" content="SQL editor, SQL IDE, Rust SQL editor, PostgreSQL client, GPUI, database IDE, open source database tool, DataGrip alternative, DBeaver alternative">
+<meta name="author" content="sqlab">
+<meta name="robots" content="index,follow">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="canonical" href="https://fhsgoncalves.github.io/sqlab/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="sq/lab">
+<meta property="og:title" content="sq/lab — Open-Source SQL Editor Built in Rust">
+<meta property="og:description" content="A native SQL editor for developers: query detection, file-backed SQL editing, built-in terminal, PostgreSQL support, and Rust/GPUI performance.">
+<meta property="og:url" content="https://fhsgoncalves.github.io/sqlab/">
+<meta property="og:image" content="https://fhsgoncalves.github.io/sqlab/favicon.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="sq/lab — Open-Source SQL Editor Built in Rust">
+<meta name="twitter:description" content="A native SQL editor for developers: query detection, .sql files in your repo, terminal workflows, and PostgreSQL support.">
+<title>sq/lab — Open-Source SQL Editor Built in Rust</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "sq/lab",
+  "alternateName": "sqlab",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS",
+  "description": "sq/lab is an open-source SQL editor built in Rust with GPUI. It supports PostgreSQL today and focuses on query detection, file-backed SQL editing, a built-in terminal, schema browsing, file search, autocompletion, and secure password storage.",
+  "softwareHelp": "https://github.com/fhsgoncalves/sqlab",
+  "downloadUrl": "https://github.com/fhsgoncalves/sqlab/releases",
+  "codeRepository": "https://github.com/fhsgoncalves/sqlab",
+  "license": "https://github.com/fhsgoncalves/sqlab/blob/main/LICENSE",
+  "programmingLanguage": "Rust",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+</script>
+<style>
+:root {
+  --bg: #151726;
+  --bg2: #202236;
+  --bg3: #292c42;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --text: #e8e9f4;
+  --muted: #9aa1bc;
+  --accent: #c084fc;
+  --accent2: #a970ff;
+  --accent-dim: rgba(192,132,252,0.08);
+  --accent-dim2: rgba(192,132,252,0.15);
+  --red: #ff6b6b;
+  --yellow: #f7c948;
+  --mono: 'IBM Plex Mono', monospace;
+  --sans: 'IBM Plex Sans', sans-serif;
+}
 
-            :root {
-                --bg: #0c0a08;
-                --surface: #131109;
-                --border: #241e14;
-                --border2: #352c1a;
-                --accent: #e8611a;
-                --accent2: #f0a050;
-                --muted: #5a5040;
-                --text: #f0ebe0;
-                --text-dim: #9a8870;
-                --mono: "Ubuntu Mono", monospace;
-                --sans: "Ubuntu", sans-serif;
-            }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-            html {
-                scroll-behavior: smooth;
-            }
+html { scroll-behavior: smooth; }
 
-            body {
-                background: var(--bg);
-                color: var(--text);
-                font-family: var(--sans);
-                overflow-x: hidden;
-                min-height: 100vh;
-            }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
 
-            /* ── NOISE OVERLAY ── */
-            body::before {
-                content: "";
-                position: fixed;
-                inset: 0;
-                background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
-                opacity: 0.025;
-                pointer-events: none;
-                z-index: 0;
-            }
+a { color: inherit; text-decoration: none; }
 
-            /* ── GLOW ORBS ── */
-            .orb {
-                position: fixed;
-                border-radius: 50%;
-                filter: blur(120px);
-                pointer-events: none;
-                z-index: 0;
-                opacity: 0.12;
-            }
-            .orb-1 {
-                width: 600px;
-                height: 600px;
-                background: var(--accent);
-                top: -200px;
-                left: -100px;
-                animation: drift1 18s ease-in-out infinite alternate;
-            }
-            .orb-2 {
-                width: 500px;
-                height: 500px;
-                background: var(--accent2);
-                bottom: -150px;
-                right: -100px;
-                animation: drift2 22s ease-in-out infinite alternate;
-            }
+/* NAV */
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2.5rem;
+  height: 52px;
+  background: rgba(21,23,38,0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
 
-            @keyframes drift1 {
-                from {
-                    transform: translate(0, 0);
-                }
-                to {
-                    transform: translate(80px, 60px);
-                }
-            }
-            @keyframes drift2 {
-                from {
-                    transform: translate(0, 0);
-                }
-                to {
-                    transform: translate(-60px, -80px);
-                }
-            }
+.nav-logo {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+.nav-logo span { color: var(--accent); }
 
-            /* ── NAV ── */
-            nav {
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                z-index: 100;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                padding: 1.2rem 3rem;
-                border-bottom: 1px solid var(--border);
-                background: rgba(10, 10, 12, 0.7);
-                backdrop-filter: blur(16px);
-            }
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  list-style: none;
+}
+.nav-links a {
+  font-size: 13px;
+  color: var(--muted);
+  transition: color 0.15s;
+  font-family: var(--mono);
+}
+.nav-links a:hover { color: var(--text); }
 
-            .nav-logo {
-                font-family: var(--mono);
-                font-size: 1.3rem;
-                font-weight: 700;
-                letter-spacing: -0.02em;
-                color: var(--accent);
-            }
-            .nav-logo span {
-                color: var(--accent);
-            }
+.nav-cta {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 14px;
+  border: 1px solid var(--accent2);
+  border-radius: 4px;
+  color: var(--accent) !important;
+  transition: background 0.15s !important;
+}
+.nav-cta:hover { background: var(--accent-dim) !important; }
 
-            .nav-links {
-                display: flex;
-                gap: 2rem;
-                align-items: center;
-            }
-            .nav-links a:not(.btn) {
-                font-size: 0.85rem;
-                color: var(--text-dim);
-                text-decoration: none;
-                letter-spacing: 0.08em;
-                text-transform: uppercase;
-                transition: color 0.2s;
-            }
-            .nav-links a:not(.btn):hover {
-                color: var(--accent);
-            }
+/* HERO */
+.hero {
+  padding: 7rem 2.5rem 5rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
 
-            .btn {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.5rem;
-                padding: 0.55rem 1.2rem;
-                border-radius: 6px;
-                font-family: var(--mono);
-                font-size: 0.8rem;
-                font-weight: 700;
-                text-decoration: none;
-                letter-spacing: 0.04em;
-                cursor: pointer;
-                border: none;
-                transition: all 0.2s;
-            }
-            .btn-ghost {
-                background: transparent;
-                border: 1px solid var(--border2);
-                color: var(--text-dim);
-            }
-            .btn-ghost:hover {
-                border-color: var(--accent);
-                color: var(--accent);
-            }
-            .btn-primary {
-                background: var(--accent);
-                color: #000000 !important;
-                font-weight: 700;
-            }
-            .nav-links .btn-primary {
-                color: #000000 !important;
-            }
-            .btn-primary:hover {
-                background: #f07030;
-                transform: translateY(-1px);
-                box-shadow: 0 0 24px rgba(232, 97, 26, 0.4);
-            }
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 2rem;
+}
+.hero-eyebrow::before {
+  content: '';
+  display: block;
+  width: 20px;
+  height: 1px;
+  background: var(--accent);
+}
 
-            /* ── HERO ── */
-            .hero {
-                position: relative;
-                z-index: 1;
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                text-align: center;
-                padding: 8rem 2rem 4rem;
-            }
+h1 {
+  font-family: var(--mono);
+  font-size: clamp(52px, 8vw, 88px);
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -2px;
+  color: var(--text);
+  margin-bottom: 1.5rem;
+}
+h1 .slash { color: var(--accent); font-weight: 500; }
 
-            .hero-badge {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.5rem;
-                font-family: var(--mono);
-                font-size: 0.72rem;
-                color: var(--accent);
-                letter-spacing: 0.12em;
-                text-transform: uppercase;
-                border: 1px solid rgba(232, 97, 26, 0.3);
-                border-radius: 99px;
-                padding: 0.35rem 1rem;
-                margin-bottom: 2.5rem;
-                background: rgba(232, 97, 26, 0.06);
-                animation: fadeUp 0.8s ease both;
-            }
-            .badge-dot {
-                width: 6px;
-                height: 6px;
-                background: var(--accent);
-                border-radius: 50%;
-                animation: pulse 2s ease infinite;
-            }
-            @keyframes pulse {
-                0%,
-                100% {
-                    opacity: 1;
-                }
-                50% {
-                    opacity: 0.3;
-                }
-            }
+.hero-sub {
+  font-size: 17px;
+  color: var(--muted);
+  max-width: 520px;
+  line-height: 1.65;
+  margin-bottom: 2.5rem;
+  font-weight: 300;
+}
+.hero-sub strong { color: var(--text); font-weight: 400; }
 
-            .hero h1 {
-                font-size: clamp(4rem, 12vw, 9rem);
-                font-weight: 800;
-                letter-spacing: -0.04em;
-                line-height: 0.95;
-                margin-bottom: 0.3em;
-                animation: fadeUp 0.8s 0.1s ease both;
-            }
-            .hero h1 .z {
-                color: var(--accent);
-            }
-            .hero h1 .ql {
-                color: var(--accent);
-            }
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 3.5rem;
+}
 
-            .hero-sub {
-                font-size: clamp(1rem, 2.5vw, 1.3rem);
-                color: var(--text-dim);
-                max-width: 560px;
-                line-height: 1.6;
-                margin-bottom: 2.5rem;
-                animation: fadeUp 0.8s 0.2s ease both;
-            }
-            .hero-sub strong {
-                color: var(--text);
-            }
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent);
+  color: #151726;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 20px;
+  border-radius: 4px;
+  transition: background 0.15s, transform 0.1s;
+}
+.btn-primary:hover { background: var(--accent2); transform: translateY(-1px); }
 
-            .hero-actions {
-                display: flex;
-                gap: 1rem;
-                flex-wrap: wrap;
-                justify-content: center;
-                animation: fadeUp 0.8s 0.3s ease both;
-            }
-            .btn-lg {
-                padding: 0.8rem 2rem;
-                font-size: 0.9rem;
-                border-radius: 8px;
-            }
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 10px 20px;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-secondary:hover { border-color: var(--muted); color: var(--text); }
 
-            @keyframes fadeUp {
-                from {
-                    opacity: 0;
-                    transform: translateY(20px);
-                }
-                to {
-                    opacity: 1;
-                    transform: translateY(0);
-                }
-            }
+/* STATS BAR */
+.stats-bar {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  max-width: 560px;
+}
+.stat {
+  flex: 1;
+  padding: 14px 20px;
+  border-right: 1px solid var(--border);
+}
+.stat:last-child { border-right: none; }
+.stat-val {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
 
-            /* ── APP WINDOW ── */
-            .app-shot-wrap {
-                position: relative;
-                z-index: 1;
-                width: 100%;
-                max-width: 1180px;
-                margin: 5rem auto 0;
-                animation: fadeUp 0.9s 0.4s ease both;
-            }
-            .app-shot-wrap.container {
-                max-width: 1180px;
-            }
-            .app-shot {
-                background: #202332;
-                border: 1px solid #52586f;
-                border-radius: 12px;
-                overflow: hidden;
-                box-shadow:
-                    0 34px 90px rgba(0, 0, 0, 0.48),
-                    0 0 0 1px rgba(255, 255, 255, 0.04),
-                    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-                color: #c8d0ed;
-                font-family: var(--sans);
-            }
-            .app-titlebar {
-                display: flex;
-                align-items: center;
-                height: 38px;
-                gap: 11px;
-                padding: 0 15px;
-                background: #1c1f2b;
-                border-bottom: 1px solid #3a4054;
-            }
-            .dot {
-                width: 13px;
-                height: 13px;
-                border-radius: 50%;
-            }
-            .dot-r {
-                background: #ff5f57;
-            }
-            .dot-y {
-                background: #febc2e;
-            }
-            .dot-g {
-                background: #28c840;
-            }
-            .app-name {
-                margin-left: 16px;
-                color: #cbd4f4;
-                font-size: 1rem;
-                font-weight: 700;
-            }
-            .app-theme {
-                margin-left: auto;
-                color: #b9c2e4;
-                font-size: 1.25rem;
-            }
+/* EDITOR MOCKUP */
+.editor-wrap {
+  padding: 0 2.5rem 5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
 
-            .app-body {
-                display: grid;
-                grid-template-columns: 270px minmax(0, 1fr) 300px;
-                min-height: 645px;
-            }
-            .app-sidebar,
-            .app-connections {
-                background: #222534;
-                overflow: hidden;
-            }
-            .app-sidebar {
-                border-right: 1px solid #43495f;
-            }
-            .app-connections {
-                border-left: 1px solid #43495f;
-            }
-            .tree-title,
-            .connections-title {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                height: 40px;
-                padding: 0 14px;
-                color: #c9d1ef;
-                font-size: 1rem;
-                font-weight: 700;
-            }
-            .connections-title {
-                justify-content: space-between;
-            }
-            .tree-list,
-            .schema-list {
-                list-style: none;
-                padding: 4px 4px 0;
-                font-size: 0.95rem;
-                font-weight: 700;
-            }
-            .tree-item,
-            .schema-item,
-            .conn-row {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                min-height: 32px;
-                border-radius: 6px;
-                padding: 0 10px;
-                color: #c9d1ef;
-                white-space: nowrap;
-            }
-            .tree-item.active,
-            .schema-item.active {
-                background: rgba(255, 255, 255, 0.035);
-            }
-            .folder-icon,
-            .file-icon,
-            .sql-icon {
-                width: 14px;
-                height: 12px;
-                flex: 0 0 auto;
-                border: 2px solid #b7c1e5;
-                border-radius: 3px;
-                opacity: 0.95;
-            }
-            .folder-icon {
-                position: relative;
-            }
-            .folder-icon::before {
-                content: "";
-                position: absolute;
-                left: -2px;
-                top: -7px;
-                width: 9px;
-                height: 6px;
-                border: 2px solid #b7c1e5;
-                border-bottom: 0;
-                border-radius: 3px 3px 0 0;
-                background: #222534;
-            }
-            .file-icon {
-                height: 16px;
-                border-radius: 3px;
-            }
-            .file-icon.small {
-                width: 13px;
-                height: 15px;
-            }
-            .sql-icon {
-                position: relative;
-                height: 15px;
-                border-width: 0 2px 2px;
-                border-radius: 0 0 7px 7px;
-            }
-            .sql-icon::before,
-            .sql-icon::after {
-                content: "";
-                position: absolute;
-                left: -2px;
-                width: 14px;
-                height: 6px;
-                border: 2px solid #b7c1e5;
-                border-radius: 50%;
-                background: #222534;
-            }
-            .sql-icon::before {
-                top: -4px;
-            }
-            .sql-icon::after {
-                top: 4px;
-            }
-            .app-main {
-                display: grid;
-                grid-template-rows: 40px minmax(280px, 1fr) 232px;
-                min-width: 0;
-                background: #202332;
-            }
-            .editor-tabs,
-            .result-tabs {
-                display: flex;
-                align-items: stretch;
-                background: #202332;
-                border-bottom: 1px solid #43495f;
-                min-width: 0;
-            }
-            .tab {
-                display: flex;
-                align-items: center;
-                gap: 11px;
-                padding: 0 22px;
-                border-right: 1px solid #2b3041;
-                color: #c6cdec;
-                font-weight: 700;
-                min-width: 160px;
-                background: #232638;
-            }
-            .tab.inactive {
-                background: #202332;
-                color: #aeb7d8;
-            }
-            .tab-actions {
-                margin-left: auto;
-                display: flex;
-                align-items: center;
-                gap: 20px;
-                padding-right: 13px;
-                color: #c6cdec;
-                font-weight: 700;
-            }
-            .editor {
-                position: relative;
-                overflow: hidden;
-                border-bottom: 1px solid #43495f;
-                font-family: var(--mono);
-                font-size: clamp(0.9rem, 1.8vw, 1.28rem);
-                line-height: 1.65;
-                color: #c9d1ef;
-            }
-            .code-line {
-                display: grid;
-                grid-template-columns: 72px 1fr;
-                min-height: 33px;
-            }
-            .line-no {
-                padding-right: 22px;
-                text-align: right;
-                color: #a0a8c0;
-                user-select: none;
-            }
-            .code {
-                padding-left: 34px;
-                border-left: 1px solid rgba(255, 255, 255, 0.08);
-                white-space: pre;
-            }
-            .code-line.active {
-                background: rgba(143, 150, 180, 0.16);
-            }
-            .kw {
-                color: #f08383;
-            }
-            .id {
-                color: #cbd3ee;
-            }
-            .fn {
-                color: #96b4f4;
-            }
-            .str {
-                color: #e6db83;
-            }
-            .num {
-                color: #a2de79;
-            }
-            .result-pane {
-                min-width: 0;
-                overflow: hidden;
-            }
-            .result-tabs {
-                height: 42px;
-                border-top: 0;
-                border-bottom: 1px solid #43495f;
-            }
-            .result-tabs .tab {
-                min-width: 110px;
-                padding: 0 18px;
-                font-size: 0.95rem;
-            }
-            .result-toolbar {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                min-width: 0;
-                height: 49px;
-                padding: 0 14px;
-                border-bottom: 1px solid #43495f;
-                color: #9ca4bc;
-                font-weight: 700;
-                overflow: hidden;
-            }
-            .pill {
-                flex: 0 0 auto;
-                padding: 7px 12px;
-                border-radius: 8px;
-                border: 1px solid #444a61;
-                background: #282d42;
-                color: #cbd3ee;
-            }
-            .query-preview {
-                min-width: 0;
-                overflow: hidden;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-                font-family: var(--mono);
-            }
-            .results-grid {
-                width: 100%;
-                border-collapse: collapse;
-                table-layout: fixed;
-                font-size: 0.96rem;
-                font-weight: 700;
-                color: #c5cdec;
-            }
-            .results-grid th,
-            .results-grid td {
-                height: 36px;
-                border-right: 1px solid #444a61;
-                border-bottom: 1px solid #444a61;
-                padding: 0 10px;
-                text-align: left;
-                overflow: hidden;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-            }
-            .results-grid th {
-                color: #9ea6bd;
-                background: #272b3d;
-            }
-            .results-grid tr:nth-child(even) td {
-                background: rgba(255, 255, 255, 0.035);
-            }
-            .conn-list {
-                padding: 14px 12px 0;
-            }
-            .conn-row {
-                display: grid;
-                grid-template-columns: 16px 24px 1fr 24px;
-                gap: 10px;
-                min-height: 58px;
-                margin-bottom: 6px;
-                padding: 0;
-            }
-            .status-dot {
-                width: 11px;
-                height: 11px;
-                border-radius: 99px;
-                background: #a7adbd;
-                align-self: center;
-            }
-            .status-dot.green {
-                background: #19c463;
-            }
-            .db-icon {
-                width: 16px;
-                height: 14px;
-                align-self: center;
-                border: 2px solid currentColor;
-                border-radius: 4px 4px 3px 3px;
-                color: #a7adbd;
-            }
-            .db-icon.green {
-                color: #19c463;
-            }
-            .conn-name {
-                color: #d2d9f5;
-                font-weight: 700;
-            }
-            .conn-detail {
-                margin-top: 3px;
-                color: #969db4;
-                font-size: 0.78rem;
-                overflow: hidden;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-                max-width: 190px;
-            }
-            .schema-list {
-                padding-left: 16px;
-            }
-            .schema-list .schema-list {
-                padding-left: 24px;
-                padding-top: 3px;
-            }
-            .schema-list.root {
-                padding-left: 24px;
-            }
-            .schema-item {
-                min-height: 30px;
-                padding-right: 4px;
-                overflow: hidden;
-            }
-            .schema-item span:last-child {
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .column-dot {
-                width: 14px;
-                height: 14px;
-                border: 2px solid #b7c1e5;
-                border-radius: 99px;
-                flex: 0 0 auto;
-                position: relative;
-            }
-            .column-dot::after {
-                content: "";
-                position: absolute;
-                left: 3px;
-                top: 3px;
-                width: 4px;
-                height: 7px;
-                border-right: 2px solid #b7c1e5;
-                border-bottom: 2px solid #b7c1e5;
-                transform: rotate(45deg);
-            }
+.editor {
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg2);
+  font-family: var(--mono);
+  font-size: 12px;
+}
 
-            /* ── DIVIDER ── */
-            .divider {
-                position: relative;
-                z-index: 1;
-                border: none;
-                border-top: 1px solid var(--border);
-                margin: 0;
-            }
+.editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  height: 38px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+}
+.win-dots { display: flex; gap: 6px; }
+.win-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+}
+.dot-r { background: #ff5f57; }
+.dot-y { background: #febc2e; }
+.dot-g { background: #28c840; }
 
-            /* ── SECTION ── */
-            section {
-                position: relative;
-                z-index: 1;
-            }
-            .container {
-                max-width: 1100px;
-                margin: 0 auto;
-                padding: 0 2rem;
-            }
+.editor-title {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 8px;
+}
 
-            /* ── STATS BAR ── */
-            .stats {
-                display: flex;
-                align-items: stretch;
-                justify-content: center;
-                border-bottom: 1px solid var(--border);
-            }
-            .stat {
-                flex: 1;
-                padding: 2.5rem 2rem;
-                text-align: center;
-                border-right: 1px solid var(--border);
-            }
-            .stat:last-child {
-                border-right: none;
-            }
-            .stat-val {
-                font-family: var(--mono);
-                font-size: 2.2rem;
-                font-weight: 700;
-                color: var(--accent);
-                display: block;
-            }
-            .stat-label {
-                font-size: 0.78rem;
-                color: var(--text-dim);
-                text-transform: uppercase;
-                letter-spacing: 0.1em;
-                margin-top: 0.3rem;
-                display: block;
-            }
+.editor-tab-row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+}
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 11px;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+}
+.editor-tab.active {
+  color: var(--text);
+  background: var(--bg2);
+  border-top: 1.5px solid var(--accent);
+  padding-top: 6.5px;
+}
+.editor-tab svg { opacity: 0.6; }
+.editor-tab.active svg { opacity: 1; }
 
-            /* ── FEATURES ── */
-            .features {
-                padding: 7rem 2rem;
-            }
-            .section-label {
-                font-family: var(--mono);
-                font-size: 0.72rem;
-                color: var(--accent);
-                letter-spacing: 0.15em;
-                text-transform: uppercase;
-                margin-bottom: 1rem;
-            }
-            .section-title {
-                font-size: clamp(2rem, 5vw, 3rem);
-                font-weight: 800;
-                letter-spacing: -0.03em;
-                line-height: 1.1;
-                margin-bottom: 1rem;
-            }
-            .section-desc {
-                font-size: 1rem;
-                color: var(--text-dim);
-                max-width: 500px;
-                line-height: 1.7;
-                margin-bottom: 4rem;
-            }
+.editor-body {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  height: 280px;
+}
 
-            .features-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                gap: 1px;
-                background: var(--border);
-                border: 1px solid var(--border);
-                border-radius: 12px;
-                overflow: hidden;
-            }
-            .feature-card {
-                background: var(--surface);
-                padding: 2.5rem 2rem;
-                transition: background 0.2s;
-            }
-            .feature-card:hover {
-                background: #13131a;
-            }
+.editor-sidebar {
+  border-right: 1px solid var(--border);
+  padding: 12px 0;
+  overflow: hidden;
+}
+.sidebar-section {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 0 12px 6px;
+  opacity: 0.6;
+}
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.sidebar-item:hover, .sidebar-item.active { background: var(--accent-dim); color: var(--text); }
+.sidebar-item svg { flex-shrink: 0; opacity: 0.7; }
+.sidebar-group { padding-left: 20px; }
+.sidebar-table {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 28px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
 
-            .feature-icon {
-                width: 44px;
-                height: 44px;
-                border-radius: 10px;
-                border: 1px solid var(--border2);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 1.3rem;
-                margin-bottom: 1.5rem;
-                background: var(--bg);
-            }
-            .feature-card h3 {
-                font-size: 1.05rem;
-                font-weight: 700;
-                margin-bottom: 0.6rem;
-                letter-spacing: -0.01em;
-            }
-            .feature-card p {
-                font-size: 0.88rem;
-                color: var(--text-dim);
-                line-height: 1.7;
-            }
-            .tag {
-                display: inline-block;
-                font-family: var(--mono);
-                font-size: 0.65rem;
-                padding: 0.2rem 0.6rem;
-                border-radius: 4px;
-                background: rgba(232, 97, 26, 0.08);
-                color: var(--accent);
-                border: 1px solid rgba(232, 97, 26, 0.2);
-                margin-bottom: 0.8rem;
-            }
+.code-panel {
+  display: flex;
+  flex-direction: column;
+}
 
-            /* ── PITCH ── */
-            .pitch {
-                padding: 6rem 2rem;
-                border-top: 1px solid var(--border);
-            }
-            .pitch-inner {
-                max-width: 800px;
-                margin: 0 auto;
-            }
-            blockquote {
-                font-size: clamp(1.3rem, 3vw, 2rem);
-                font-weight: 500;
-                line-height: 1.5;
-                letter-spacing: -0.02em;
-                color: var(--text);
-                border-left: 3px solid var(--accent);
-                padding-left: 2rem;
-                margin-bottom: 1.5rem;
-            }
-            blockquote em {
-                color: var(--accent);
-                font-style: normal;
-            }
-            .pitch-attr {
-                font-family: var(--mono);
-                font-size: 0.78rem;
-                color: var(--text-dim);
-                padding-left: 2rem;
-            }
+.code-area {
+  flex: 1;
+  padding: 16px 20px;
+  overflow: hidden;
+  line-height: 1.75;
+}
+.line { display: flex; gap: 20px; }
+.ln { color: rgba(255,255,255,0.2); min-width: 16px; text-align: right; user-select: none; }
+.kw { color: #79b8ff; }
+.fn { color: var(--accent); }
+.str { color: #f7c948; }
+.cm { color: #6f7896; }
+.op { color: var(--muted); }
 
-            /* ── CTA ── */
-            .cta {
-                padding: 7rem 2rem;
-                text-align: center;
-                border-top: 1px solid var(--border);
-            }
-            .cta h2 {
-                font-size: clamp(2.5rem, 6vw, 4.5rem);
-                font-weight: 800;
-                letter-spacing: -0.04em;
-                margin-bottom: 1rem;
-                line-height: 1;
-            }
-            .cta h2 span {
-                color: var(--accent);
-            }
-            .cta p {
-                color: var(--text-dim);
-                font-size: 1rem;
-                margin-bottom: 2.5rem;
-                max-width: 400px;
-                margin-left: auto;
-                margin-right: auto;
-            }
-            .cta-actions {
-                display: flex;
-                gap: 1rem;
-                justify-content: center;
-                flex-wrap: wrap;
-            }
+.result-bar {
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.result-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+.result-tab.active { color: var(--text); }
+.result-ok { color: var(--accent); margin-left: auto; padding-right: 14px; font-size: 10px; }
 
-            /* ── FOOTER ── */
-            footer {
-                border-top: 1px solid var(--border);
-                padding: 2rem 3rem;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                flex-wrap: wrap;
-                gap: 1rem;
-                position: relative;
-                z-index: 1;
-            }
-            .footer-logo {
-                font-family: var(--mono);
-                font-size: 1rem;
-                color: var(--accent);
-                font-weight: 700;
-            }
-            .footer-copy {
-                font-size: 0.78rem;
-                color: var(--muted);
-            }
-            .footer-links {
-                display: flex;
-                gap: 1.5rem;
-            }
-            .footer-links a {
-                font-size: 0.78rem;
-                color: var(--text-dim);
-                text-decoration: none;
-                transition: color 0.2s;
-            }
-            .footer-links a:hover {
-                color: var(--accent);
-            }
+.result-table-wrap {
+  border-top: 1px solid var(--border);
+  overflow: auto;
+  max-height: 120px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+th {
+  text-align: left;
+  padding: 6px 16px;
+  color: var(--muted);
+  font-weight: 400;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+td {
+  padding: 5px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--accent-dim); }
 
-            /* ── RESPONSIVE ── */
-            @media (max-width: 640px) {
-                nav {
-                    padding: 1rem 1.5rem;
-                }
-                .nav-links {
-                    display: none;
-                }
-                .stats {
-                    flex-direction: column;
-                }
-                .stat {
-                    border-right: none;
-                    border-bottom: 1px solid var(--border);
-                }
-                .stat:last-child {
-                    border-bottom: none;
-                }
-                .hero {
-                    padding-top: 7rem;
-                }
-                .app-shot-wrap {
-                    margin-top: 3rem;
-                    padding: 0 1rem;
-                }
-                .app-body {
-                    grid-template-columns: 98px minmax(340px, 1fr) 132px;
-                    min-height: 430px;
-                }
-                .app-shot {
-                    overflow-x: auto;
-                    border-radius: 10px;
-                }
-                .tree-title,
-                .connections-title,
-                .tree-list,
-                .schema-list,
-                .conn-name {
-                    font-size: 0.72rem;
-                }
-                .app-main {
-                    grid-template-rows: 36px 220px 174px;
-                }
-                .tab {
-                    min-width: 122px;
-                    padding: 0 12px;
-                }
-                .editor {
-                    font-size: 0.82rem;
-                }
-                .code-line {
-                    grid-template-columns: 44px 1fr;
-                    min-height: 28px;
-                }
-                .line-no {
-                    padding-right: 12px;
-                }
-                .code {
-                    padding-left: 16px;
-                }
-                .conn-detail {
-                    display: none;
-                }
-                .conn-row {
-                    grid-template-columns: 12px 18px 1fr;
-                    min-height: 40px;
-                }
-                .conn-row > span:last-child {
-                    display: none;
-                }
-                .result-toolbar {
-                    height: 42px;
-                    font-size: 0.82rem;
-                }
-                .results-grid {
-                    font-size: 0.78rem;
-                }
-                footer {
-                    flex-direction: column;
-                    text-align: center;
-                }
-            }
-        </style>
-    </head>
-    <body>
-        <div class="orb orb-1"></div>
-        <div class="orb orb-2"></div>
+/* SECTION HEADING */
+.section { padding: 5rem 2.5rem; max-width: 1100px; margin: 0 auto; }
 
-        <!-- NAV -->
-        <nav>
-            <div class="nav-logo">zql</div>
-            <div class="nav-links">
-                <a href="#features">Features</a>
-                <a href="#pitch">About</a>
-                <a href="https://github.com/fhsgoncalves/zql" target="_blank"
-                    >GitHub</a
-                >
-                <a
-                    href="https://github.com/fhsgoncalves/zql/releases"
-                    target="_blank"
-                    class="btn btn-primary"
-                    >Download</a
-                >
-            </div>
-        </nav>
+.section-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+  letter-spacing: 0.05em;
+}
 
-        <!-- HERO -->
-        <div class="hero container">
-            <div class="hero-badge">
-                <span class="badge-dot"></span>
-                Open Source · Built in Rust
-            </div>
-            <h1><span class="z">zql</span></h1>
-            <p class="hero-sub">
-                A <strong>blazing-fast</strong>, memory-efficient SQL editor.<br />
-                No bloat. No nonsense. Just your queries —
-                <strong>flying</strong>.
-            </p>
-            <div class="hero-actions">
-                <a
-                    href="https://github.com/fhsgoncalves/zql/releases"
-                    target="_blank"
-                    class="btn btn-primary btn-lg"
-                    >↓ Download</a
-                >
-                <a
-                    href="https://github.com/fhsgoncalves/zql"
-                    target="_blank"
-                    class="btn btn-ghost btn-lg"
-                    >★ Star on GitHub</a
-                >
-            </div>
+h2 {
+  font-family: var(--mono);
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 400;
+  letter-spacing: -0.5px;
+  color: var(--text);
+  margin-bottom: 0.75rem;
+}
+
+.section-desc {
+  font-size: 15px;
+  color: var(--muted);
+  max-width: 480px;
+  margin-bottom: 3rem;
+  font-weight: 300;
+}
+
+/* FEATURE GRID */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.feature-card {
+  background: var(--bg2);
+  padding: 1.75rem;
+  transition: background 0.15s;
+}
+.feature-card:hover { background: var(--bg3); }
+
+.feature-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background: var(--accent-dim2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+.feature-icon svg { color: var(--accent); }
+
+.feature-title {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.feature-desc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.65;
+  font-weight: 300;
+}
+
+/* DB SUPPORT */
+.db-section {
+  padding: 0 2.5rem 5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.db-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.db-label::before, .db-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.db-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.db-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  transition: border-color 0.15s, color 0.15s;
+}
+.db-pill:hover { border-color: var(--accent); color: var(--text); }
+.db-pill svg { opacity: 0.7; }
+.db-pill.supported {
+  border-color: var(--accent2);
+  color: var(--text);
+  background: var(--accent-dim);
+}
+.db-status {
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border2);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* DEVELOPER WORKFLOW */
+.workflow-section {
+  padding: 5rem 2.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.workflow-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 3rem;
+  align-items: center;
+}
+.workflow-copy h2 { margin-bottom: 1rem; }
+.workflow-copy p {
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 300;
+  line-height: 1.75;
+  max-width: 460px;
+  margin-bottom: 1.5rem;
+}
+.workflow-list {
+  display: grid;
+  gap: 10px;
+}
+.workflow-item {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 12px;
+  align-items: start;
+}
+.workflow-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: var(--accent-dim2);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.workflow-item strong {
+  display: block;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+.workflow-item span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.workflow-visual {
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg2);
+  font-family: var(--mono);
+  box-shadow: 0 18px 60px rgba(0,0,0,0.2);
+}
+.workflow-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--muted);
+  font-size: 11px;
+}
+.workflow-pane {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  min-height: 330px;
+}
+.schema-preview {
+  border-right: 1px solid var(--border);
+  padding: 16px;
+}
+.preview-label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+.tree-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.tree-line.active { color: var(--accent); }
+.tool-preview {
+  padding: 16px;
+  position: relative;
+}
+.search-box {
+  border: 1px solid var(--border2);
+  background: var(--bg3);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+.search-result {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+  margin-bottom: 12px;
+}
+.search-result-title {
+  color: var(--text);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+.search-result-line {
+  color: var(--muted);
+  font-size: 10px;
+}
+.completion-box {
+  margin-top: 18px;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.completion-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+.completion-row:last-child { border-bottom: none; }
+.completion-row.active {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+.secure-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+/* QUOTE */
+.quote-section {
+  padding: 5rem 2.5rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+}
+.quote-text {
+  font-family: var(--mono);
+  font-size: clamp(15px, 2vw, 19px);
+  font-weight: 300;
+  color: var(--text);
+  max-width: 660px;
+  margin: 0 auto 1.25rem;
+  line-height: 1.65;
+  letter-spacing: -0.2px;
+}
+.quote-text em { color: var(--accent); font-style: normal; }
+.quote-attr {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+/* CTA */
+.cta-section {
+  padding: 6rem 2.5rem;
+  text-align: center;
+  max-width: 600px;
+  margin: 0 auto;
+}
+.cta-section h2 { margin-bottom: 0.75rem; }
+.cta-section p {
+  color: var(--muted);
+  font-size: 15px;
+  margin-bottom: 2rem;
+  font-weight: 300;
+}
+.cta-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* FOOTER */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 1.5rem 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.footer-logo {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+}
+.footer-logo span { color: var(--accent); }
+.footer-links {
+  display: flex;
+  gap: 1.5rem;
+  list-style: none;
+}
+.footer-links a {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  transition: color 0.15s;
+}
+.footer-links a:hover { color: var(--text); }
+.footer-copy {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: rgba(154,161,188,0.5);
+}
+
+/* DIVIDER */
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  nav { padding: 0 1rem; }
+  .nav-links { gap: 1rem; }
+  .nav-links a:not(.nav-cta) { display: none; }
+  .hero, .editor-wrap, .db-section, .section, .workflow-section, .quote-section, .cta-section {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  .stats-bar, .workflow-layout, .workflow-pane {
+    grid-template-columns: 1fr;
+  }
+  .stats-bar {
+    display: grid;
+  }
+  .stat {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat:last-child { border-bottom: none; }
+  .editor-sidebar { display: none; }
+  .editor-body { grid-template-columns: 1fr; }
+  .workflow-layout { gap: 2rem; }
+  .schema-preview { border-right: none; border-bottom: 1px solid var(--border); }
+  footer { align-items: flex-start; }
+}
+
+/* ANIMATIONS */
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.hero { animation: fadein 0.5s ease both; }
+.editor-wrap { animation: fadein 0.5s 0.15s ease both; }
+</style>
+</head>
+<body id="top">
+
+<!-- NAV -->
+<nav>
+  <a href="#top" class="nav-logo">sq<span>/</span>lab</a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#workflow">Workflow</a></li>
+    <li><a href="#about">About</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab">GitHub</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab/releases" class="nav-cta">Download</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-eyebrow">Open source · Built in Rust</div>
+  <h1>sq<span class="slash">/</span>lab</h1>
+  <p class="hero-sub">
+    A <strong>blazing-fast SQL IDE</strong> for developers who care about craft.
+    Query, version, and agent-code your databases — without the bloat.
+  </p>
+  <div class="hero-actions">
+    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
+      Download for macOS
+    </a>
+    <a href="https://github.com/fhsgoncalves/sqlab" class="btn-secondary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.164 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.933.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.741 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
+      Star on GitHub
+    </a>
+  </div>
+  <div class="stats-bar">
+    <div class="stat">
+      <div class="stat-val">&lt;80MB</div>
+      <div class="stat-label">Memory</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">&lt;25ms</div>
+      <div class="stat-label">Cold start</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">Native</div>
+      <div class="stat-label">Not Electron</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">MIT</div>
+      <div class="stat-label">License</div>
+    </div>
+  </div>
+</section>
+
+<!-- EDITOR MOCKUP -->
+<div class="editor-wrap">
+  <div class="editor">
+    <div class="editor-bar">
+      <div class="win-dots">
+        <div class="win-dot dot-r"></div>
+        <div class="win-dot dot-y"></div>
+        <div class="win-dot dot-g"></div>
+      </div>
+      <span class="editor-title">sq/lab — analytics/revenue_monthly.sql</span>
+    </div>
+    <div class="editor-tab-row">
+      <div class="editor-tab active">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        revenue_monthly.sql
+      </div>
+      <div class="editor-tab">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        terminal
+      </div>
+      <div class="editor-tab">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        git
+      </div>
+      <div class="editor-tab">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        agent
+      </div>
+    </div>
+    <div class="editor-body">
+      <div class="editor-sidebar">
+        <div class="sidebar-section">Connections</div>
+        <div class="sidebar-item">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          db-aurora-prd
         </div>
-
-        <!-- APP SCREENSHOT -->
-        <div class="app-shot-wrap container">
-            <div class="app-shot" aria-label="zql SQL editor interface preview">
-                <div class="app-titlebar">
-                    <span class="dot dot-r"></span>
-                    <span class="dot dot-y"></span>
-                    <span class="dot dot-g"></span>
-                    <span class="app-name">zql</span>
-                    <span class="app-theme">☼</span>
-                </div>
-                <div class="app-body">
-                    <aside class="app-sidebar">
-                        <div class="tree-title">
-                            <span class="folder-icon"></span
-                            ><span>queries</span>
-                        </div>
-                        <ul class="tree-list">
-                            <li class="tree-item">
-                                <span class="sql-icon"></span
-                                ><span>analysis.sql</span>
-                            </li>
-                            <li class="tree-item active">
-                                <span class="sql-icon"></span
-                                ><span>sandbox.sql</span>
-                            </li>
-                        </ul>
-                    </aside>
-
-                    <main class="app-main">
-                        <div class="editor-tabs">
-                            <div class="tab">
-                                <span>▣</span><span>analysis.sql</span
-                                ><span>×</span>
-                            </div>
-                            <div class="tab inactive">
-                                <span>sandbox.sql</span><span>×</span>
-                            </div>
-                            <div class="tab-actions">
-                                <span>↗</span><span>▣</span>
-                            </div>
-                        </div>
-
-                        <section class="editor" aria-label="SQL editor">
-                            <div class="code-line">
-                                <span class="line-no">1</span
-                                ><span class="code"><span class="kw">SELECT</span><span class="id"> customer_id</span>,<span class="fn"> COUNT</span>(*)<span class="kw"> as </span><span class="id">orders</span></span>
-                            </div>
-                            <div class="code-line">
-                                <span class="line-no">2</span><span class="code"><span class="kw">FROM</span><span class="fn"> orders</span></span>
-                            </div>
-                            <div class="code-line">
-                                <span class="line-no">3</span><span class="code"><span class="kw">WHERE</span><span class="id"> created_at</span> &gt; <span class="fn">NOW</span>() - <span class="fn">INTERVAL</span> <span class="str">'7 days'</span></span>
-                            </div>
-                            <div class="code-line">
-                                <span class="line-no">4</span><span class="code"><span class="kw">GROUP BY</span> <span class="id">customer_id</span></span>
-                            </div>
-                            <div class="code-line active">
-                                <span class="line-no">5</span><span class="code"><span class="kw">ORDER BY</span> <span class="id">orders</span> <span class="str">DESC</span> <span class="kw">LIMIT</span> <span class="num">5</span>;</span>
-                            </div>
-                        </section>
-
-                        <section class="result-pane" aria-label="Query result">
-                            <div class="result-tabs">
-                                <div class="tab inactive">
-                                    <span>▣</span><span>History</span>
-                                </div>
-                                <div class="tab">
-                                    <span>Result 2</span><span>×</span>
-                                </div>
-                            </div>
-                            <div class="result-toolbar">
-                                <span class="pill">Output</span>
-                                <span class="pill">db-dev</span>
-                                <span class="query-preview"
-                                    >SELECT customer_id, COUNT(*) as orders FROM
-                                    orders WHERE created_at &gt; NOW()</span
-                                >
-                            </div>
-                            <table class="results-grid">
-                                <thead>
-                                    <tr>
-                                        <th>customer_id</th>
-                                        <th>orders</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td>
-                                            2721a340-72c0-4bb8-816b-f53c99e320ef
-                                        </td>
-                                        <td>26</td>
-                                    </tr>
-                                    <tr>
-                                        <td>
-                                            99ee5309-0466-4f5a-ae12-d65bb1423512
-                                        </td>
-                                        <td>20</td>
-                                    </tr>
-                                    <tr>
-                                        <td>
-                                            66abe481-a162-451e-8da1-3b4448d379da
-                                        </td>
-                                        <td>17</td>
-                                    </tr>
-                                    <tr>
-                                        <td>
-                                            4173eb2c-0929-48f4-beb9-04a126793f50
-                                        </td>
-                                        <td>6</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </section>
-                    </main>
-
-                    <aside class="app-connections">
-                        <div class="connections-title">
-                            <span>Connections</span><span>＋</span>
-                        </div>
-                        <div class="conn-list">
-                            <div class="conn-row">
-                                <span class="status-dot"></span
-                                ><span class="db-icon"></span>
-                                <div>
-                                    <div class="conn-name">db-prd</div>
-                                    <div class="conn-detail">
-                                        ep-noisy-star-124345.udfg...
-                                    </div>
-                                </div>
-                                <span>...</span>
-                            </div>
-                            <div class="conn-row">
-                                <span class="status-dot green"></span
-                                ><span class="db-icon green"></span>
-                                <div>
-                                    <div class="conn-name">db-dev</div>
-                                    <div class="conn-detail">
-                                        localhost:5435 / postgres
-                                    </div>
-                                </div>
-                                <span>...</span>
-                            </div>
-                        </div>
-                        <ul class="schema-list root">
-                            <li>
-                                <div class="schema-item">
-                                    <span class="folder-icon"></span
-                                    ><span>postgres</span>
-                                </div>
-                                <ul class="schema-list">
-                                    <li>
-                                        <div class="schema-item">
-                                            <span class="folder-icon"></span
-                                            ><span>public</span>
-                                        </div>
-                                        <ul class="schema-list">
-                                            <li>
-                                                <div class="schema-item">
-                                                    <span
-                                                        class="folder-icon"
-                                                    ></span
-                                                    ><span>Tables</span>
-                                                </div>
-                                                <ul class="schema-list">
-                                                    <li class="schema-item">
-                                                        <span
-                                                            class="file-icon small"
-                                                        ></span
-                                                        ><span>customers</span>
-                                                    </li>
-                                                    <li class="schema-item">
-                                                        <span
-                                                            class="file-icon small"
-                                                        ></span
-                                                        ><span
-                                                            >order_items</span
-                                                        >
-                                                    </li>
-                                                    <li
-                                                        class="schema-item active"
-                                                    >
-                                                        <span
-                                                            class="file-icon small"
-                                                        ></span
-                                                        ><span>orders</span>
-                                                    </li>
-                                                    <li class="schema-item">
-                                                        <span
-                                                            class="column-dot"
-                                                        ></span
-                                                        ><span
-                                                            >created_at
-                                                            timestamp</span
-                                                        >
-                                                    </li>
-                                                    <li class="schema-item">
-                                                        <span
-                                                            class="column-dot"
-                                                        ></span
-                                                        ><span
-                                                            >customer_id uuid
-                                                            not null</span
-                                                        >
-                                                    </li>
-                                                    <li class="schema-item">
-                                                        <span
-                                                            class="column-dot"
-                                                        ></span
-                                                        ><span
-                                                            >id bigint not
-                                                            null</span
-                                                        >
-                                                    </li>
-                                                    <li class="schema-item">
-                                                        <span
-                                                            class="column-dot"
-                                                        ></span
-                                                        ><span
-                                                            >status text not
-                                                            null</span
-                                                        >
-                                                    </li>
-                                                    <li class="schema-item">
-                                                        <span
-                                                            class="file-icon small"
-                                                        ></span
-                                                        ><span>products</span>
-                                                    </li>
-                                                </ul>
-                                            </li>
-                                            <li class="schema-item">
-                                                <span class="folder-icon"></span
-                                                ><span>Functions</span>
-                                            </li>
-                                        </ul>
-                                    </li>
-                                </ul>
-                            </li>
-                        </ul>
-                    </aside>
-                </div>
-            </div>
+        <div class="sidebar-item active">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          db-dev
         </div>
+        <div class="sidebar-group">
+          <div class="sidebar-table">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+            orders
+          </div>
+          <div class="sidebar-table">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+            customers
+          </div>
+          <div class="sidebar-table" style="color: var(--accent);">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+            transactions
+          </div>
+          <div class="sidebar-table">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+            products
+          </div>
+        </div>
+      </div>
+      <div class="code-panel">
+        <div class="code-area">
+          <div class="line"><span class="ln">1</span><span class="cm">-- monthly revenue by product line</span></div>
+          <div class="line"><span class="ln">2</span><span class="kw">SELECT</span></div>
+          <div class="line"><span class="ln">3</span>&nbsp;&nbsp;<span class="fn">date_trunc</span>(<span class="str">'month'</span>, created_at) <span class="kw">AS</span> month,</div>
+          <div class="line"><span class="ln">4</span>&nbsp;&nbsp;product_type,</div>
+          <div class="line"><span class="ln">5</span>&nbsp;&nbsp;<span class="fn">sum</span>(amount) <span class="kw">AS</span> revenue</div>
+          <div class="line"><span class="ln">6</span><span class="kw">FROM</span> transactions</div>
+          <div class="line"><span class="ln">7</span><span class="kw">WHERE</span> status <span class="op">=</span> <span class="str">'settled'</span></div>
+          <div class="line"><span class="ln">8</span>&nbsp;&nbsp;<span class="kw">AND</span> created_at <span class="op">&gt;</span> <span class="fn">now</span>() <span class="op">-</span> <span class="str">'1 year'</span>::interval</div>
+          <div class="line"><span class="ln">9</span><span class="kw">GROUP BY</span> <span class="op">1</span>, <span class="op">2</span></div>
+          <div class="line"><span class="ln">10</span><span class="kw">ORDER BY</span> <span class="op">1</span> <span class="kw">DESC</span>;</div>
+        </div>
+        <div class="result-bar">
+          <div class="result-tab active">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+            results
+          </div>
+          <div class="result-tab">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            38ms
+          </div>
+          <div class="result-tab">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            14 MB RSS
+          </div>
+          <span class="result-ok">4 rows · db-dev</span>
+        </div>
+        <div class="result-table-wrap">
+          <table>
+            <thead><tr><th>month</th><th>product_type</th><th>revenue</th></tr></thead>
+            <tbody>
+              <tr><td>2025-04-01</td><td>pix</td><td>R$ 284,920.00</td></tr>
+              <tr><td>2025-04-01</td><td>boleto</td><td>R$ 91,340.50</td></tr>
+              <tr><td>2025-03-01</td><td>pix</td><td>R$ 261,480.00</td></tr>
+              <tr><td>2025-03-01</td><td>boleto</td><td>R$ 88,720.00</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-        <!-- STATS -->
-        <section class="stats" style="margin-top: 5rem">
-            <div class="stat">
-                <span class="stat-val">&lt;80MB</span>
-                <span class="stat-label">Memory footprint</span>
-            </div>
-            <div class="stat">
-                <span class="stat-val">&lt;25ms</span>
-                <span class="stat-label">Cold start time</span>
-            </div>
-            <div class="stat">
-                <span class="stat-val">Native</span>
-                <span class="stat-label">Not Electron</span>
-            </div>
-            <div class="stat">
-                <span class="stat-val">100%</span>
-                <span class="stat-label">Open Source</span>
-            </div>
-        </section>
+<!-- DB SUPPORT -->
+<div class="db-section">
+  <div class="db-label">Supported databases</div>
+  <div class="db-row">
+    <div class="db-pill supported">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+      PostgreSQL
+      <span class="db-status">Supported</span>
+    </div>
+    <div class="db-pill">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+      MySQL
+      <span class="db-status">Coming soon</span>
+    </div>
+    <div class="db-pill">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      SQLite
+      <span class="db-status">Coming soon</span>
+    </div>
+    <div class="db-pill">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      DuckDB
+      <span class="db-status">Coming soon</span>
+    </div>
+    <div class="db-pill">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Databend
+      <span class="db-status">Coming soon</span>
+    </div>
+  </div>
+</div>
 
-        <!-- FEATURES -->
-        <section class="features" id="features">
-            <div class="container">
-                <div class="section-label">// why zql</div>
-                <h2 class="section-title">Built different.<br />By design.</h2>
-                <p class="section-desc">
-                    Most SQL editors are slow, bloated, or locked behind a
-                    paywall. zql is none of those things.
-                </p>
+<hr class="divider">
 
-                <div class="features-grid">
-                    <div class="feature-card">
-                        <div class="tag">Rust</div>
-                        <div class="feature-icon">⚡</div>
-                        <h3>Blazing Fast</h3>
-                        <p>
-                            Written in Rust from the ground up. No garbage
-                            collector pauses, no JVM warmup, no JavaScript
-                            runtime. Every keystroke is instant.
-                        </p>
-                    </div>
-                    <div class="feature-card">
-                        <div class="tag">GPUI</div>
-                        <div class="feature-icon">🎛️</div>
-                        <h3>Native UI via GPUI</h3>
-                        <p>
-                            Powered by the same GPU-accelerated UI framework
-                            behind the Zed editor. Silky smooth rendering, even
-                            on large result sets.
-                        </p>
-                    </div>
-                    <div class="feature-card">
-                        <div class="tag">Memory</div>
-                        <div class="feature-icon">🧠</div>
-                        <h3>Memory Efficient</h3>
-                        <p>
-                            zql sips memory where other editors gulp it. Run it
-                            comfortably alongside your dev server, Docker
-                            containers, and everything else.
-                        </p>
-                    </div>
-                    <div class="feature-card">
-                        <div class="tag">UX</div>
-                        <div class="feature-icon">✦</div>
-                        <h3>Radically Simple</h3>
-                        <p>
-                            No bloat. No 200-option settings menus. zql does one
-                            thing — lets you write and run SQL — and it does it
-                            beautifully.
-                        </p>
-                    </div>
-                    <div class="feature-card">
-                        <div class="tag">PostgreSQL</div>
-                        <div class="feature-icon">🐘</div>
-                        <h3>PostgreSQL Support</h3>
-                        <p>
-                            Full PostgreSQL support out of the box — connect,
-                            explore your schema, and run queries instantly. More
-                            databases coming soon.
-                        </p>
-                    </div>
-                    <div class="feature-card">
-                        <div class="tag">Open Source</div>
-                        <div class="feature-icon">🌍</div>
-                        <h3>Free. Forever.</h3>
-                        <p>
-                            No subscriptions. No telemetry. No "Pro" tier for
-                            basic features. zql is fully open source and always
-                            will be.
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </section>
+<!-- FEATURES -->
+<section class="section" id="features">
+  <div class="section-eyebrow">// why sq/lab</div>
+  <h2>Built different. By design.</h2>
+  <p class="section-desc">Most SQL editors are slow, bloated, or locked behind a paywall. sq/lab is none of those things.</p>
 
-        <!-- PITCH -->
-        <section class="pitch" id="pitch">
-            <div class="pitch-inner container">
-                <div class="section-label">// the idea</div>
-                <blockquote>
-                    zql is a fast, open-source SQL editor built in Rust —
-                    powered by <em>GPUI</em>, the same GPU-accelerated UI engine
-                    that drives the Zed Editor.
-                </blockquote>
-                <p class="pitch-attr">— The zql Project</p>
-            </div>
-        </section>
+  <div class="feature-grid">
+    <div class="feature-card">
+      <div class="feature-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      </div>
+      <div class="feature-title">Query detector</div>
+      <div class="feature-desc">Detects the query under your cursor so you know exactly what will execute — no need to manually select anything first.</div>
+    </div>
 
-        <!-- CTA -->
-        <section class="cta" id="download">
-            <h2>Ready to query<br /><span>at the speed of thought?</span></h2>
-            <p>
-                Download zql for free and feel the difference on your first
-                query.
-            </p>
-            <div class="cta-actions">
-                <a
-                    href="https://github.com/fhsgoncalves/zql/releases"
-                    target="_blank"
-                    class="btn btn-primary btn-lg"
-                    >↓ Download for macOS</a
-                >
-                <a
-                    href="https://github.com/fhsgoncalves/zql"
-                    target="_blank"
-                    class="btn btn-ghost btn-lg"
-                    >View on GitHub</a
-                >
-            </div>
-        </section>
+    <div class="feature-card">
+      <div class="feature-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      </div>
+      <div class="feature-title">File editor</div>
+      <div class="feature-desc">Edit .sql files directly. No copy-paste — your queries live in your repo.</div>
+    </div>
 
-        <!-- FOOTER -->
-        <footer>
-            <div class="footer-logo">zql</div>
-            <div class="footer-copy">
-                © 2025 zql. Open source under MIT License.
-            </div>
-            <div class="footer-links">
-                <a href="https://github.com/fhsgoncalves/zql">Docs</a>
-                <a href="https://github.com/fhsgoncalves/zql" target="_blank"
-                    >GitHub</a
-                >
-                <a
-                    href="https://github.com/fhsgoncalves/zql/releases"
-                    target="_blank"
-                    >Releases</a
-                >
-            </div>
-        </footer>
-    </body>
+    <div class="feature-card">
+      <div class="feature-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      </div>
+      <div class="feature-title">Built-in terminal</div>
+      <div class="feature-desc">Git, migrations, and coding agents — without leaving the IDE.</div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <div class="feature-title">Rust-native speed</div>
+      <div class="feature-desc">GPUI-powered. Uses a fraction of the RAM DataGrip or DBeaver needs.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- WORKFLOW -->
+<section class="workflow-section" id="workflow">
+  <div class="workflow-layout">
+    <div class="workflow-copy">
+      <div class="section-eyebrow">// beyond the pillars</div>
+      <h2>Everything around the query matters.</h2>
+      <p>
+        sq/lab keeps the daily database workflow in one native workspace:
+        inspect schemas, jump across files, complete SQL from real metadata,
+        and store credentials in the operating system keychain.
+      </p>
+      <div class="workflow-list">
+        <div class="workflow-item">
+          <div class="workflow-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M14 14h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg>
+          </div>
+          <div><strong>Live schema tree</strong><span>Browse schemas, tables, views, indexes, triggers, functions, and columns from the connection panel.</span></div>
+        </div>
+        <div class="workflow-item">
+          <div class="workflow-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          </div>
+          <div><strong>File search</strong><span>Find SQL files and project references quickly without leaving the editor.</span></div>
+        </div>
+        <div class="workflow-item">
+          <div class="workflow-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+          </div>
+          <div><strong>Metadata-aware autocomplete</strong><span>Complete tables, aliases, and columns from your current database context.</span></div>
+        </div>
+        <div class="workflow-item">
+          <div class="workflow-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <div><strong>Secure password storage</strong><span>Passwords are stored through native keychain providers instead of plain project files.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="workflow-visual" aria-label="sq/lab schema browser, file search, autocomplete, and secure credentials preview">
+      <div class="workflow-toolbar">
+        <div class="win-dots">
+          <div class="win-dot dot-r"></div>
+          <div class="win-dot dot-y"></div>
+          <div class="win-dot dot-g"></div>
+        </div>
+        developer workspace
+      </div>
+      <div class="workflow-pane">
+        <div class="schema-preview">
+          <div class="preview-label">schema tree</div>
+          <div class="tree-line active">▾ public</div>
+          <div class="tree-line">├─ tables</div>
+          <div class="tree-line">│  ├─ customers</div>
+          <div class="tree-line">│  ├─ orders</div>
+          <div class="tree-line active">│  └─ transactions</div>
+          <div class="tree-line">├─ views</div>
+          <div class="tree-line">├─ indexes</div>
+          <div class="tree-line">└─ functions</div>
+        </div>
+        <div class="tool-preview">
+          <div class="preview-label">search and completion</div>
+          <div class="search-box">⌕ revenue_monthly.sql</div>
+          <div class="search-result">
+            <div class="search-result-title">analytics/revenue_monthly.sql</div>
+            <div class="search-result-line">12: SELECT date_trunc('month', created_at)</div>
+          </div>
+          <div class="search-result">
+            <div class="search-result-title">migrations/202605_add_indexes.sql</div>
+            <div class="search-result-line">31: CREATE INDEX transactions_created_at_idx</div>
+          </div>
+          <div class="completion-box">
+            <div class="completion-row active"><span>transactions.amount</span><span>numeric</span></div>
+            <div class="completion-row"><span>transactions.created_at</span><span>timestamptz</span></div>
+            <div class="completion-row"><span>customers.email</span><span>text</span></div>
+          </div>
+          <div class="secure-note">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            password stored in the system keychain
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- QUOTE -->
+<div class="quote-section" id="about">
+  <p class="quote-text">
+    sq/lab is a fast, open-source SQL IDE built in Rust —
+    powered by <em>GPUI</em>, the same GPU-accelerated UI engine
+    that drives the Zed editor. A workspace built for developers
+    who treat SQL as code.
+  </p>
+  <div class="quote-attr">— the sq/lab project</div>
+</div>
+
+<!-- CTA -->
+<div class="cta-section">
+  <h2>Ready to query<br>at the speed of thought?</h2>
+  <p>Download sq/lab for free and feel the difference on your first query.</p>
+  <div class="cta-actions">
+    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
+      Download for macOS
+    </a>
+    <a href="https://github.com/fhsgoncalves/sqlab" class="btn-secondary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.164 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.933.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.741 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
+      View on GitHub
+    </a>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">sq<span>/</span>lab</div>
+  <ul class="footer-links">
+    <li><a href="https://github.com/fhsgoncalves/sqlab">Docs</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab">GitHub</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab/releases">Releases</a></li>
+  </ul>
+  <div class="footer-copy">© 2025 sqlab. Open source under MIT License.</div>
+</footer>
+
+</body>
 </html>

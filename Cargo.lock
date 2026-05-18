@@ -5921,6 +5921,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlab"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "apple-native-keyring-store",
+ "async-channel 2.5.0",
+ "chrono",
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
+ "ignore",
+ "image",
+ "keyring-core",
+ "lsp-types",
+ "nucleo",
+ "regex",
+ "rusqlite",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "sqlab-drivers-core",
+ "sqlab-drivers-postgres",
+ "thiserror 1.0.69",
+ "toml 0.8.23",
+ "tree-sitter",
+ "tree-sitter-sequel",
+ "uuid",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
+]
+
+[[package]]
+name = "sqlab-drivers-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "toml 0.8.23",
+ "uuid",
+]
+
+[[package]]
+name = "sqlab-drivers-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "postgres_rustls",
+ "rustls",
+ "rustls-native-certs 0.7.3",
+ "serde_json",
+ "sqlab-drivers-core",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8522,70 +8586,6 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[package]]
-name = "zql"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "apple-native-keyring-store",
- "async-channel 2.5.0",
- "chrono",
- "gpui",
- "gpui-component",
- "gpui-component-assets",
- "gpui_platform",
- "ignore",
- "image",
- "keyring-core",
- "lsp-types",
- "nucleo",
- "regex",
- "rusqlite",
- "rust-embed",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "toml 0.8.23",
- "tree-sitter",
- "tree-sitter-sequel",
- "uuid",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
- "zql-drivers-core",
- "zql-drivers-postgres",
-]
-
-[[package]]
-name = "zql-drivers-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "toml 0.8.23",
- "uuid",
-]
-
-[[package]]
-name = "zql-drivers-postgres"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "postgres_rustls",
- "rustls",
- "rustls-native-certs 0.7.3",
- "serde_json",
- "tokio",
- "tokio-postgres",
- "uuid",
- "zql-drivers-core",
-]
 
 [[package]]
 name = "ztracing"

@@ -1,4 +1,4 @@
-# zql
+# sq/lab
 
 A fast, native SQL editor built in Rust using [GPUI](https://www.gpui.rs) — the same GPU-accelerated UI framework that powers the Zed editor.
 
@@ -9,14 +9,14 @@ The long-term goal is to provide a fully open-source alternative to DBeaver and 
 ## Install
 
 ```bash
-cargo install --git https://github.com/fhsgoncalves/zql
+cargo install --git https://github.com/fhsgoncalves/sqlab
 ```
 
 Requires [Rust](https://rustup.rs) and a working C++ toolchain.
 
-## What is zql?
+## What is sq/lab?
 
-zql is a desktop SQL editor with a focus on performance and simplicity. It is written entirely in Rust, renders via GPU, and avoids the memory bloat common to Electron-based or JVM-based database tools.
+sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is written entirely in Rust, renders via GPU, and avoids the memory bloat common to Electron-based or JVM-based database tools.
 
 - **No garbage collector** — predictable memory usage and no runtime pauses.
 - **Native GPU rendering** — smooth scrolling and large result sets via GPUI.
@@ -42,8 +42,10 @@ zql is a desktop SQL editor with a focus on performance and simplicity. It is wr
 ## Supported Databases
 
 - **PostgreSQL** — fully supported via `tokio-postgres` and `rustls`.
-- **MySQL** — planned.
-- **SQLite** — planned.
+- **MySQL** — planned / coming soon.
+- **SQLite** — planned / coming soon.
+- **DuckDB** — planned / coming soon.
+- **Databend** — planned / coming soon.
 
 ## Roadmap
 

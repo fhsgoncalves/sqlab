@@ -3,7 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use keyring_core::{Entry, Error, set_default_store};
 
-const SERVICE: &str = "zql";
+const SERVICE: &str = "sqlab";
 const PASSWORDS_ACCOUNT: &str = "data-source-passwords";
 
 static STORE_INIT: OnceLock<Result<(), String>> = OnceLock::new();
@@ -21,7 +21,7 @@ pub enum CredentialError {
 
 pub fn recovery_error_message(error: &CredentialError) -> String {
     format!(
-        "Password recovery failed because zql could not access the system keychain.\n\n{}",
+        "Password recovery failed because sq/lab could not access the system keychain.\n\n{}",
         error
     )
 }
@@ -143,7 +143,7 @@ fn configure_native_store() -> keyring_core::Result<()> {
     )))]
     {
         Err(Error::NotSupportedByStore(
-            "zql does not have a native credential store for this platform".to_string(),
+            "sq/lab does not have a native credential store for this platform".to_string(),
         ))
     }
 }

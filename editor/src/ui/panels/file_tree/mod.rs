@@ -543,7 +543,7 @@ impl FileTreePanel {
         Self::set_expanded(&mut self.items, &parent_id, true);
 
         let id = format!(
-            "{}::__zql_pending_new_{}__",
+            "{}::__sqlab_pending_new_{}__",
             parent_id,
             if kind == PendingNewKind::File {
                 "file"

@@ -19,8 +19,8 @@ use gpui_component::{
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
-use zql_drivers_core::{ColumnMetadata, DataSourceConfig, QueryResult};
-use zql_drivers_postgres::PostgresDataSource;
+use sqlab_drivers_core::{ColumnMetadata, DataSourceConfig, QueryResult};
+use sqlab_drivers_postgres::PostgresDataSource;
 
 actions!(
     results_panel,

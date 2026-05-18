@@ -1,11 +1,11 @@
 [package]
-name = "zql-drivers-postgres"
+name = "sqlab-drivers-postgres"
 version = "0.1.0"
 edition = "2024"
-description = "PostgreSQL driver for zql"
+description = "PostgreSQL driver for sq/lab"
 
 [dependencies]
-zql-drivers-core = { path = "../core" }
+sqlab-drivers-core = { path = "../core" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true }

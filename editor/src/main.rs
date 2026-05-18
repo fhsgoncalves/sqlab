@@ -43,7 +43,7 @@ fn app_icon() -> Option<Arc<image::RgbaImage>> {
 
 fn set_app_menus(cx: &mut gpui::App) {
     cx.set_menus(vec![
-        Menu::new("zql").items(vec![app_theme::themes_menu_item(cx)]),
+        Menu::new("sq/lab").items(vec![app_theme::themes_menu_item(cx)]),
         Menu::new("File").items(vec![MenuItem::action("Open Folder...", OpenFolder)]),
         Menu::new("Edit\u{200B}").items(vec![
             MenuItem::action("Find", ToggleEditorSearch),

@@ -1,4 +1,4 @@
-# Contributing to zql
+# Contributing to sq/lab
 
 Thanks for your interest in contributing!
 
@@ -14,8 +14,8 @@ Just open a pull request, is always welcome!
 Clone and install locally:
 
 ```bash
-git clone https://github.com/fhsgoncalves/zql
-cd zql
+git clone https://github.com/fhsgoncalves/sqlab
+cd sqlab
 cargo run
 ```
 

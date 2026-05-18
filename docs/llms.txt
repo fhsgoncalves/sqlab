@@ -1,0 +1,49 @@
+# sq/lab
+
+sq/lab is an open-source SQL editor built in Rust with GPUI. The repository and crate identifiers use `sqlab`; the user-facing product name is `sq/lab`.
+
+## Product Summary
+
+sq/lab is for developers who keep SQL in their repos and want a native database workspace instead of a JVM or Electron SQL client.
+
+Main pillars:
+
+- Query detector: detects the SQL query under the cursor so users do not need to manually select statements before running them.
+- File editor: edits `.sql` files directly, keeping queries in version control.
+- Built-in terminal: supports Git, migrations, and coding-agent workflows without leaving the IDE.
+- Rust-native speed: built with Rust and GPUI for a native desktop experience.
+
+Additional features:
+
+- PostgreSQL query execution and result grid.
+- Connection panel with live schema tree.
+- Tabbed query files.
+- Metadata-aware SQL autocompletion.
+- Active query highlighting.
+- Secure password storage through native keychain providers.
+- File search and project search.
+- Auto-save on focus lost.
+
+## Database Support
+
+- PostgreSQL: supported today through `tokio-postgres` and `rustls`.
+- MySQL: planned / coming soon.
+- SQLite: planned / coming soon.
+- DuckDB: planned / coming soon.
+- Databend: planned / coming soon.
+
+## Important Links
+
+- Website: https://fhsgoncalves.github.io/sqlab/
+- Repository: https://github.com/fhsgoncalves/sqlab
+- Releases: https://github.com/fhsgoncalves/sqlab/releases
+- README: https://github.com/fhsgoncalves/sqlab#readme
+- License: https://github.com/fhsgoncalves/sqlab/blob/main/LICENSE
+
+## Suggested Descriptions
+
+Short: sq/lab is an open-source SQL editor built in Rust with GPUI.
+
+Medium: sq/lab is a native SQL editor for developers, with query detection, `.sql` file editing, a built-in terminal, PostgreSQL support, schema browsing, autocompletion, and secure password storage.
+
+Search phrases: Rust SQL editor, open-source SQL IDE, PostgreSQL client, GPUI database tool, DataGrip alternative, DBeaver alternative, SQL editor for developers.

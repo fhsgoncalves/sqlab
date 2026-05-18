@@ -14,7 +14,7 @@ use gpui_component::{
 
 use super::editor::{EditorPanel, ExecuteQuery};
 use crate::ui::components::tab::{Tab, TabBar};
-use zql_drivers_core::manager::DataSourceManager;
+use sqlab_drivers_core::manager::DataSourceManager;
 
 actions!(editor_tabs, [CycleTabForward, CycleTabBackward]);
 

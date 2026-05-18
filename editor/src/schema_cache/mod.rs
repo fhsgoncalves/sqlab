@@ -11,7 +11,7 @@ use crate::schema_cache::models::{
     ColumnRow, ForeignKeyRow, FunctionRow, IndexRow, SchemaRow, SequenceRow, TableRow, TriggerRow,
     rows_to_schema, schema_to_rows,
 };
-use zql_drivers_core::{DataSourceConfig, Database, DatabaseSchema};
+use sqlab_drivers_core::{DataSourceConfig, Database, DatabaseSchema};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaCacheError {

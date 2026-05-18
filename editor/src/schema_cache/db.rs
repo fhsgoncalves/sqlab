@@ -8,7 +8,7 @@ pub fn cache_path() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".zql")
+        .join(".sqlab")
         .join("cache")
         .join("schemas.db")
 }

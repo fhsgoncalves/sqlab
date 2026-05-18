@@ -265,7 +265,7 @@ mod config {
             std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join(".zql")
+                .join(".sqlab")
                 .join("config.toml")
         }
 

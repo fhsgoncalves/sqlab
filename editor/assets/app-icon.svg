@@ -1,6 +1,6 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">zql logo icon combined</title>
-  <desc id="desc">Orange zql wordmark paths on a dark black and orange gradient background with white border.</desc>
+  <title id="title">sqlab logo icon combined</title>
+  <desc id="desc">Orange sqlab wordmark paths on a dark black and orange gradient background with white border.</desc>
 
   <defs>
     <radialGradient id="orangeGlowTopLeft" cx="0%" cy="0%" r="75%">
@@ -42,7 +42,7 @@
   <rect width="1024" height="1024" filter="url(#subtleNoise)" opacity="0.45"/>
 
   <!--
-    Letter paths from zql-icon.svg, originally in a 1254x1254 canvas.
+    Letter paths from the previous app icon SVG, originally in a 1254x1254 canvas.
     Scale factor: 1024/1254 ≈ 0.8167
     We use a transform to scale and center the paths.
   -->

@@ -1,8 +1,8 @@
 [package]
-name = "zql-drivers-core"
+name = "sqlab-drivers-core"
 version = "0.1.0"
 edition = "2024"
-description = "Core database driver traits and types for zql"
+description = "Core database driver traits and types for sq/lab"
 
 [dependencies]
 async-trait = { workspace = true }
