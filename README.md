@@ -32,12 +32,15 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | Connection panel with live schema tree | ✅ |
 | Tabbed query files | ✅ |
 | PostgreSQL driver | ✅ |
-| Autocompletion on steroids | ✅ |
+| SQL auto completion | ✅ |
 | Highlight active query selection | ✅ |
 | Passwords stored securely | ✅ |
 | Auto save on focus lost | ✅ |
 | Terminal panel (supports coding agents) | ✅ |
-| File search | ✅ |
+| Project and file search (with regex and fuzzy matching) | ✅ |
+| Export to CSV, JSON, Excel, SQL Inserts, SQL Updates, WHERE clause | ✅ |
+| Column type info on result panel | ✅ |
+| DDL generation from schema item | ✅ |
 
 ## Supported Databases
 
@@ -50,8 +53,7 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 ## Roadmap
 
 - [ ] App distribution
-- [ ] Allow exporting results to more formats (markdown, json, xml, excel (xlsx), SQL Inserts, SQL Updates, WHERE clause)
-- [ ] Copy selected content as any of the supported export formats (only the selected columns and rows)
+- [ ] Smooth scroll on file editor + decorator for big queries
 - [ ] Allow in-place editing in the data table
 - [ ] Format current query (cmd+option+l)
 - [ ] Support diagrams

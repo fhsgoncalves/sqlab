@@ -22,7 +22,8 @@ use ui::panels::file_search::ToggleFileSearch;
 use ui::panels::project_search::ToggleProjectSearch;
 use ui::panels::result::{
     CopyResultSelection, CycleTabBackward as ResultCycleTabBackward,
-    CycleTabForward as ResultCycleTabForward,
+    CycleTabForward as ResultCycleTabForward, ExtendResultSelectionDown, ExtendResultSelectionLeft,
+    ExtendResultSelectionRight, ExtendResultSelectionUp,
 };
 use ui::panels::terminal::{
     CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward,
@@ -50,6 +51,8 @@ fn set_app_menus(cx: &mut gpui::App) {
             MenuItem::action("Find in Files...", ToggleProjectSearch),
             MenuItem::separator(),
             MenuItem::action("Replace", ToggleEditorReplace),
+            MenuItem::separator(),
+            MenuItem::action("Copy Result Selection", CopyResultSelection),
             MenuItem::separator(),
             MenuItem::action("Save", SaveFile),
         ]),
@@ -103,6 +106,26 @@ fn main() {
             KeyBinding::new("cmd-enter", ExecuteQuery, Some("Input")),
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-c", CopyResultSelection, None),
+            KeyBinding::new("shift-up", ExtendResultSelectionUp, Some("results_panel")),
+            KeyBinding::new(
+                "shift-down",
+                ExtendResultSelectionDown,
+                Some("results_panel"),
+            ),
+            KeyBinding::new(
+                "shift-left",
+                ExtendResultSelectionLeft,
+                Some("results_panel"),
+            ),
+            KeyBinding::new(
+                "shift-right",
+                ExtendResultSelectionRight,
+                Some("results_panel"),
+            ),
+            KeyBinding::new("shift-up", ExtendResultSelectionUp, Some("DataTable")),
+            KeyBinding::new("shift-down", ExtendResultSelectionDown, Some("DataTable")),
+            KeyBinding::new("shift-left", ExtendResultSelectionLeft, Some("DataTable")),
+            KeyBinding::new("shift-right", ExtendResultSelectionRight, Some("DataTable")),
             KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),
             KeyBinding::new("cmd-t", NewTerminalTab, Some("terminal_panel")),
             KeyBinding::new("ctrl-tab", CycleTabForward, None),

@@ -1,8 +1,14 @@
+use std::{
+    collections::BTreeSet,
+    fmt::Write as FmtWrite,
+    io::{Cursor, Write},
+};
+
 use chrono::Local;
 use gpui::{
     App, AppContext, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, actions, div, rgb,
+    InteractiveElement, IntoElement, Modifiers, ParentElement, Render, StatefulInteractiveElement,
+    Styled, WeakEntity, Window, actions, div, prelude::FluentBuilder, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
@@ -12,7 +18,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     menu::{DropdownMenu as _, PopupMenuItem},
-    table::{Column, ColumnSort, DataTable, TableDelegate, TableState},
+    table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState},
     v_flex,
 };
 
@@ -20,16 +26,80 @@ use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 use sqlab_drivers_core::{ColumnMetadata, DataSourceConfig, QueryResult};
-use sqlab_drivers_postgres::PostgresDataSource;
 
 actions!(
     results_panel,
-    [CopyResultSelection, CycleTabForward, CycleTabBackward]
+    [
+        CopyResultSelection,
+        CycleTabForward,
+        CycleTabBackward,
+        ExtendResultSelectionUp,
+        ExtendResultSelectionDown,
+        ExtendResultSelectionLeft,
+        ExtendResultSelectionRight
+    ]
 );
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportFormat {
+    Csv,
+    Markdown,
+    Json,
+    Xml,
+    Xlsx,
+    SqlInserts,
+    SqlUpdates,
+    WhereClause,
+}
+
+impl ExportFormat {
+    const ALL: [Self; 8] = [
+        Self::Csv,
+        Self::Markdown,
+        Self::Json,
+        Self::Xml,
+        Self::Xlsx,
+        Self::SqlInserts,
+        Self::SqlUpdates,
+        Self::WhereClause,
+    ];
+    const COPYABLE: [Self; 7] = [
+        Self::Csv,
+        Self::Markdown,
+        Self::Json,
+        Self::Xml,
+        Self::SqlInserts,
+        Self::SqlUpdates,
+        Self::WhereClause,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV",
+            Self::Markdown => "Markdown",
+            Self::Json => "JSON",
+            Self::Xml => "XML",
+            Self::Xlsx => "Excel (XLSX)",
+            Self::SqlInserts => "SQL Inserts",
+            Self::SqlUpdates => "SQL Updates",
+            Self::WhereClause => "WHERE Clause",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Markdown => "md",
+            Self::Json => "json",
+            Self::Xml => "xml",
+            Self::Xlsx => "xlsx",
+            Self::SqlInserts | Self::SqlUpdates | Self::WhereClause => "sql",
+        }
+    }
+}
 
 pub struct ResultPanel {
     focus_handle: FocusHandle,
-    activity_tracker: gpui::Entity<ActivityTracker>,
     table_state: gpui::Entity<TableState<ResultsTableDelegate>>,
     export_counter: usize,
     next_result_id: usize,
@@ -38,6 +108,7 @@ pub struct ResultPanel {
     pending_result: Option<QueryExecution>,
     dock_area: Option<WeakEntity<DockArea>>,
     is_zoomed: bool,
+    selected_export_format: ExportFormat,
 }
 
 #[derive(Clone)]
@@ -45,6 +116,9 @@ pub struct ResultsTableDelegate {
     pub columns: Vec<String>,
     pub column_metadata: Vec<ColumnMetadata>,
     pub rows: Vec<Vec<String>>,
+    selected_cells: BTreeSet<(usize, usize)>,
+    selection_anchor: Option<(usize, usize)>,
+    selection_cursor: Option<(usize, usize)>,
 }
 
 impl TableDelegate for ResultsTableDelegate {
@@ -129,11 +203,213 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        div().child(self.rows[row_ix][col_ix].clone())
+        let is_selected = self.selected_cells.contains(&(row_ix, col_ix));
+
+        div()
+            .id(format!("result-cell-content:{row_ix}:{col_ix}"))
+            .relative()
+            .size_full()
+            .child(self.rows[row_ix][col_ix].clone())
+            .when(is_selected, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(_cx.theme().table_active.opacity(0.35))
+                        .border_1()
+                        .border_color(_cx.theme().table_active_border),
+                )
+            })
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                _cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
+                    let modifiers = event.modifiers;
+                    table.delegate_mut().select_cell(row_ix, col_ix, modifiers);
+                    table.set_selected_cell(row_ix, col_ix, cx);
+                }),
+            )
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
         self.rows[row_ix][col_ix].clone()
+    }
+}
+
+impl ResultsTableDelegate {
+    fn empty() -> Self {
+        Self {
+            columns: Vec::new(),
+            column_metadata: Vec::new(),
+            rows: Vec::new(),
+            selected_cells: BTreeSet::new(),
+            selection_anchor: None,
+            selection_cursor: None,
+        }
+    }
+
+    fn from_parts(
+        columns: Vec<String>,
+        column_metadata: Vec<ColumnMetadata>,
+        rows: Vec<Vec<String>>,
+    ) -> Self {
+        Self {
+            columns,
+            column_metadata,
+            rows,
+            selected_cells: BTreeSet::new(),
+            selection_anchor: None,
+            selection_cursor: None,
+        }
+    }
+
+    fn select_cell(&mut self, row_ix: usize, col_ix: usize, modifiers: Modifiers) {
+        let cell = (row_ix, col_ix);
+        if modifiers.shift {
+            let anchor = self.selection_anchor.unwrap_or(cell);
+            self.select_range(anchor, cell);
+            self.selection_anchor = Some(anchor);
+            self.selection_cursor = Some(cell);
+        } else if modifiers.control {
+            if !self.selected_cells.remove(&cell) {
+                self.selected_cells.insert(cell);
+            }
+            self.selection_anchor = Some(cell);
+            self.selection_cursor = Some(cell);
+        } else {
+            self.selected_cells.clear();
+            self.selected_cells.insert(cell);
+            self.selection_anchor = Some(cell);
+            self.selection_cursor = Some(cell);
+        }
+    }
+
+    fn extend_selection(&mut self, row_delta: isize, col_delta: isize) -> Option<(usize, usize)> {
+        if self.rows.is_empty() || self.columns.is_empty() {
+            return None;
+        }
+
+        let current = self
+            .selection_cursor
+            .or(self.selection_anchor)
+            .unwrap_or((0, 0));
+        let next_row = current
+            .0
+            .saturating_add_signed(row_delta)
+            .min(self.rows.len().saturating_sub(1));
+        let next_col = current
+            .1
+            .saturating_add_signed(col_delta)
+            .min(self.columns.len().saturating_sub(1));
+        let next = (next_row, next_col);
+        let anchor = self.selection_anchor.unwrap_or(current);
+
+        self.select_range(anchor, next);
+        self.selection_anchor = Some(anchor);
+        self.selection_cursor = Some(next);
+        Some(next)
+    }
+
+    fn select_row(&mut self, row_ix: usize) {
+        self.selected_cells.clear();
+        if row_ix < self.rows.len() {
+            for col_ix in 0..self.columns.len() {
+                self.selected_cells.insert((row_ix, col_ix));
+            }
+            self.selection_anchor = Some((row_ix, 0));
+            self.selection_cursor = Some((row_ix, self.columns.len().saturating_sub(1)));
+        }
+    }
+
+    fn select_col(&mut self, col_ix: usize) {
+        self.selected_cells.clear();
+        if col_ix < self.columns.len() {
+            for row_ix in 0..self.rows.len() {
+                self.selected_cells.insert((row_ix, col_ix));
+            }
+            self.selection_anchor = Some((0, col_ix));
+            self.selection_cursor = Some((self.rows.len().saturating_sub(1), col_ix));
+        }
+    }
+
+    fn select_emitted_cell(&mut self, row_ix: usize, col_ix: usize) {
+        let cell = (row_ix, col_ix);
+        if !self.selected_cells.contains(&cell) {
+            self.selected_cells.clear();
+            self.selected_cells.insert(cell);
+            self.selection_anchor = Some(cell);
+            self.selection_cursor = Some(cell);
+        } else {
+            self.selection_cursor = Some(cell);
+        }
+    }
+
+    fn selected_export_data(&self, table_name: String) -> Option<ExportData> {
+        if self.selected_cells.is_empty() {
+            return None;
+        }
+
+        let mut col_indices = self
+            .selected_cells
+            .iter()
+            .map(|(_, col_ix)| *col_ix)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let row_indices = self
+            .selected_cells
+            .iter()
+            .map(|(row_ix, _)| *row_ix)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        col_indices.retain(|col_ix| *col_ix < self.columns.len());
+        let rows = row_indices
+            .into_iter()
+            .filter(|row_ix| *row_ix < self.rows.len())
+            .map(|row_ix| {
+                col_indices
+                    .iter()
+                    .map(|&col_ix| {
+                        if self.selected_cells.contains(&(row_ix, col_ix)) {
+                            self.rows[row_ix][col_ix].clone()
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        if rows.is_empty() {
+            return None;
+        }
+
+        Some(ExportData {
+            columns: col_indices
+                .iter()
+                .map(|&col_ix| self.columns[col_ix].clone())
+                .collect(),
+            column_metadata: col_indices
+                .iter()
+                .filter_map(|&col_ix| self.column_metadata.get(col_ix).cloned())
+                .collect(),
+            rows,
+            table_name,
+        })
+    }
+
+    fn select_range(&mut self, anchor: (usize, usize), cursor: (usize, usize)) {
+        self.selected_cells.clear();
+        let row_start = anchor.0.min(cursor.0);
+        let row_end = anchor.0.max(cursor.0);
+        let col_start = anchor.1.min(cursor.1);
+        let col_end = anchor.1.max(cursor.1);
+        for row_ix in row_start..=row_end {
+            for col_ix in col_start..=col_end {
+                self.selected_cells.insert((row_ix, col_ix));
+            }
+        }
     }
 }
 
@@ -151,15 +427,11 @@ impl EventEmitter<PanelEvent> for ResultPanel {}
 
 impl ResultPanel {
     pub fn new(
-        activity_tracker: gpui::Entity<ActivityTracker>,
+        _activity_tracker: gpui::Entity<ActivityTracker>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let delegate = ResultsTableDelegate {
-            columns: Vec::new(),
-            column_metadata: Vec::new(),
-            rows: Vec::new(),
-        };
+        let delegate = ResultsTableDelegate::empty();
         let table_state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .cell_selectable(true)
@@ -168,10 +440,10 @@ impl ResultPanel {
                 .col_movable(true)
                 .sortable(true)
         });
+        Self::subscribe_table_selection(&table_state, cx);
 
         Self {
             focus_handle: cx.focus_handle(),
-            activity_tracker,
             table_state,
             export_counter: 0,
             next_result_id: 1,
@@ -180,6 +452,7 @@ impl ResultPanel {
             pending_result: None,
             dock_area: None,
             is_zoomed: false,
+            selected_export_format: ExportFormat::Csv,
         }
     }
 
@@ -220,8 +493,8 @@ impl ResultPanel {
     fn rebuild_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.active_tab = self.active_tab.min(self.executions.len());
         let delegate = if self.active_tab == 0 {
-            ResultsTableDelegate {
-                columns: vec![
+            ResultsTableDelegate::from_parts(
+                vec![
                     "id".into(),
                     "status".into(),
                     "data_source".into(),
@@ -231,9 +504,8 @@ impl ResultPanel {
                     "shown".into(),
                     "time_ms".into(),
                 ],
-                column_metadata: vec![],
-                rows: self
-                    .executions
+                vec![],
+                self.executions
                     .iter()
                     .rev()
                     .map(|execution| {
@@ -253,18 +525,18 @@ impl ResultPanel {
                         ]
                     })
                     .collect(),
-            }
+            )
         } else {
             let execution = &self.executions[self.active_tab - 1];
             let enriched_metadata = enrich_column_metadata(
                 execution.config.as_ref(),
                 execution.result.column_metadata.clone(),
             );
-            ResultsTableDelegate {
-                columns: execution.result.columns.clone(),
-                column_metadata: enriched_metadata,
-                rows: execution.result.rows.clone(),
-            }
+            ResultsTableDelegate::from_parts(
+                execution.result.columns.clone(),
+                enriched_metadata,
+                execution.result.rows.clone(),
+            )
         };
 
         self.table_state = cx.new(|cx| {
@@ -275,6 +547,32 @@ impl ResultPanel {
                 .col_movable(true)
                 .sortable(true)
         });
+        Self::subscribe_table_selection(&self.table_state, cx);
+    }
+
+    fn subscribe_table_selection(
+        table_state: &gpui::Entity<TableState<ResultsTableDelegate>>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.subscribe(
+            table_state,
+            |_: &mut Self, table, event: &TableEvent, cx| {
+                table.update(cx, |table, cx| {
+                    match event {
+                        TableEvent::SelectRow(row_ix) => table.delegate_mut().select_row(*row_ix),
+                        TableEvent::SelectColumn(col_ix) => {
+                            table.delegate_mut().select_col(*col_ix)
+                        }
+                        TableEvent::SelectCell(row_ix, col_ix) => {
+                            table.delegate_mut().select_emitted_cell(*row_ix, *col_ix)
+                        }
+                        _ => {}
+                    }
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
     }
 
     fn close_result_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -293,68 +591,112 @@ impl ResultPanel {
         cx.notify();
     }
 
-    fn export_to_csv(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(execution) = self
-            .active_tab
-            .checked_sub(1)
-            .and_then(|ix| self.executions.get(ix))
-            .cloned()
-        else {
+    fn export_result(&mut self, format: ExportFormat, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(data) = self.current_export_data(cx) else {
             return;
         };
 
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let default_path = format!("{}/result_{}.csv", home, self.export_counter);
+        let default_path = format!(
+            "{}/result_{}.{}",
+            home,
+            self.export_counter,
+            format.extension()
+        );
         self.export_counter += 1;
 
         let input_state = cx.new(|cx| InputState::new(window, cx).default_value(default_path));
         let input_state_for_ok = input_state.clone();
-        let activity_tracker = self.activity_tracker.clone();
 
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             alert
-                .title("Export to CSV")
+                .title(format!("Export to {}", format.label()))
                 .child(Input::new(&input_state))
                 .show_cancel(true)
                 .on_ok({
                     let input_state_for_ok = input_state_for_ok.clone();
-                    let execution = execution.clone();
-                    let activity_tracker = activity_tracker.clone();
+                    let data = data.clone();
                     move |_, _window, cx| {
                         let path = input_state_for_ok.read(cx).value().to_string();
-                        if let Some(config) = execution.config.clone() {
-                            let query = execution.query.clone();
-                            let activity_id = activity_tracker
-                                .update(cx, |tracker, cx| tracker.begin("Downloading results", cx));
-                            let activity_tracker = activity_tracker.clone();
-                            cx.spawn(async move |cx| {
-                                let result = cx
-                                    .background_executor()
-                                    .spawn(async move {
-                                        let mut source = PostgresDataSource::new(config)?;
-                                        source.connect_blocking()?;
-                                        let result = source.export_query_to_csv(&query, path);
-                                        let _ = source.disconnect_blocking();
-                                        result
-                                    })
-                                    .await;
-
-                                if let Err(e) = result {
-                                    eprintln!("failed to export CSV: {}", e);
-                                }
-
-                                activity_tracker.update(cx, |tracker, cx| {
-                                    tracker.finish(activity_id, cx);
-                                });
-                            })
-                            .detach();
-                        } else {
-                            eprintln!("cannot export CSV without a data source config");
+                        if let Err(error) = write_export_file(&data, format, &path) {
+                            eprintln!("failed to export {}: {}", format.label(), error);
                         }
                         true
                     }
                 })
         });
+    }
+
+    fn current_export_data(&self, cx: &App) -> Option<ExportData> {
+        let execution = self
+            .active_tab
+            .checked_sub(1)
+            .and_then(|ix| self.executions.get(ix))?;
+        let table = self.table_state.read(cx);
+        let delegate = table.delegate();
+        Some(ExportData {
+            columns: delegate.columns.clone(),
+            column_metadata: delegate.column_metadata.clone(),
+            rows: delegate.rows.clone(),
+            table_name: infer_table_name(&execution.query),
+        })
+    }
+
+    fn selected_export_data(&self, cx: &App) -> Option<ExportData> {
+        let table = self.table_state.read(cx);
+        let delegate = table.delegate();
+        let active_query = self
+            .active_tab
+            .checked_sub(1)
+            .and_then(|ix| self.executions.get(ix))
+            .map(|execution| execution.query.as_str())
+            .unwrap_or("results");
+        let table_name = infer_table_name(active_query);
+
+        if let Some(data) = delegate.selected_export_data(table_name.clone()) {
+            return Some(data);
+        }
+
+        let (col_indices, row_indices) = if let Some((row_ix, col_ix)) = table.selected_cell() {
+            (vec![col_ix], vec![row_ix])
+        } else if let Some(row_ix) = table.selected_row() {
+            ((0..delegate.columns_count(cx)).collect(), vec![row_ix])
+        } else if let Some(col_ix) = table.selected_col() {
+            (vec![col_ix], (0..delegate.rows_count(cx)).collect())
+        } else {
+            return None;
+        };
+
+        Some(ExportData {
+            columns: col_indices
+                .iter()
+                .map(|&col_ix| delegate.columns[col_ix].clone())
+                .collect(),
+            column_metadata: col_indices
+                .iter()
+                .filter_map(|&col_ix| delegate.column_metadata.get(col_ix).cloned())
+                .collect(),
+            rows: row_indices
+                .into_iter()
+                .map(|row_ix| {
+                    col_indices
+                        .iter()
+                        .map(|&col_ix| delegate.cell_text(row_ix, col_ix, cx))
+                        .collect()
+                })
+                .collect(),
+            table_name,
+        })
+    }
+
+    fn copy_selection_as(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
+        self.selected_export_format = format;
+        if let Some(data) = self.selected_export_data(cx) {
+            match render_export_text(&data, format) {
+                Ok(value) => cx.write_to_clipboard(ClipboardItem::new_string(value)),
+                Err(error) => eprintln!("failed to copy {}: {}", format.label(), error),
+            }
+        }
     }
 
     fn copy_selection(
@@ -363,32 +705,58 @@ impl ResultPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let table = self.table_state.read(cx);
-        let delegate = table.delegate();
+        self.copy_selection_as(self.selected_export_format, cx);
+    }
 
-        let value = if let Some((row_ix, col_ix)) = table.selected_cell() {
-            Some(delegate.cell_text(row_ix, col_ix, cx))
-        } else if let Some(row_ix) = table.selected_row() {
-            Some(
-                (0..delegate.columns_count(cx))
-                    .map(|col_ix| delegate.cell_text(row_ix, col_ix, cx))
-                    .collect::<Vec<_>>()
-                    .join("\t"),
-            )
-        } else if let Some(col_ix) = table.selected_col() {
-            Some(
-                (0..delegate.rows_count(cx))
-                    .map(|row_ix| delegate.cell_text(row_ix, col_ix, cx))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-        } else {
-            None
-        };
+    fn extend_selection_by(
+        &mut self,
+        row_delta: isize,
+        col_delta: isize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_state.update(cx, |table, cx| {
+            let next = { table.delegate_mut().extend_selection(row_delta, col_delta) };
+            if let Some((row_ix, col_ix)) = next {
+                table.set_selected_cell(row_ix, col_ix, cx);
+            }
+        });
+    }
 
-        if let Some(value) = value {
-            cx.write_to_clipboard(ClipboardItem::new_string(value));
-        }
+    fn on_extend_selection_up(
+        &mut self,
+        _: &ExtendResultSelectionUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.extend_selection_by(-1, 0, window, cx);
+    }
+
+    fn on_extend_selection_down(
+        &mut self,
+        _: &ExtendResultSelectionDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.extend_selection_by(1, 0, window, cx);
+    }
+
+    fn on_extend_selection_left(
+        &mut self,
+        _: &ExtendResultSelectionLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.extend_selection_by(0, -1, window, cx);
+    }
+
+    fn on_extend_selection_right(
+        &mut self,
+        _: &ExtendResultSelectionRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.extend_selection_by(0, 1, window, cx);
     }
 
     fn on_cycle_tab_forward(
@@ -553,6 +921,9 @@ impl Render for ResultPanel {
                     )
                 });
         let view = cx.entity();
+        let view_for_copy = view.clone();
+        let view_for_export = view.clone();
+        let selected_export_format = self.selected_export_format;
 
         v_flex()
             .id("results-panel")
@@ -561,6 +932,10 @@ impl Render for ResultPanel {
             .bg(cx.theme().background)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::on_extend_selection_up))
+            .on_action(cx.listener(Self::on_extend_selection_down))
+            .on_action(cx.listener(Self::on_extend_selection_left))
+            .on_action(cx.listener(Self::on_extend_selection_right))
             .on_action(cx.listener(Self::on_cycle_tab_forward))
             .on_action(cx.listener(Self::on_cycle_tab_backward))
             .on_click(cx.listener(|this, _, window, cx| {
@@ -607,6 +982,8 @@ impl Render for ResultPanel {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
+                            .overflow_x_hidden()
+                            .truncate()
                             .child(query_label),
                     )
                     .child(div().flex_1())
@@ -617,79 +994,129 @@ impl Render for ResultPanel {
                             .child(row_label),
                     )
                     .child(
-                        Button::new("results-zoom")
-                            .icon(if self.is_zoomed {
-                                IconName::Minimize
-                            } else {
-                                IconName::Maximize
-                            })
-                            .xsmall()
-                            .ghost()
-                            .tooltip(if self.is_zoomed {
-                                "Restore"
-                            } else {
-                                "Maximize"
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_zoom(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("results-download")
-                            .icon(IconName::ArrowDown)
-                            .xsmall()
-                            .ghost()
-                            .tooltip("Download")
-                            .dropdown_menu(move |menu, window, _cx| {
-                                menu.item(
-                                    PopupMenuItem::new("Export CSV")
-                                        .icon(IconName::File)
-                                        .on_click(window.listener_for(
-                                            &view,
-                                            |this, _, window, cx| {
-                                                this.export_to_csv(window, cx);
-                                            },
-                                        )),
-                                )
-                            }),
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_1()
+                            .child(
+                                Button::new("results-zoom")
+                                    .icon(if self.is_zoomed {
+                                        IconName::Minimize
+                                    } else {
+                                        IconName::Maximize
+                                    })
+                                    .xsmall()
+                                    .ghost()
+                                    .tooltip(if self.is_zoomed {
+                                        "Restore"
+                                    } else {
+                                        "Maximize"
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_zoom(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("results-copy")
+                                    .icon(IconName::Copy)
+                                    .label(self.selected_export_format.label())
+                                    .dropdown_caret(true)
+                                    .xsmall()
+                                    .ghost()
+                                    .tooltip("Copy selection")
+                                    .dropdown_menu(move |menu, window, _cx| {
+                                        let mut menu = menu;
+                                        for format in ExportFormat::COPYABLE {
+                                            menu = menu.item(
+                                                PopupMenuItem::new(format!(
+                                                    "Copy as {}",
+                                                    format.label()
+                                                ))
+                                                .icon(IconName::Copy)
+                                                .checked(format == selected_export_format)
+                                                .on_click(window.listener_for(
+                                                    &view_for_copy,
+                                                    move |this, _, _window, cx| {
+                                                        this.copy_selection_as(format, cx);
+                                                    },
+                                                )),
+                                            );
+                                        }
+                                        menu
+                                    }),
+                            )
+                            .child(
+                                Button::new("results-download")
+                                    .icon(IconName::ArrowDown)
+                                    .xsmall()
+                                    .ghost()
+                                    .tooltip("Download")
+                                    .dropdown_menu(move |menu, window, _cx| {
+                                        let mut menu = menu;
+                                        for format in ExportFormat::ALL {
+                                            menu = menu.item(
+                                                PopupMenuItem::new(format!(
+                                                    "Export {}",
+                                                    format.label()
+                                                ))
+                                                .icon(IconName::File)
+                                                .on_click(window.listener_for(
+                                                    &view_for_export,
+                                                    move |this, _, window, cx| {
+                                                        this.export_result(format, window, cx);
+                                                    },
+                                                )),
+                                            );
+                                        }
+                                        menu
+                                    }),
+                            ),
                     ),
             )
-            .child(div().flex_1().child({
-                if self.active_tab == 0 {
-                    DataTable::new(&self.table_state)
-                        .xsmall()
-                        .stripe(true)
-                        .bordered(true)
-                        .scrollbar_visible(true, true)
-                        .into_any_element()
-                } else {
-                    let execution = &self.executions[self.active_tab - 1];
-                    if execution.succeeded {
-                        DataTable::new(&self.table_state)
-                            .xsmall()
-                            .stripe(true)
-                            .bordered(true)
-                            .scrollbar_visible(true, true)
-                            .into_any_element()
-                    } else {
-                        let error_msg = execution
-                            .result
-                            .rows
-                            .first()
-                            .and_then(|r| r.first())
-                            .cloned()
-                            .unwrap_or_default();
-                        div()
-                            .size_full()
-                            .p_4()
-                            .overflow_y_scrollbar()
-                            .text_color(rgb(0xef4444))
-                            .font_family("Monospace")
-                            .child(error_msg)
-                            .into_any_element()
-                    }
-                }
-            }))
+            .child(
+                div()
+                    .id("result-table-container")
+                    .flex_1()
+                    .key_context("DataTable")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        window.focus(&this.focus_handle, cx);
+                    }))
+                    .child({
+                        if self.active_tab == 0 {
+                            DataTable::new(&self.table_state)
+                                .xsmall()
+                                .stripe(true)
+                                .bordered(true)
+                                .scrollbar_visible(true, true)
+                                .into_any_element()
+                        } else {
+                            let execution = &self.executions[self.active_tab - 1];
+                            if execution.succeeded {
+                                DataTable::new(&self.table_state)
+                                    .xsmall()
+                                    .stripe(true)
+                                    .bordered(true)
+                                    .scrollbar_visible(true, true)
+                                    .into_any_element()
+                            } else {
+                                let error_msg = execution
+                                    .result
+                                    .rows
+                                    .first()
+                                    .and_then(|r| r.first())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                div()
+                                    .size_full()
+                                    .p_4()
+                                    .overflow_y_scrollbar()
+                                    .text_color(rgb(0xef4444))
+                                    .font_family("Monospace")
+                                    .child(error_msg)
+                                    .into_any_element()
+                            }
+                        }
+                    }),
+            )
     }
 }
 
@@ -761,4 +1188,537 @@ fn enrich_column_metadata(
             m
         })
         .collect()
+}
+
+#[derive(Clone, Debug)]
+struct ExportData {
+    columns: Vec<String>,
+    column_metadata: Vec<ColumnMetadata>,
+    rows: Vec<Vec<String>>,
+    table_name: String,
+}
+
+fn write_export_file(data: &ExportData, format: ExportFormat, path: &str) -> anyhow::Result<()> {
+    match format {
+        ExportFormat::Xlsx => std::fs::write(path, render_xlsx(data)?)?,
+        _ => std::fs::write(path, render_export_text(data, format)?)?,
+    }
+    Ok(())
+}
+
+fn render_export_text(data: &ExportData, format: ExportFormat) -> anyhow::Result<String> {
+    let output = match format {
+        ExportFormat::Csv => render_csv(data),
+        ExportFormat::Markdown => render_markdown(data),
+        ExportFormat::Json => render_json(data)?,
+        ExportFormat::Xml => render_xml(data),
+        ExportFormat::Xlsx => anyhow::bail!("XLSX is a binary export format"),
+        ExportFormat::SqlInserts => render_sql_inserts(data),
+        ExportFormat::SqlUpdates => render_sql_updates(data),
+        ExportFormat::WhereClause => render_where_clause(data),
+    };
+    Ok(output)
+}
+
+fn render_csv(data: &ExportData) -> String {
+    let mut lines = Vec::with_capacity(data.rows.len() + 1);
+    lines.push(
+        data.columns
+            .iter()
+            .map(|column| escape_csv_field(column))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    lines.extend(data.rows.iter().map(|row| {
+        row.iter()
+            .map(|cell| escape_csv_field(cell))
+            .collect::<Vec<_>>()
+            .join(",")
+    }));
+    lines.join("\n")
+}
+
+fn render_markdown(data: &ExportData) -> String {
+    let mut output = String::new();
+    output.push('|');
+    for column in &data.columns {
+        output.push(' ');
+        output.push_str(&escape_markdown_cell(column));
+        output.push_str(" |");
+    }
+    output.push('\n');
+    output.push('|');
+    for _ in &data.columns {
+        output.push_str(" --- |");
+    }
+    output.push('\n');
+    for row in &data.rows {
+        output.push('|');
+        for cell in row {
+            output.push(' ');
+            output.push_str(&escape_markdown_cell(cell));
+            output.push_str(" |");
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn render_json(data: &ExportData) -> anyhow::Result<String> {
+    let columns = unique_column_names(&data.columns);
+    let rows = data
+        .rows
+        .iter()
+        .map(|row| {
+            let mut object = serde_json::Map::new();
+            for (column, cell) in columns.iter().zip(row) {
+                object.insert(column.clone(), serde_json::Value::String(cell.clone()));
+            }
+            serde_json::Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string_pretty(&rows)?)
+}
+
+fn render_xml(data: &ExportData) -> String {
+    let columns = unique_column_names(&data.columns);
+    let mut output = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<results>\n");
+    for row in &data.rows {
+        output.push_str("  <row>\n");
+        for (column, cell) in columns.iter().zip(row) {
+            let _ = writeln!(
+                output,
+                "    <field name=\"{}\">{}</field>",
+                escape_xml(column),
+                escape_xml(cell)
+            );
+        }
+        output.push_str("  </row>\n");
+    }
+    output.push_str("</results>\n");
+    output
+}
+
+fn render_sql_inserts(data: &ExportData) -> String {
+    let columns = unique_column_names(&data.columns);
+    let table = quote_sql_identifier(&data.table_name);
+    let identifiers = columns
+        .iter()
+        .map(|column| quote_sql_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    data.rows
+        .iter()
+        .map(|row| {
+            let values = row
+                .iter()
+                .enumerate()
+                .map(|(ix, cell)| sql_literal(cell, data.column_metadata.get(ix)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("INSERT INTO {table} ({identifiers}) VALUES ({values});")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_sql_updates(data: &ExportData) -> String {
+    let columns = unique_column_names(&data.columns);
+    if columns.len() < 2 {
+        return "-- SQL Updates need at least one key column and one value column.\n".to_string();
+    }
+
+    let key_ix = data
+        .column_metadata
+        .iter()
+        .enumerate()
+        .find_map(|(ix, metadata)| metadata.is_pk.then_some(ix))
+        .unwrap_or(0);
+    let table = quote_sql_identifier(&data.table_name);
+    let key_column = quote_sql_identifier(&columns[key_ix]);
+
+    data.rows
+        .iter()
+        .map(|row| {
+            let assignments = row
+                .iter()
+                .enumerate()
+                .filter(|(ix, _)| *ix != key_ix)
+                .map(|(ix, cell)| {
+                    format!(
+                        "{} = {}",
+                        quote_sql_identifier(&columns[ix]),
+                        sql_literal(cell, data.column_metadata.get(ix))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "UPDATE {table} SET {assignments} WHERE {key_column} = {};",
+                sql_literal(&row[key_ix], data.column_metadata.get(key_ix))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_where_clause(data: &ExportData) -> String {
+    let columns = unique_column_names(&data.columns);
+    if columns.is_empty() || data.rows.is_empty() {
+        return "WHERE FALSE;\n".to_string();
+    }
+
+    let clauses = data
+        .rows
+        .iter()
+        .map(|row| {
+            let conditions = row
+                .iter()
+                .enumerate()
+                .map(|(ix, cell)| {
+                    format!(
+                        "{} = {}",
+                        quote_sql_identifier(&columns[ix]),
+                        sql_literal(cell, data.column_metadata.get(ix))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            format!("({conditions})")
+        })
+        .collect::<Vec<_>>();
+    format!("WHERE\n  {};\n", clauses.join("\n  OR "))
+}
+
+fn render_xlsx(data: &ExportData) -> anyhow::Result<Vec<u8>> {
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut cursor);
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        zip.start_file("[Content_Types].xml", options)?;
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>"#,
+        )?;
+
+        zip.start_file("_rels/.rels", options)?;
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#,
+        )?;
+
+        zip.start_file("xl/workbook.xml", options)?;
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Results" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#,
+        )?;
+
+        zip.start_file("xl/_rels/workbook.xml.rels", options)?;
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"#,
+        )?;
+
+        zip.start_file("xl/styles.xml", options)?;
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+</styleSheet>"#,
+        )?;
+
+        zip.start_file("xl/worksheets/sheet1.xml", options)?;
+        zip.write_all(render_xlsx_sheet(data).as_bytes())?;
+        zip.finish()?;
+    }
+    Ok(cursor.into_inner())
+}
+
+fn render_xlsx_sheet(data: &ExportData) -> String {
+    let mut output = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+"#,
+    );
+    write_xlsx_row(&mut output, 1, &data.columns);
+    for (row_ix, row) in data.rows.iter().enumerate() {
+        write_xlsx_row(&mut output, row_ix + 2, row);
+    }
+    output.push_str("  </sheetData>\n</worksheet>");
+    output
+}
+
+fn write_xlsx_row(output: &mut String, row_number: usize, cells: &[String]) {
+    let _ = writeln!(output, "    <row r=\"{row_number}\">");
+    for (col_ix, value) in cells.iter().enumerate() {
+        let cell_ref = format!("{}{}", xlsx_column_name(col_ix), row_number);
+        let _ = writeln!(
+            output,
+            "      <c r=\"{}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
+            cell_ref,
+            escape_xml(value)
+        );
+    }
+    output.push_str("    </row>\n");
+}
+
+fn xlsx_column_name(mut ix: usize) -> String {
+    let mut name = String::new();
+    loop {
+        let remainder = ix % 26;
+        name.insert(0, (b'A' + remainder as u8) as char);
+        if ix < 26 {
+            break;
+        }
+        ix = ix / 26 - 1;
+    }
+    name
+}
+
+fn infer_table_name(query: &str) -> String {
+    let tokens = query
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, ';' | ',' | '(' | ')'))
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+
+    for window in tokens.windows(2) {
+        if matches_ignore_ascii_case(window[0], "from")
+            || matches_ignore_ascii_case(window[0], "into")
+            || matches_ignore_ascii_case(window[0], "update")
+        {
+            return clean_identifier_token(window[1]);
+        }
+    }
+    "results".to_string()
+}
+
+fn clean_identifier_token(token: &str) -> String {
+    token
+        .trim_matches(|ch| matches!(ch, '"' | '`' | '[' | ']'))
+        .to_string()
+}
+
+fn matches_ignore_ascii_case(value: &str, expected: &str) -> bool {
+    value.eq_ignore_ascii_case(expected)
+}
+
+fn unique_column_names(columns: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashMap::<String, usize>::new();
+    columns
+        .iter()
+        .map(|column| {
+            let count = seen.entry(column.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 {
+                column.clone()
+            } else {
+                format!("{}_{}", column, count)
+            }
+        })
+        .collect()
+}
+
+fn escape_csv_field(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn escape_markdown_cell(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('\n', "<br>")
+}
+
+fn escape_xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn quote_sql_identifier(identifier: &str) -> String {
+    identifier
+        .split('.')
+        .map(|part| format!("\"{}\"", part.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn sql_literal(value: &str, metadata: Option<&ColumnMetadata>) -> String {
+    if value.is_empty() {
+        return "NULL".to_string();
+    }
+
+    let data_type = metadata
+        .map(|metadata| metadata.data_type.to_ascii_lowercase())
+        .unwrap_or_default();
+    let numeric = [
+        "int",
+        "int2",
+        "int4",
+        "int8",
+        "integer",
+        "bigint",
+        "smallint",
+        "numeric",
+        "decimal",
+        "real",
+        "double",
+        "float",
+        "serial",
+        "bigserial",
+    ];
+    if numeric.iter().any(|prefix| data_type.starts_with(prefix)) && value.parse::<f64>().is_ok() {
+        return value.to_string();
+    }
+    if matches!(data_type.as_str(), "bool" | "boolean")
+        && matches!(value.to_ascii_lowercase().as_str(), "true" | "false")
+    {
+        return value.to_ascii_uppercase();
+    }
+
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_data() -> ExportData {
+        ExportData {
+            columns: vec!["id".into(), "name".into()],
+            column_metadata: vec![
+                ColumnMetadata {
+                    name: "id".into(),
+                    data_type: "int4".into(),
+                    is_pk: true,
+                    is_fk: false,
+                },
+                ColumnMetadata {
+                    name: "name".into(),
+                    data_type: "text".into(),
+                    is_pk: false,
+                    is_fk: false,
+                },
+            ],
+            rows: vec![
+                vec!["1".into(), "Ada".into()],
+                vec!["2".into(), "Bob".into()],
+            ],
+            table_name: "users".into(),
+        }
+    }
+
+    #[test]
+    fn renders_sql_inserts_with_identifiers_and_literals() {
+        assert_eq!(
+            render_sql_inserts(&sample_data()),
+            "INSERT INTO \"users\" (\"id\", \"name\") VALUES (1, 'Ada');\nINSERT INTO \"users\" (\"id\", \"name\") VALUES (2, 'Bob');"
+        );
+    }
+
+    #[test]
+    fn renders_sql_updates_using_primary_key() {
+        assert_eq!(
+            render_sql_updates(&sample_data()),
+            "UPDATE \"users\" SET \"name\" = 'Ada' WHERE \"id\" = 1;\nUPDATE \"users\" SET \"name\" = 'Bob' WHERE \"id\" = 2;"
+        );
+    }
+
+    #[test]
+    fn renders_where_clause_for_selected_rows() {
+        assert_eq!(
+            render_where_clause(&sample_data()),
+            "WHERE\n  (\"id\" = 1 AND \"name\" = 'Ada')\n  OR (\"id\" = 2 AND \"name\" = 'Bob');\n"
+        );
+    }
+
+    #[test]
+    fn writes_xlsx_zip_payload() {
+        let bytes = render_xlsx(&sample_data()).expect("xlsx should render");
+        assert!(bytes.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn shift_selects_rectangular_cell_range_for_export() {
+        let mut delegate = ResultsTableDelegate::from_parts(
+            vec!["id".into(), "name".into(), "city".into()],
+            Vec::new(),
+            vec![
+                vec!["1".into(), "Ada".into(), "London".into()],
+                vec!["2".into(), "Bob".into(), "Paris".into()],
+            ],
+        );
+
+        delegate.select_cell(0, 0, Modifiers::none());
+        delegate.select_cell(1, 1, Modifiers::shift());
+
+        let data = delegate
+            .selected_export_data("users".into())
+            .expect("selection should export");
+        assert_eq!(data.columns, vec!["id", "name"]);
+        assert_eq!(
+            data.rows,
+            vec![
+                vec!["1".to_string(), "Ada".to_string()],
+                vec!["2".to_string(), "Bob".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn control_click_toggles_sparse_cells_for_export_shape() {
+        let mut delegate = ResultsTableDelegate::from_parts(
+            vec!["id".into(), "name".into(), "city".into()],
+            Vec::new(),
+            vec![
+                vec!["1".into(), "Ada".into(), "London".into()],
+                vec!["2".into(), "Bob".into(), "Paris".into()],
+            ],
+        );
+
+        delegate.select_cell(0, 0, Modifiers::none());
+        delegate.select_cell(1, 2, Modifiers::control());
+
+        let data = delegate
+            .selected_export_data("users".into())
+            .expect("selection should export");
+        assert_eq!(data.columns, vec!["id", "city"]);
+        assert_eq!(
+            data.rows,
+            vec![
+                vec!["1".to_string(), String::new()],
+                vec![String::new(), "Paris".to_string()]
+            ]
+        );
+    }
 }
