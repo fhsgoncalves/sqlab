@@ -14,7 +14,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::query_detector::{QueryRange, query_ranges_for_execution};
+use super::query_detector::{QueryRange, query_ranges_for_execution, query_ranges_in_text};
 use super::sql_completion::{SqlCompletionProvider, SqlDiagnostic, sql_diagnostics_at};
 use crate::schema_cache;
 use crate::ui::search::{SearchOptions, TextMatch, find_text_matches};
@@ -26,6 +26,7 @@ actions!(
     [
         ExecuteQuery,
         SaveFile,
+        FormatQuery,
         ToggleEditorSearch,
         ToggleEditorReplace,
         CloseEditorSearch,
@@ -676,6 +677,57 @@ impl EditorPanel {
             self.last_saved_content = content;
         }
     }
+
+    fn on_format_query(&mut self, _: &FormatQuery, window: &mut Window, cx: &mut Context<Self>) {
+        let state = self.editor.read(cx);
+        let text = state.value().to_string();
+        let selected = state.selected_value().to_string();
+        let cursor = state.cursor();
+
+        let (formatted, range, new_cursor) = if !selected.trim().is_empty() {
+            let formatted = sqlformat::format(
+                &selected,
+                &sqlformat::QueryParams::default(),
+                &sqlformat::FormatOptions::default(),
+            );
+            let selection_range = state.selected_range();
+            let new_cursor = selection_range.start + formatted.len();
+            (formatted, selection_range, new_cursor)
+        } else if let Some(query) = query_ranges_in_text(&text)
+            .into_iter()
+            .find(|q| cursor >= q.trimmed_range.start && cursor <= q.trimmed_range.end)
+        {
+            let formatted = sqlformat::format(
+                &query.text,
+                &sqlformat::QueryParams::default(),
+                &sqlformat::FormatOptions::default(),
+            );
+            let new_cursor = query.trimmed_range.start + formatted.len();
+            (formatted, query.trimmed_range, new_cursor)
+        } else if let Some(query) = query_ranges_for_execution(&text, cursor).into_iter().next() {
+            let formatted = sqlformat::format(
+                &query.text,
+                &sqlformat::QueryParams::default(),
+                &sqlformat::FormatOptions::default(),
+            );
+            let new_cursor = query.trimmed_range.start + formatted.len();
+            (formatted, query.trimmed_range, new_cursor)
+        } else {
+            return;
+        };
+
+        let mut new_text = text;
+        new_text.replace_range(range, &formatted);
+        self.editor.update(cx, |editor, cx| {
+            editor.set_value(new_text.clone(), window, cx);
+            let line = new_text[..new_cursor].matches('\n').count() as u32;
+            let col = new_text[..new_cursor]
+                .rfind('\n')
+                .map(|ix| new_cursor - ix - 1)
+                .unwrap_or(new_cursor) as u32;
+            editor.set_cursor_position(lsp_types::Position::new(line, col), window, cx);
+        });
+    }
 }
 
 impl Panel for EditorPanel {
@@ -706,6 +758,7 @@ impl Render for EditorPanel {
             .id("editor-panel")
             .size_full()
             .on_action(cx.listener(Self::on_save_file))
+            .on_action(cx.listener(Self::on_format_query))
             .on_action(cx.listener(Self::toggle_search))
             .on_action(cx.listener(Self::toggle_replace))
             .on_action(cx.listener(Self::close_search))

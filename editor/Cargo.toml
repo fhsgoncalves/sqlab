@@ -33,6 +33,7 @@ async-channel = "2"
 nucleo = "0.5"
 ignore = "0.4"
 regex = "1.12.3"
+sqlformat = "0.5"
 lsp-types = "0.97"
 anyhow = { workspace = true }
 serde = { workspace = true }
