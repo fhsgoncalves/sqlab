@@ -683,7 +683,7 @@ footer {
     Query, version, and agent-code your databases — without the bloat.
   </p>
   <div class="hero-actions">
-    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary">
+    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary" id="download-btn-hero">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
       Download for macOS
     </a>
@@ -876,7 +876,7 @@ footer {
   <h2>Ready to query<br>at the speed of thought?</h2>
   <p>Download sq/lab for free and feel the difference on your first query.</p>
   <div class="cta-actions">
-    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary">
+    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary" id="download-btn-cta">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
       Download for macOS
     </a>
@@ -906,6 +906,47 @@ footer {
 <script>
 (function(){
   document.getElementById('year').textContent = new Date().getFullYear();
+
+  // OS detection for download buttons
+  function getOS() {
+    var ua = navigator.userAgent;
+    if (ua.indexOf('Win') !== -1) return 'windows';
+    if (ua.indexOf('Mac') !== -1) return 'macos';
+    if (ua.indexOf('Linux') !== -1) return 'linux';
+    return 'macos'; // default
+  }
+
+  function updateDownloadButtons() {
+    var os = getOS();
+    var buttons = [
+      document.getElementById('download-btn-hero'),
+      document.getElementById('download-btn-cta')
+    ];
+
+    var osConfig = {
+      macos: { text: 'Download for macOS', filter: '.dmg' },
+      windows: { text: 'Download for Windows', filter: '.exe' },
+      linux: { text: 'Download for Linux', filter: '.AppImage' }
+    };
+
+    var config = osConfig[os] || osConfig.macos;
+
+    buttons.forEach(function(btn) {
+      if (btn) {
+        // Update text
+        var svg = btn.querySelector('svg');
+        btn.textContent = '';
+        if (svg) btn.appendChild(svg);
+        btn.appendChild(document.createTextNode(' ' + config.text));
+
+        // Update href to filter by OS-specific file
+        var baseUrl = 'https://github.com/fhsgoncalves/sqlab/releases';
+        btn.href = baseUrl + '?filter=' + config.filter;
+      }
+    });
+  }
+
+  updateDownloadButtons();
 
   // Carousel
   var track = document.getElementById('carouselTrack');
