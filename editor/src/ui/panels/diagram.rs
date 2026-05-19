@@ -2445,26 +2445,25 @@ fn draw_export_table(
 
     for (ix, column) in table.columns.iter().enumerate() {
         let row_y = y + ((HEADER_HEIGHT + ix as f32 * ROW_HEIGHT) * scale).round() as i32;
+        let row_h = (ROW_HEIGHT * scale).round() as i32;
         let is_first_pk_row = column.is_pk
-            && ix > 0
+            && (ix == 0
+                || table
+                    .columns
+                    .get(ix - 1)
+                    .map(|previous| !previous.is_pk)
+                    .unwrap_or(true));
+        let is_last_pk_row = column.is_pk
             && table
                 .columns
-                .get(ix - 1)
-                .map(|previous| !previous.is_pk)
-                .unwrap_or(false);
-        if ix > 0 || is_first_pk_row {
-            fill_rect(
-                image,
-                x,
-                row_y,
-                w,
-                if is_first_pk_row { 2 } else { 1 },
-                if is_first_pk_row {
-                    export.style.border
-                } else {
-                    with_alpha(export.style.border, 135)
-                },
-            );
+                .get(ix + 1)
+                .map(|next| !next.is_pk)
+                .unwrap_or(true);
+        if is_first_pk_row && ix > 0 {
+            fill_rect(image, x, row_y, w, 2, export.style.border);
+        }
+        if is_last_pk_row && ix < table.columns.len() - 1 {
+            fill_rect(image, x, row_y + row_h, w, 2, export.style.border);
         }
 
         let text_size = (COLUMN_FONT_PX * scale).round().max(10.0);
@@ -2546,11 +2545,6 @@ fn rgba_from_hsla(color: Hsla) -> Rgba<u8> {
         (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
         (color.a.clamp(0.0, 1.0) * 255.0).round() as u8,
     ])
-}
-
-fn with_alpha(mut color: Rgba<u8>, alpha: u8) -> Rgba<u8> {
-    color[3] = alpha;
-    color
 }
 
 fn fill_rect(image: &mut RgbaImage, x: i32, y: i32, width: i32, height: i32, color: Rgba<u8>) {
