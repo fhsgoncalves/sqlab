@@ -352,41 +352,48 @@ impl Render for EditorTabs {
             hsla(0.74, 0.70, 0.42, 1.0)
         };
 
-        let editor_toolbar = h_flex()
-            .id("editor-toolbar")
-            .h(px(32.))
-            .flex_none()
-            .items_center()
-            .px_2()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tab_bar)
-            .child(
-                Button::new("execute-query")
-                    .icon(IconName::Play)
-                    .xsmall()
-                    .ghost()
-                    .text_color(rgb(0x58a65c))
-                    .tooltip_with_action("Execute Query", &ExecuteQuery, Some("Input"))
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(ExecuteQuery), cx);
-                    }),
-            )
-            .child(div().flex_1())
-            .when_some(active_connection, |toolbar, connection| {
-                toolbar.child(
-                    div()
-                        .px_2()
-                        .py_0p5()
-                        .rounded(cx.theme().radius)
-                        .bg(active_connection_bg)
-                        .text_color(active_connection_fg)
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .truncate()
-                        .child(connection),
+        let is_sql_active = self
+            .tabs
+            .get(self.active_ix)
+            .map_or(false, |tab| tab.as_sql().is_some());
+
+        let editor_toolbar = is_sql_active.then(|| {
+            h_flex()
+                .id("editor-toolbar")
+                .h(px(32.))
+                .flex_none()
+                .items_center()
+                .px_2()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().tab_bar)
+                .child(
+                    Button::new("execute-query")
+                        .icon(IconName::Play)
+                        .xsmall()
+                        .ghost()
+                        .text_color(rgb(0x58a65c))
+                        .tooltip_with_action("Execute Query", &ExecuteQuery, Some("Input"))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ExecuteQuery), cx);
+                        }),
                 )
-            });
+                .child(div().flex_1())
+                .when_some(active_connection, |toolbar, connection| {
+                    toolbar.child(
+                        div()
+                            .px_2()
+                            .py_0p5()
+                            .rounded(cx.theme().radius)
+                            .bg(active_connection_bg)
+                            .text_color(active_connection_fg)
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .truncate()
+                            .child(connection),
+                    )
+                })
+        });
 
         v_flex()
             .id("editor-tabs")
@@ -395,7 +402,7 @@ impl Render for EditorTabs {
             .on_action(cx.listener(Self::cycle_tab_forward))
             .on_action(cx.listener(Self::cycle_tab_backward))
             .child(tab_bar)
-            .child(editor_toolbar)
+            .when_some(editor_toolbar, |this, toolbar| this.child(toolbar))
             .child(
                 div()
                     .id("editor-content")
