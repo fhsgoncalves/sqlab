@@ -109,6 +109,7 @@ pub struct ResultPanel {
     dock_area: Option<WeakEntity<DockArea>>,
     is_zoomed: bool,
     selected_export_format: ExportFormat,
+    activity_tracker: gpui::Entity<ActivityTracker>,
 }
 
 #[derive(Clone)]
@@ -427,7 +428,7 @@ impl EventEmitter<PanelEvent> for ResultPanel {}
 
 impl ResultPanel {
     pub fn new(
-        _activity_tracker: gpui::Entity<ActivityTracker>,
+        activity_tracker: gpui::Entity<ActivityTracker>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -453,6 +454,7 @@ impl ResultPanel {
             dock_area: None,
             is_zoomed: false,
             selected_export_format: ExportFormat::Csv,
+            activity_tracker,
         }
     }
 
@@ -605,6 +607,7 @@ impl ResultPanel {
 
         let input_state = cx.new(|cx| InputState::new(window, cx).default_value(default_path));
         let input_state_for_ok = input_state.clone();
+        let activity_tracker = self.activity_tracker.clone();
 
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             alert
@@ -614,11 +617,33 @@ impl ResultPanel {
                 .on_ok({
                     let input_state_for_ok = input_state_for_ok.clone();
                     let data = data.clone();
-                    move |_, _window, cx| {
+                    let activity_tracker = activity_tracker.clone();
+                    move |_this, _window, cx| {
                         let path = input_state_for_ok.read(cx).value().to_string();
-                        if let Err(error) = write_export_file(&data, format, &path) {
-                            eprintln!("failed to export {}: {}", format.label(), error);
-                        }
+                        let activity_id = cx.update_entity(&activity_tracker, |tracker, cx| {
+                            tracker.begin(format!("Exporting to {}", format.label()), cx)
+                        });
+
+                        let data_for_spawn = data.clone();
+                        let activity_tracker_for_spawn = activity_tracker.clone();
+                        cx.spawn(async move |cx| {
+                            let result =
+                                cx.background_executor()
+                                    .spawn(async move {
+                                        write_export_file(&data_for_spawn, format, &path)
+                                    })
+                                    .await;
+
+                            if let Err(error) = result {
+                                eprintln!("failed to export {}: {}", format.label(), error);
+                            }
+
+                            cx.update_entity(&activity_tracker_for_spawn, |tracker, cx| {
+                                tracker.finish(activity_id, cx);
+                            });
+                        })
+                        .detach();
+
                         true
                     }
                 })

@@ -13,6 +13,7 @@ use gpui_component::{
 };
 
 use super::editor::{EditorPanel, ExecuteQuery};
+use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 use crate::ui::panels::diagram::{DiagramModel, DiagramPanel};
 use sqlab_drivers_core::{ConnectionStatus, manager::DataSourceManager};
@@ -26,6 +27,7 @@ pub struct EditorTabs {
     dock_area: Option<WeakEntity<DockArea>>,
     data_source_manager: Entity<DataSourceManager>,
     is_zoomed: bool,
+    activity_tracker: Entity<ActivityTracker>,
 }
 
 enum EditorTab {
@@ -65,6 +67,7 @@ impl EditorTab {
 impl EditorTabs {
     pub fn new(
         data_source_manager: Entity<DataSourceManager>,
+        activity_tracker: Entity<ActivityTracker>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -75,6 +78,7 @@ impl EditorTabs {
             dock_area: None,
             data_source_manager,
             is_zoomed: false,
+            activity_tracker,
         }
     }
 
@@ -115,7 +119,8 @@ impl EditorTabs {
             return;
         }
 
-        let diagram = cx.new(|cx| DiagramPanel::new(model, window, cx));
+        let diagram =
+            cx.new(|cx| DiagramPanel::new(model, self.activity_tracker.clone(), window, cx));
         self.tabs.push(EditorTab::Diagram(diagram));
         self.active_ix = self.tabs.len() - 1;
         cx.notify();

@@ -132,7 +132,12 @@ impl Workspace {
         let weak_dock_area = dock_area.downgrade();
 
         let editor_tabs = cx.new(|cx| {
-            let mut tabs = EditorTabs::new(data_source_manager.clone(), window, cx);
+            let mut tabs = EditorTabs::new(
+                data_source_manager.clone(),
+                activity_tracker.clone(),
+                window,
+                cx,
+            );
             tabs.set_dock_area(weak_dock_area.clone());
             tabs
         });

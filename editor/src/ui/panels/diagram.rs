@@ -24,6 +24,8 @@ use image::{Rgba, RgbaImage};
 use sqlab_drivers_core::{DataSourceConfig, DatabaseSchema, TableKind};
 use std::sync::Arc;
 
+use crate::ui::activity::ActivityTracker;
+
 pub const MAX_DIAGRAM_TABLES: usize = 100;
 
 const MIN_TABLE_WIDTH: f32 = 300.0;
@@ -371,6 +373,7 @@ pub struct DiagramPanel {
     dragging: Option<DragState>,
     panning: Option<PanState>,
     export_counter: usize,
+    activity_tracker: gpui::Entity<ActivityTracker>,
 }
 
 #[derive(Clone, Debug)]
@@ -466,7 +469,12 @@ impl Default for DiagramExportStyle {
 }
 
 impl DiagramPanel {
-    pub fn new(model: DiagramModel, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        model: DiagramModel,
+        activity_tracker: gpui::Entity<ActivityTracker>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let layout = layout_diagram(&model);
         let positions = layout
             .nodes
@@ -485,6 +493,7 @@ impl DiagramPanel {
             dragging: None,
             panning: None,
             export_counter: 1,
+            activity_tracker,
         }
     }
 
@@ -532,6 +541,7 @@ impl DiagramPanel {
         };
         let input_state = cx.new(|cx| InputState::new(window, cx).default_value(default_path));
         let input_state_for_ok = input_state.clone();
+        let activity_tracker = self.activity_tracker.clone();
 
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             alert
@@ -541,11 +551,36 @@ impl DiagramPanel {
                 .on_ok({
                     let input_state_for_ok = input_state_for_ok.clone();
                     let export = export.clone();
+                    let activity_tracker = activity_tracker.clone();
                     move |_, _window, cx| {
                         let path = input_state_for_ok.read(cx).value().to_string();
-                        if let Err(error) = write_diagram_export_file(&export, format, &path) {
-                            eprintln!("failed to export diagram as {}: {error}", format.label());
-                        }
+                        let activity_id = cx.update_entity(&activity_tracker, |tracker, cx| {
+                            tracker.begin(format!("Exporting diagram to {}", format.label()), cx)
+                        });
+
+                        let export_for_spawn = export.clone();
+                        let activity_tracker_for_spawn = activity_tracker.clone();
+                        cx.spawn(async move |cx| {
+                            let result = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    write_diagram_export_file(&export_for_spawn, format, &path)
+                                })
+                                .await;
+
+                            if let Err(error) = result {
+                                eprintln!(
+                                    "failed to export diagram as {}: {error}",
+                                    format.label()
+                                );
+                            }
+
+                            cx.update_entity(&activity_tracker_for_spawn, |tracker, cx| {
+                                tracker.finish(activity_id, cx);
+                            });
+                        })
+                        .detach();
+
                         true
                     }
                 })
