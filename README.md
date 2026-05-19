@@ -59,10 +59,6 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 - **DuckDB** — planned / coming soon.
 - **Databend** — planned / coming soon.
 
-## Roadmap
-
-- [ ] App distribution
-
 ## Tech Stack
 
 - **Rust** — core application logic
