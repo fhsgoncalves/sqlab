@@ -1360,7 +1360,7 @@ impl Render for ConnectionPanel {
                                         .justify_center()
                                         .child(
                                             Icon::new(IconName::File)
-                                                .path("icons/pg.svg")
+                                                .path("icons/postgresql.svg")
                                                 .size(px(19.))
                                                 .text_color(rgb(0x336791)),
                                         ),
@@ -1407,15 +1407,7 @@ impl Render for ConnectionPanel {
                             .items_center()
                             .overflow_hidden()
                             .id(format!("connection-label-{}", row_name))
-                            .child(
-                                div()
-                                    .text_base()
-                                    .truncate()
-                                    .when(is_active, |this| {
-                                        this.font_weight(gpui::FontWeight::BOLD)
-                                    })
-                                    .child(config.name.clone()),
-                            )
+                            .child(div().text_base().truncate().child(config.name.clone()))
                             .on_click(cx.listener({
                                 let row_manager = row_manager.clone();
                                 let row_name = row_name_for_active;
