@@ -3,6 +3,7 @@ use std::{
     fmt::Write as FmtWrite,
 };
 
+use fontdue::{Font, FontSettings};
 use gpui::{
     App, AppContext, BorderStyle, Bounds, Context, EventEmitter, FocusHandle, Focusable, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -21,6 +22,7 @@ use gpui_component::{
 };
 use image::{Rgba, RgbaImage};
 use sqlab_drivers_core::{DataSourceConfig, DatabaseSchema, TableKind};
+use std::sync::Arc;
 
 pub const MAX_DIAGRAM_TABLES: usize = 100;
 
@@ -1231,6 +1233,63 @@ fn paint_edges(bounds: Bounds<gpui::Pixels>, state: &DiagramPaintState, window: 
         if let Ok(path) = path.build() {
             window.paint_path(path, state.muted.opacity(0.82));
         }
+
+        // Draw arrow at the end of the route
+        if route.len() >= 2 {
+            let last = route[route.len() - 1];
+            let second_last = route[route.len() - 2];
+            let end = diagram_to_screen(bounds, state, last);
+            let prev = diagram_to_screen(bounds, state, second_last);
+            paint_arrow(end, prev, state.muted.opacity(0.82), window);
+        }
+    }
+}
+
+fn paint_arrow(
+    tip: gpui::Point<gpui::Pixels>,
+    base: gpui::Point<gpui::Pixels>,
+    color: Hsla,
+    window: &mut Window,
+) {
+    let dx = f32::from(tip.x) - f32::from(base.x);
+    let dy = f32::from(tip.y) - f32::from(base.y);
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < 2.0 {
+        return;
+    }
+
+    let dir_x = dx / length;
+    let dir_y = dy / length;
+
+    // Arrow tip slightly before actual end
+    let tip_x = f32::from(tip.x) - dir_x * 2.0;
+    let tip_y = f32::from(tip.y) - dir_y * 2.0;
+
+    let arrow_size = 8.0;
+    let base_x = tip_x - dir_x * arrow_size;
+    let base_y = tip_y - dir_y * arrow_size;
+
+    let perp_x = -dir_y;
+    let perp_y = dir_x;
+    let wing_span = arrow_size * 0.6;
+
+    let left = point(
+        px(base_x + perp_x * wing_span),
+        px(base_y + perp_y * wing_span),
+    );
+    let right = point(
+        px(base_x - perp_x * wing_span),
+        px(base_y - perp_y * wing_span),
+    );
+    let tip_pt = point(px(tip_x), px(tip_y));
+
+    let mut path = PathBuilder::fill();
+    path.move_to(tip_pt);
+    path.line_to(left);
+    path.line_to(right);
+    path.line_to(tip_pt);
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
     }
 }
 
@@ -1951,12 +2010,102 @@ fn sanitize_file_name(value: &str) -> String {
     }
 }
 
+struct DiagramFontCache {
+    regular: Arc<Font>,
+    bold: Arc<Font>,
+}
+
+impl DiagramFontCache {
+    fn new() -> Self {
+        let font_bytes = load_system_font_bytes();
+        let regular = if font_bytes.is_empty() {
+            Arc::new(
+                Font::from_bytes(&[][..], FontSettings::default()).expect("Failed to load font"),
+            )
+        } else {
+            Arc::new(
+                Font::from_bytes(font_bytes.as_slice(), FontSettings::default())
+                    .expect("Failed to load font"),
+            )
+        };
+        let bold = Font::from_bytes(
+            font_bytes.as_slice(),
+            FontSettings {
+                collection_index: 1,
+                ..Default::default()
+            },
+        )
+        .ok()
+        .map(Arc::new)
+        .unwrap_or_else(|| regular.clone());
+        Self { regular, bold }
+    }
+
+    fn get(&self, bold: bool) -> &Arc<Font> {
+        if bold { &self.bold } else { &self.regular }
+    }
+}
+
+fn load_system_font_bytes() -> Vec<u8> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(font_path) = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleFont"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        {
+            if !font_path.is_empty() {
+                if let Ok(bytes) = std::fs::read(&font_path) {
+                    return bytes;
+                }
+            }
+        }
+        let candidates = [
+            "/System/Library/Fonts/Inter.ttc",
+            "/System/Library/Fonts/SFNS.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+        ];
+        for path in &candidates {
+            if let Ok(bytes) = std::fs::read(path) {
+                return bytes;
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let candidates = [
+            "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
+            "/usr/share/fonts/TTF/Inter-Regular.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        ];
+        for path in &candidates {
+            if let Ok(bytes) = std::fs::read(path) {
+                return bytes;
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let candidates = [
+            "C:\\Windows\\Fonts\\Inter-Regular.ttf",
+            "C:\\Windows\\Fonts\\arial.ttf",
+        ];
+        for path in &candidates {
+            if let Ok(bytes) = std::fs::read(path) {
+                return bytes;
+            }
+        }
+    }
+    Vec::new()
+}
+
 fn render_diagram_png(export: &DiagramExport) -> RgbaImage {
     let (min_x, min_y, max_x, max_y) = diagram_export_bounds(export);
     let content_width = (max_x - min_x + EXPORT_MARGIN * 2.0).max(320.0);
     let content_height = (max_y - min_y + EXPORT_MARGIN * 2.0).max(240.0);
     let max_dimension = content_width.max(content_height);
-    let scale = (2400.0 / max_dimension).clamp(0.6, 1.0);
+    // Use 2x scale for higher quality output
+    let scale = (4800.0 / max_dimension).clamp(1.0, 2.0);
     let image_width = (content_width * scale).ceil() as u32;
     let image_height = (content_height * scale).ceil() as u32;
     let mut image = RgbaImage::from_pixel(image_width, image_height, export.style.background);
@@ -1964,10 +2113,20 @@ fn render_diagram_png(export: &DiagramExport) -> RgbaImage {
     let offset_x = EXPORT_MARGIN - min_x;
     let offset_y = EXPORT_MARGIN - min_y;
 
+    let font_cache = DiagramFontCache::new();
+
     draw_export_grid(&mut image, scale, export.style.grid);
     draw_export_edges(export, &mut image, scale, offset_x, offset_y);
     for table in &export.model.tables {
-        draw_export_table(export, table, &mut image, scale, offset_x, offset_y);
+        draw_export_table(
+            export,
+            table,
+            &mut image,
+            scale,
+            offset_x,
+            offset_y,
+            &font_cache,
+        );
     }
 
     image
@@ -2009,10 +2168,24 @@ fn diagram_export_bounds(export: &DiagramExport) -> (f32, f32, f32, f32) {
 fn draw_export_grid(image: &mut RgbaImage, scale: f32, color: Rgba<u8>) {
     let spacing = (24.0 * scale).round().max(8.0) as u32;
     for x in (0..image.width()).step_by(spacing as usize) {
-        draw_vline(image, x as i32, 0, image.height() as i32 - 1, color);
+        draw_aa_line(
+            image,
+            x as f32,
+            0.0,
+            x as f32,
+            image.height() as f32 - 1.0,
+            color,
+        );
     }
     for y in (0..image.height()).step_by(spacing as usize) {
-        draw_hline(image, 0, image.width() as i32 - 1, y as i32, color);
+        draw_aa_line(
+            image,
+            0.0,
+            y as f32,
+            image.width() as f32 - 1.0,
+            y as f32,
+            color,
+        );
     }
 }
 
@@ -2028,13 +2201,197 @@ fn draw_export_edges(
         if route.len() < 2 {
             continue;
         }
-        let color = export.style.edge;
+        // Use fully opaque edge color for better visibility in export
+        let mut color = export.style.edge;
+        color[3] = 255;
+        // Match GPUI's 1.3px stroke width, scaled up
+        let line_width = (1.5 * scale).max(2.0);
+
+        // Draw the route with proper thickness
         for points in route.windows(2) {
-            let start_x = ((points[0].x + offset_x) * scale).round() as i32;
-            let start_y = ((points[0].y + offset_y) * scale).round() as i32;
-            let end_x = ((points[1].x + offset_x) * scale).round() as i32;
-            let end_y = ((points[1].y + offset_y) * scale).round() as i32;
-            draw_line(image, start_x, start_y, end_x, end_y, color);
+            let start_x = (points[0].x + offset_x) * scale;
+            let start_y = (points[0].y + offset_y) * scale;
+            let end_x = (points[1].x + offset_x) * scale;
+            let end_y = (points[1].y + offset_y) * scale;
+            draw_aa_thick_line(image, start_x, start_y, end_x, end_y, color, line_width);
+        }
+
+        // Draw arrow at the end of the route (pointing to target table)
+        if route.len() >= 2 {
+            let last = route[route.len() - 1];
+            let second_last = route[route.len() - 2];
+            let end_x = (last.x + offset_x) * scale;
+            let end_y = (last.y + offset_y) * scale;
+            let prev_x = (second_last.x + offset_x) * scale;
+            let prev_y = (second_last.y + offset_y) * scale;
+
+            // Arrow size proportional to scale
+            let arrow_size = (12.0 * scale).clamp(10.0, 24.0);
+            draw_arrow(image, prev_x, prev_y, end_x, end_y, color, arrow_size);
+        }
+    }
+}
+
+fn draw_aa_thick_line(
+    image: &mut RgbaImage,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    color: Rgba<u8>,
+    width: f32,
+) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < 0.5 {
+        return;
+    }
+
+    let radius = width / 2.0;
+    // Use more steps for better coverage
+    let steps = (length * 3.0).ceil() as i32;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let cx = x0 + dx * t;
+        let cy = y0 + dy * t;
+
+        // Draw a filled circle at this point for thickness
+        let min_px = (cx - radius - 1.0).floor() as i32;
+        let max_px = (cx + radius + 1.0).ceil() as i32;
+        let min_py = (cy - radius - 1.0).floor() as i32;
+        let max_py = (cy + radius + 1.0).ceil() as i32;
+
+        for py in min_py..=max_py {
+            for px in min_px..=max_px {
+                if px < 0 || px >= image.width() as i32 || py < 0 || py >= image.height() as i32 {
+                    continue;
+                }
+                let dist_x = px as f32 + 0.5 - cx;
+                let dist_y = py as f32 + 0.5 - cy;
+                let dist = (dist_x * dist_x + dist_y * dist_y).sqrt();
+                if dist <= radius + 0.5 {
+                    // Anti-aliasing at the edge
+                    let coverage = if dist > radius - 0.5 {
+                        (radius + 0.5 - dist).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    if coverage > 0.0 {
+                        let blended_alpha = (color[3] as f32 * coverage) as u8;
+                        if blended_alpha > 0 {
+                            let blended = Rgba([color[0], color[1], color[2], blended_alpha]);
+                            blend_pixel(image, px as u32, py as u32, blended);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn draw_arrow(
+    image: &mut RgbaImage,
+    from_x: f32,
+    from_y: f32,
+    to_x: f32,
+    to_y: f32,
+    color: Rgba<u8>,
+    size: f32,
+) {
+    let dx = to_x - from_x;
+    let dy = to_y - from_y;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < 1.0 {
+        return;
+    }
+
+    // Direction vector
+    let dir_x = dx / length;
+    let dir_y = dy / length;
+
+    // Arrow tip (slightly before the actual end to not overlap with table border)
+    let tip_x = to_x - dir_x * 2.0;
+    let tip_y = to_y - dir_y * 2.0;
+
+    // Arrow base points
+    let base_x = tip_x - dir_x * size;
+    let base_y = tip_y - dir_y * size;
+
+    // Perpendicular for arrow wings
+    let perp_x = -dir_y;
+    let perp_y = dir_x;
+
+    let wing_span = size * 0.6;
+    let left_x = base_x + perp_x * wing_span;
+    let left_y = base_y + perp_y * wing_span;
+    let right_x = base_x - perp_x * wing_span;
+    let right_y = base_y - perp_y * wing_span;
+
+    // Fill the arrow triangle
+    fill_triangle(image, tip_x, tip_y, left_x, left_y, right_x, right_y, color);
+
+    // Draw arrow outline
+    draw_aa_thick_line(image, tip_x, tip_y, left_x, left_y, color, 1.0);
+    draw_aa_thick_line(image, tip_x, tip_y, right_x, right_y, color, 1.0);
+    draw_aa_thick_line(image, left_x, left_y, right_x, right_y, color, 1.0);
+}
+
+fn fill_triangle(
+    image: &mut RgbaImage,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    color: Rgba<u8>,
+) {
+    // Sort vertices by y
+    let mut points = [(x0, y0), (x1, y1), (x2, y2)];
+    points.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let (x0, y0) = points[0];
+    let (x1, y1) = points[1];
+    let (x2, y2) = points[2];
+
+    let min_y = y0.floor() as i32;
+    let max_y = y2.ceil() as i32;
+
+    for y in min_y..=max_y {
+        if y < 0 || y >= image.height() as i32 {
+            continue;
+        }
+        let yf = y as f32 + 0.5;
+
+        // Find intersection points with triangle edges
+        let mut intersections = Vec::new();
+
+        // Edge 0-1
+        if yf >= y0 && yf < y1 {
+            let t = (yf - y0) / (y1 - y0);
+            intersections.push(x0 + (x1 - x0) * t);
+        }
+        // Edge 0-2
+        if yf >= y0 && yf < y2 {
+            let t = (yf - y0) / (y2 - y0);
+            intersections.push(x0 + (x2 - x0) * t);
+        }
+        // Edge 1-2
+        if yf >= y1 && yf < y2 {
+            let t = (yf - y1) / (y2 - y1);
+            intersections.push(x1 + (x2 - x1) * t);
+        }
+
+        if intersections.len() >= 2 {
+            intersections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let start_x = intersections[0].ceil() as i32;
+            let end_x = intersections[intersections.len() - 1].floor() as i32;
+
+            for x in start_x..=end_x {
+                if x >= 0 && x < image.width() as i32 {
+                    blend_pixel(image, x as u32, y as u32, color);
+                }
+            }
         }
     }
 }
@@ -2046,6 +2403,7 @@ fn draw_export_table(
     scale: f32,
     offset_x: f32,
     offset_y: f32,
+    font_cache: &DiagramFontCache,
 ) {
     let Some(position) = export.positions.get(&table.id) else {
         return;
@@ -2073,14 +2431,15 @@ fn draw_export_table(
     stroke_rect(image, x, y, w, h, export.style.border);
 
     let title = table.id.display_label();
-    let title_scale = (2.0 * scale).round().clamp(2.0, 4.0) as i32;
-    let title_width = bitmap_text_width(&title, title_scale);
-    draw_bitmap_text(
+    let title_size = (HEADER_FONT_PX * scale).round().max(10.0);
+    let title_width = text_width(font_cache.get(true), &title, title_size);
+    draw_text(
         image,
+        font_cache.get(true),
         &title,
-        x + (w - title_width) / 2,
-        y + (7.0 * scale).round() as i32,
-        title_scale,
+        (x as f32 + (w as f32 - title_width) / 2.0) as i32,
+        y + (8.0 * scale).round() as i32,
+        title_size,
         export.style.foreground,
     );
 
@@ -2108,13 +2467,13 @@ fn draw_export_table(
             );
         }
 
-        let text_scale = (2.0 * scale).round().clamp(1.0, 2.0) as i32;
+        let text_size = (COLUMN_FONT_PX * scale).round().max(10.0);
         let marker = if column.is_pk {
-            "*"
+            "\u{2605}"
         } else if column.is_fk {
-            "->"
+            "\u{2192}"
         } else {
-            "-"
+            "\u{2022}"
         };
         let marker_color = if column.is_pk {
             export.style.pk_marker
@@ -2123,13 +2482,14 @@ fn draw_export_table(
         } else {
             export.style.regular_marker
         };
-        let text_y = row_y + (7.0 * scale).round() as i32;
-        draw_bitmap_text(
+        let text_y = row_y + (5.0 * scale).round() as i32;
+        draw_text(
             image,
+            font_cache.get(column.is_pk),
             marker,
             x + (8.0 * scale).round() as i32,
             text_y,
-            text_scale,
+            text_size,
             marker_color,
         );
 
@@ -2142,21 +2502,24 @@ fn draw_export_table(
         let type_max_chars = (TYPE_COL_WIDTH / 6.1).floor().max(6.0) as usize;
         let name = ellipsize(&column.name, name_max_chars);
         let data_type = ellipsize(&column.data_type, type_max_chars);
-        draw_bitmap_text(
+        draw_text(
             image,
+            font_cache.get(false),
             &name,
             name_x,
             text_y,
-            text_scale,
+            text_size,
             export.style.foreground,
         );
-        let type_text_width = bitmap_text_width(&data_type, text_scale);
-        draw_bitmap_text(
+        let type_text_size = (TYPE_FONT_PX * scale).round().max(10.0);
+        let type_text_width = text_width(font_cache.get(false), &data_type, type_text_size);
+        draw_text(
             image,
+            font_cache.get(false),
             &data_type,
-            type_x + type_width - type_text_width,
+            type_x + type_width - type_text_width as i32,
             text_y,
-            text_scale,
+            type_text_size,
             export.style.muted,
         );
     }
@@ -2203,55 +2566,73 @@ fn fill_rect(image: &mut RgbaImage, x: i32, y: i32, width: i32, height: i32, col
 }
 
 fn stroke_rect(image: &mut RgbaImage, x: i32, y: i32, width: i32, height: i32, color: Rgba<u8>) {
-    draw_hline(image, x, x + width - 1, y, color);
-    draw_hline(image, x, x + width - 1, y + height - 1, color);
-    draw_vline(image, x, y, y + height - 1, color);
-    draw_vline(image, x + width - 1, y, y + height - 1, color);
+    draw_aa_line(
+        image,
+        x as f32,
+        y as f32,
+        (x + width - 1) as f32,
+        y as f32,
+        color,
+    );
+    draw_aa_line(
+        image,
+        x as f32,
+        (y + height - 1) as f32,
+        (x + width - 1) as f32,
+        (y + height - 1) as f32,
+        color,
+    );
+    draw_aa_line(
+        image,
+        x as f32,
+        y as f32,
+        x as f32,
+        (y + height - 1) as f32,
+        color,
+    );
+    draw_aa_line(
+        image,
+        (x + width - 1) as f32,
+        y as f32,
+        (x + width - 1) as f32,
+        (y + height - 1) as f32,
+        color,
+    );
 }
 
-fn draw_hline(image: &mut RgbaImage, x0: i32, x1: i32, y: i32, color: Rgba<u8>) {
-    if y < 0 || y >= image.height() as i32 {
+fn draw_aa_line(image: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, color: Rgba<u8>) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < 0.5 {
         return;
     }
-    let start = x0.min(x1).max(0) as u32;
-    let end = x0.max(x1).min(image.width() as i32 - 1).max(0) as u32;
-    for x in start..=end {
-        blend_pixel(image, x, y as u32, color);
-    }
-}
-
-fn draw_vline(image: &mut RgbaImage, x: i32, y0: i32, y1: i32, color: Rgba<u8>) {
-    if x < 0 || x >= image.width() as i32 {
-        return;
-    }
-    let start = y0.min(y1).max(0) as u32;
-    let end = y0.max(y1).min(image.height() as i32 - 1).max(0) as u32;
-    for y in start..=end {
-        blend_pixel(image, x as u32, y, color);
-    }
-}
-
-fn draw_line(image: &mut RgbaImage, mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: Rgba<u8>) {
-    let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let dy = -(y1 - y0).abs();
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-    loop {
-        if x0 >= 0 && y0 >= 0 && x0 < image.width() as i32 && y0 < image.height() as i32 {
-            blend_pixel(image, x0 as u32, y0 as u32, color);
-        }
-        if x0 == x1 && y0 == y1 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x0 += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y0 += sy;
+    let steps = (length * 2.0).ceil() as i32;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = x0 + dx * t;
+        let y = y0 + dy * t;
+        let px = x.floor() as i32;
+        let py = y.floor() as i32;
+        let fx = x - px as f32;
+        let fy = y - py as f32;
+        let coverage =
+            (1.0 - (fx - 0.5).abs() * 2.0).max(0.0) * (1.0 - (fy - 0.5).abs() * 2.0).max(0.0);
+        if coverage > 0.0 {
+            let blended_alpha = (color[3] as f32 * coverage) as u8;
+            if blended_alpha > 0 {
+                let blended = Rgba([color[0], color[1], color[2], blended_alpha]);
+                blend_pixel(image, px.max(0) as u32, py.max(0) as u32, blended);
+                if px + 1 < image.width() as i32 {
+                    blend_pixel(image, (px + 1) as u32, py.max(0) as u32, blended);
+                }
+                if py + 1 < image.height() as i32 {
+                    blend_pixel(image, px.max(0) as u32, (py + 1) as u32, blended);
+                }
+                if px + 1 < image.width() as i32 && py + 1 < image.height() as i32 {
+                    blend_pixel(image, (px + 1) as u32, (py + 1) as u32, blended);
+                }
+            }
         }
     }
 }
@@ -2269,261 +2650,57 @@ fn blend_pixel(image: &mut RgbaImage, x: u32, y: u32, color: Rgba<u8>) {
     existing[3] = 255;
 }
 
-fn draw_bitmap_text(
+fn draw_text(
     image: &mut RgbaImage,
+    font: &Font,
     text: &str,
-    mut x: i32,
+    x: i32,
     y: i32,
-    scale: i32,
+    size: f32,
     color: Rgba<u8>,
 ) {
+    let mut cursor_x = x as f32;
+    let baseline_y = y as f32 + size;
+
     for ch in text.chars() {
-        draw_bitmap_char(image, ch, x, y, scale, color);
-        x += 6 * scale;
-    }
-}
+        let (metrics, bitmap) = font.rasterize(ch, size);
+        if bitmap.is_empty() {
+            cursor_x += metrics.advance_width;
+            continue;
+        }
 
-fn bitmap_text_width(text: &str, scale: i32) -> i32 {
-    text.chars().count() as i32 * 6 * scale
-}
+        let glyph_x = cursor_x + metrics.xmin as f32;
+        let glyph_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
 
-fn draw_bitmap_char(image: &mut RgbaImage, ch: char, x: i32, y: i32, scale: i32, color: Rgba<u8>) {
-    let glyph = bitmap_glyph(ch);
-    for (row_ix, row) in glyph.iter().enumerate() {
-        for (col_ix, pixel) in row.as_bytes().iter().enumerate() {
-            if *pixel == b'1' {
-                fill_rect(
-                    image,
-                    x + col_ix as i32 * scale,
-                    y + row_ix as i32 * scale,
-                    scale,
-                    scale,
-                    color,
-                );
+        for sy in 0..metrics.height {
+            for sx in 0..metrics.width {
+                let alpha = bitmap[sy * metrics.width + sx];
+                if alpha > 0 {
+                    let px = (glyph_x + sx as f32).floor() as i32;
+                    let py = (glyph_y + sy as f32).floor() as i32;
+                    if px >= 0 && px < image.width() as i32 && py >= 0 && py < image.height() as i32
+                    {
+                        let blended_alpha = (color[3] as f32 * alpha as f32 / 255.0) as u8;
+                        if blended_alpha > 0 {
+                            let blended = Rgba([color[0], color[1], color[2], blended_alpha]);
+                            blend_pixel(image, px as u32, py as u32, blended);
+                        }
+                    }
+                }
             }
         }
+
+        cursor_x += metrics.advance_width;
     }
 }
 
-fn bitmap_glyph(ch: char) -> [&'static str; 7] {
-    match ch {
-        'a' => [
-            "00000", "00000", "01110", "00001", "01111", "10001", "01111",
-        ],
-        'b' => [
-            "10000", "10000", "10110", "11001", "10001", "10001", "11110",
-        ],
-        'c' => [
-            "00000", "00000", "01111", "10000", "10000", "10000", "01111",
-        ],
-        'd' => [
-            "00001", "00001", "01101", "10011", "10001", "10001", "01111",
-        ],
-        'e' => [
-            "00000", "00000", "01110", "10001", "11111", "10000", "01110",
-        ],
-        'f' => [
-            "00110", "01001", "01000", "11100", "01000", "01000", "01000",
-        ],
-        'g' => [
-            "00000", "00000", "01111", "10001", "01111", "00001", "01110",
-        ],
-        'h' => [
-            "10000", "10000", "10110", "11001", "10001", "10001", "10001",
-        ],
-        'i' => [
-            "00100", "00000", "01100", "00100", "00100", "00100", "01110",
-        ],
-        'j' => [
-            "00010", "00000", "00110", "00010", "00010", "10010", "01100",
-        ],
-        'k' => [
-            "10000", "10000", "10010", "10100", "11000", "10100", "10010",
-        ],
-        'l' => [
-            "01100", "00100", "00100", "00100", "00100", "00100", "01110",
-        ],
-        'm' => [
-            "00000", "00000", "11010", "10101", "10101", "10101", "10101",
-        ],
-        'n' => [
-            "00000", "00000", "10110", "11001", "10001", "10001", "10001",
-        ],
-        'o' => [
-            "00000", "00000", "01110", "10001", "10001", "10001", "01110",
-        ],
-        'p' => [
-            "00000", "00000", "11110", "10001", "11110", "10000", "10000",
-        ],
-        'q' => [
-            "00000", "00000", "01111", "10001", "01111", "00001", "00001",
-        ],
-        'r' => [
-            "00000", "00000", "10110", "11001", "10000", "10000", "10000",
-        ],
-        's' => [
-            "00000", "00000", "01111", "10000", "01110", "00001", "11110",
-        ],
-        't' => [
-            "01000", "01000", "11100", "01000", "01000", "01001", "00110",
-        ],
-        'u' => [
-            "00000", "00000", "10001", "10001", "10001", "10011", "01101",
-        ],
-        'v' => [
-            "00000", "00000", "10001", "10001", "10001", "01010", "00100",
-        ],
-        'w' => [
-            "00000", "00000", "10001", "10001", "10101", "10101", "01010",
-        ],
-        'x' => [
-            "00000", "00000", "10001", "01010", "00100", "01010", "10001",
-        ],
-        'y' => [
-            "00000", "00000", "10001", "10001", "01111", "00001", "01110",
-        ],
-        'z' => [
-            "00000", "00000", "11111", "00010", "00100", "01000", "11111",
-        ],
-        'A' => [
-            "01110", "10001", "10001", "11111", "10001", "10001", "10001",
-        ],
-        'B' => [
-            "11110", "10001", "10001", "11110", "10001", "10001", "11110",
-        ],
-        'C' => [
-            "01111", "10000", "10000", "10000", "10000", "10000", "01111",
-        ],
-        'D' => [
-            "11110", "10001", "10001", "10001", "10001", "10001", "11110",
-        ],
-        'E' => [
-            "11111", "10000", "10000", "11110", "10000", "10000", "11111",
-        ],
-        'F' => [
-            "11111", "10000", "10000", "11110", "10000", "10000", "10000",
-        ],
-        'G' => [
-            "01111", "10000", "10000", "10111", "10001", "10001", "01110",
-        ],
-        'H' => [
-            "10001", "10001", "10001", "11111", "10001", "10001", "10001",
-        ],
-        'I' => [
-            "11111", "00100", "00100", "00100", "00100", "00100", "11111",
-        ],
-        'J' => [
-            "00111", "00010", "00010", "00010", "10010", "10010", "01100",
-        ],
-        'K' => [
-            "10001", "10010", "10100", "11000", "10100", "10010", "10001",
-        ],
-        'L' => [
-            "10000", "10000", "10000", "10000", "10000", "10000", "11111",
-        ],
-        'M' => [
-            "10001", "11011", "10101", "10101", "10001", "10001", "10001",
-        ],
-        'N' => [
-            "10001", "11001", "10101", "10011", "10001", "10001", "10001",
-        ],
-        'O' => [
-            "01110", "10001", "10001", "10001", "10001", "10001", "01110",
-        ],
-        'P' => [
-            "11110", "10001", "10001", "11110", "10000", "10000", "10000",
-        ],
-        'Q' => [
-            "01110", "10001", "10001", "10001", "10101", "10010", "01101",
-        ],
-        'R' => [
-            "11110", "10001", "10001", "11110", "10100", "10010", "10001",
-        ],
-        'S' => [
-            "01111", "10000", "10000", "01110", "00001", "00001", "11110",
-        ],
-        'T' => [
-            "11111", "00100", "00100", "00100", "00100", "00100", "00100",
-        ],
-        'U' => [
-            "10001", "10001", "10001", "10001", "10001", "10001", "01110",
-        ],
-        'V' => [
-            "10001", "10001", "10001", "10001", "10001", "01010", "00100",
-        ],
-        'W' => [
-            "10001", "10001", "10001", "10101", "10101", "10101", "01010",
-        ],
-        'X' => [
-            "10001", "10001", "01010", "00100", "01010", "10001", "10001",
-        ],
-        'Y' => [
-            "10001", "10001", "01010", "00100", "00100", "00100", "00100",
-        ],
-        'Z' => [
-            "11111", "00001", "00010", "00100", "01000", "10000", "11111",
-        ],
-        '0' => [
-            "01110", "10001", "10011", "10101", "11001", "10001", "01110",
-        ],
-        '1' => [
-            "00100", "01100", "00100", "00100", "00100", "00100", "01110",
-        ],
-        '2' => [
-            "01110", "10001", "00001", "00010", "00100", "01000", "11111",
-        ],
-        '3' => [
-            "11110", "00001", "00001", "01110", "00001", "00001", "11110",
-        ],
-        '4' => [
-            "00010", "00110", "01010", "10010", "11111", "00010", "00010",
-        ],
-        '5' => [
-            "11111", "10000", "10000", "11110", "00001", "00001", "11110",
-        ],
-        '6' => [
-            "01110", "10000", "10000", "11110", "10001", "10001", "01110",
-        ],
-        '7' => [
-            "11111", "00001", "00010", "00100", "01000", "01000", "01000",
-        ],
-        '8' => [
-            "01110", "10001", "10001", "01110", "10001", "10001", "01110",
-        ],
-        '9' => [
-            "01110", "10001", "10001", "01111", "00001", "00001", "01110",
-        ],
-        '_' => [
-            "00000", "00000", "00000", "00000", "00000", "00000", "11111",
-        ],
-        '.' => [
-            "00000", "00000", "00000", "00000", "00000", "01100", "01100",
-        ],
-        '*' => [
-            "00100", "10101", "01110", "11111", "01110", "10101", "00100",
-        ],
-        '-' => [
-            "00000", "00000", "00000", "11111", "00000", "00000", "00000",
-        ],
-        '>' => [
-            "10000", "01000", "00100", "00010", "00100", "01000", "10000",
-        ],
-        '(' => [
-            "00010", "00100", "01000", "01000", "01000", "00100", "00010",
-        ],
-        ')' => [
-            "01000", "00100", "00010", "00010", "00010", "00100", "01000",
-        ],
-        '/' => [
-            "00001", "00010", "00010", "00100", "01000", "01000", "10000",
-        ],
-        ' ' => [
-            "00000", "00000", "00000", "00000", "00000", "00000", "00000",
-        ],
-        _ => [
-            "11111", "00001", "00010", "00100", "00100", "00000", "00100",
-        ],
+fn text_width(font: &Font, text: &str, size: f32) -> f32 {
+    let mut width = 0.0;
+    for ch in text.chars() {
+        let (metrics, _) = font.rasterize(ch, size);
+        width += metrics.advance_width;
     }
+    width
 }
 
 #[cfg(test)]

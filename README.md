@@ -2,6 +2,8 @@
 
 A fast, native SQL editor built in Rust using [GPUI](https://www.gpui.rs) — the same GPU-accelerated UI framework that powers the Zed editor.
 
+Check out the [site](https://fhsgoncalves.github.io/sqlab).
+
 > **Note:** This is a hobby project and it is actively being built using **Spec-Driven Development** powered by coding agents.
 
 The long-term goal is to provide a fully open-source alternative to DBeaver and DataGrip, supporting any databases with great performance and awesome experience.
@@ -43,6 +45,7 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | DDL generation from schema item | ✅ |
 | Generate and export diagrams | ✅ |
 | In-place data editor | ⏳ |
+| Table data editor | ⏳ |
 | MySQL driver | ⏳ |
 | SQLite driver | ⏳ |
 | DuckDB driver | ⏳ |
