@@ -895,7 +895,7 @@ footer {
     <li><a href="https://github.com/fhsgoncalves/sqlab">GitHub</a></li>
     <li><a href="https://github.com/fhsgoncalves/sqlab/releases">Releases</a></li>
   </ul>
-  <div class="footer-copy">© 2025 sqlab. Open source under MIT License.</div>
+  <div class="footer-copy">© <span id="year"></span> sqlab. Open source under MIT License.</div>
 </footer>
 
 <!-- LIGHTBOX -->
@@ -905,6 +905,8 @@ footer {
 
 <script>
 (function(){
+  document.getElementById('year').textContent = new Date().getFullYear();
+
   // Carousel
   var track = document.getElementById('carouselTrack');
   var slides = track.querySelectorAll('.carousel-slide');
