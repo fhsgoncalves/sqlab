@@ -717,15 +717,21 @@ impl EditorPanel {
         };
 
         let mut new_text = text;
-        new_text.replace_range(range, &formatted);
+        new_text.replace_range(range.clone(), &formatted);
+
+        // Calculate cursor position after formatting
+        let end_line = new_text[..new_cursor].matches('\n').count() as u32;
+        let end_col = new_text[..new_cursor]
+            .rfind('\n')
+            .map(|ix| new_cursor - ix - 1)
+            .unwrap_or(new_cursor) as u32;
+
+        // Set the selection to the range we want to replace, then use replace()
+        // which records the change in undo history
         self.editor.update(cx, |editor, cx| {
-            editor.set_value(new_text.clone(), window, cx);
-            let line = new_text[..new_cursor].matches('\n').count() as u32;
-            let col = new_text[..new_cursor]
-                .rfind('\n')
-                .map(|ix| new_cursor - ix - 1)
-                .unwrap_or(new_cursor) as u32;
-            editor.set_cursor_position(lsp_types::Position::new(line, col), window, cx);
+            editor.set_selected_range(range.clone(), cx);
+            editor.replace(formatted.clone(), window, cx);
+            editor.set_cursor_position(lsp_types::Position::new(end_line, end_col), window, cx);
         });
     }
 }

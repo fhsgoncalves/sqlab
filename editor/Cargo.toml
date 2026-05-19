@@ -23,6 +23,7 @@ gpui-component-assets = { git = "https://github.com/fhsgoncalves/gpui-component"
 sqlab-drivers-core = { path = "../drivers/core" }
 sqlab-drivers-postgres = { path = "../drivers/postgres" }
 image = "0.25.1"
+fontdue = "0.9"
 keyring-core = "1"
 tree-sitter = "0.26"
 tree-sitter-sequel = "0.3.8"

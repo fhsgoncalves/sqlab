@@ -59,7 +59,6 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 ## Roadmap
 
 - [ ] App distribution
-- [ ] Add undo (cmd+z) on file editor
 
 ## Tech Stack
 
