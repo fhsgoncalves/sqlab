@@ -44,10 +44,11 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | Column type info on result panel | ✅ |
 | DDL generation from schema item | ✅ |
 | Generate and export diagrams | ✅ |
-| In-place data editor | ⏳ |
+| In-place data editor | ✅ |
 | Table data editor | ⏳ |
 | MySQL driver | ⏳ |
 | SQLite driver | ⏳ |
+| MSSQL Server driver | ⏳ |
 | DuckDB driver | ⏳ |
 | Databend driver | ⏳ |
 

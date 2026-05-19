@@ -109,8 +109,29 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     pub column_metadata: Vec<ColumnMetadata>,
     pub rows: Vec<Vec<String>>,
+    pub nulls: Vec<Vec<bool>>,
     pub row_count: usize,
     pub execution_time_ms: u128,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableEditBatch {
+    pub schema: String,
+    pub table: String,
+    pub rows: Vec<TableEditRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableEditRow {
+    pub keys: Vec<TableEditValue>,
+    pub assignments: Vec<TableEditValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableEditValue {
+    pub column: String,
+    pub data_type: String,
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -247,6 +268,7 @@ pub trait DataSource: Send + Sync {
     async fn disconnect(&mut self) -> Result<(), DataSourceError>;
     async fn execute_query(&self, query: &str) -> Result<QueryResult, DataSourceError>;
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError>;
+    async fn apply_table_edits(&self, batch: TableEditBatch) -> Result<(), DataSourceError>;
 }
 
 #[cfg(test)]

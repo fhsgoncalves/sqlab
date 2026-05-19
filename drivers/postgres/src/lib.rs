@@ -12,7 +12,7 @@ use rustls::ClientConfig;
 use sqlab_drivers_core::{
     ColumnInfo, ColumnMetadata, DataSource, DataSourceConfig, DataSourceError, Database,
     DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
-    TableInfo, TableKind, TriggerInfo,
+    TableEditBatch, TableEditValue, TableInfo, TableKind, TriggerInfo,
 };
 use sqlparser::ast::Statement;
 use sqlparser::dialect::PostgreSqlDialect;
@@ -125,15 +125,18 @@ impl PostgresDataSource {
             .map_err(|e| DataSourceError::QueryFailed(format_postgres_error(e)))?;
 
         let row_count = rows.len();
-        let rows = rows
+        let (rows, nulls): (Vec<_>, Vec<_>) = rows
             .iter()
-            .map(row_to_strings)
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(row_to_strings_and_nulls)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .unzip();
 
         Ok(QueryResult {
             columns,
             column_metadata,
             rows,
+            nulls,
             row_count,
             execution_time_ms: start.elapsed().as_millis(),
         })
@@ -560,6 +563,46 @@ impl PostgresDataSource {
             foreign_keys,
         })
     }
+
+    pub fn apply_table_edits_blocking(&self, batch: TableEditBatch) -> Result<(), DataSourceError> {
+        let client = self.client.as_ref().ok_or(DataSourceError::NotConnected)?;
+        if batch.rows.is_empty() {
+            return Ok(());
+        }
+
+        let statements = batch
+            .rows
+            .iter()
+            .map(|row| postgres_update_statement(&batch, row))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.runtime.block_on(async {
+            client
+                .batch_execute("BEGIN")
+                .await
+                .map_err(|e| DataSourceError::QueryFailed(format_postgres_error(e)))?;
+            for statement in statements {
+                let affected = match client.execute(statement.as_str(), &[]).await {
+                    Ok(affected) => affected,
+                    Err(error) => {
+                        let _ = client.batch_execute("ROLLBACK").await;
+                        return Err(DataSourceError::QueryFailed(format_postgres_error(error)));
+                    }
+                };
+                if affected != 1 {
+                    let _ = client.batch_execute("ROLLBACK").await;
+                    return Err(DataSourceError::QueryFailed(format!(
+                        "Expected edit to update 1 row, updated {affected} rows instead."
+                    )));
+                }
+            }
+            client
+                .batch_execute("COMMIT")
+                .await
+                .map_err(|e| DataSourceError::QueryFailed(format_postgres_error(e)))?;
+            Ok::<(), DataSourceError>(())
+        })
+    }
 }
 
 #[async_trait]
@@ -594,6 +637,10 @@ impl DataSource for PostgresDataSource {
 
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError> {
         self.introspect_schema_blocking()
+    }
+
+    async fn apply_table_edits(&self, batch: TableEditBatch) -> Result<(), DataSourceError> {
+        self.apply_table_edits_blocking(batch)
     }
 }
 
@@ -642,12 +689,111 @@ fn table_kind(relkind: &str) -> TableKind {
     }
 }
 
-fn row_to_strings(row: &Row) -> Result<Vec<String>, DataSourceError> {
-    row.columns()
-        .iter()
-        .enumerate()
-        .map(|(ix, column)| cell_to_string(row, ix, column.type_()))
-        .collect()
+fn row_to_strings_and_nulls(row: &Row) -> Result<(Vec<String>, Vec<bool>), DataSourceError> {
+    let mut values = Vec::with_capacity(row.len());
+    let mut nulls = Vec::with_capacity(row.len());
+    for (ix, column) in row.columns().iter().enumerate() {
+        let is_null = row
+            .try_get::<_, Option<String>>(ix)
+            .ok()
+            .flatten()
+            .is_none()
+            && cell_is_null(row, ix, column.type_());
+        values.push(cell_to_string(row, ix, column.type_())?);
+        nulls.push(is_null);
+    }
+    Ok((values, nulls))
+}
+
+fn cell_is_null(row: &Row, ix: usize, ty: &Type) -> bool {
+    if matches!(
+        ty,
+        &Type::VARCHAR | &Type::TEXT | &Type::BPCHAR | &Type::NAME
+    ) {
+        return row
+            .try_get::<_, Option<String>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::BOOL) {
+        return row.try_get::<_, Option<bool>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::INT2) {
+        return row.try_get::<_, Option<i16>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::INT4) {
+        return row.try_get::<_, Option<i32>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::INT8) {
+        return row.try_get::<_, Option<i64>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::OID) {
+        return row.try_get::<_, Option<u32>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::CHAR) {
+        return row.try_get::<_, Option<i8>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::NUMERIC) {
+        return row
+            .try_get::<_, Option<PgNumeric>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::FLOAT4) {
+        return row.try_get::<_, Option<f32>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::FLOAT8) {
+        return row.try_get::<_, Option<f64>>(ix).unwrap_or(None).is_none();
+    }
+    if matches!(ty, &Type::DATE) {
+        return row
+            .try_get::<_, Option<NaiveDate>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::TIME) {
+        return row
+            .try_get::<_, Option<NaiveTime>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::TIMESTAMP) {
+        return row
+            .try_get::<_, Option<NaiveDateTime>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::TIMESTAMPTZ) {
+        return row
+            .try_get::<_, Option<DateTime<Local>>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::UUID) {
+        return row
+            .try_get::<_, Option<uuid::Uuid>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::JSON | &Type::JSONB) {
+        return row
+            .try_get::<_, Option<serde_json::Value>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::BYTEA) {
+        return row
+            .try_get::<_, Option<Vec<u8>>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty, &Type::INET) {
+        return row
+            .try_get::<_, Option<IpAddr>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    false
 }
 
 fn cell_to_string(row: &Row, ix: usize, ty: &Type) -> Result<String, DataSourceError> {
@@ -1022,6 +1168,95 @@ fn escape_csv_field(field: &str) -> String {
     }
 }
 
+fn postgres_update_statement(
+    batch: &TableEditBatch,
+    row: &sqlab_drivers_core::TableEditRow,
+) -> Result<String, DataSourceError> {
+    if row.assignments.is_empty() {
+        return Err(DataSourceError::QueryFailed(
+            "Cannot submit an edit row without assignments.".into(),
+        ));
+    }
+    if row.keys.is_empty() {
+        return Err(DataSourceError::QueryFailed(
+            "Cannot submit an edit row without primary key values.".into(),
+        ));
+    }
+
+    let table = format!(
+        "{}.{}",
+        quote_postgres_identifier(&batch.schema),
+        quote_postgres_identifier(&batch.table)
+    );
+    let assignments = row
+        .assignments
+        .iter()
+        .map(|value| {
+            format!(
+                "{} = {}",
+                quote_postgres_identifier(&value.column),
+                postgres_literal(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let keys = row
+        .keys
+        .iter()
+        .map(|value| match &value.value {
+            Some(_) => format!(
+                "{} = {}",
+                quote_postgres_identifier(&value.column),
+                postgres_literal(value)
+            ),
+            None => format!("{} IS NULL", quote_postgres_identifier(&value.column)),
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    Ok(format!("UPDATE {table} SET {assignments} WHERE {keys}"))
+}
+
+fn quote_postgres_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn postgres_literal(value: &TableEditValue) -> String {
+    let Some(raw_value) = value.value.as_ref() else {
+        return "NULL".to_string();
+    };
+
+    let data_type = value.data_type.to_ascii_lowercase();
+    let numeric = [
+        "int",
+        "int2",
+        "int4",
+        "int8",
+        "integer",
+        "bigint",
+        "smallint",
+        "numeric",
+        "decimal",
+        "real",
+        "double",
+        "float",
+        "serial",
+        "bigserial",
+    ];
+    if numeric.iter().any(|prefix| data_type.starts_with(prefix))
+        && raw_value.parse::<f64>().is_ok()
+    {
+        return raw_value.to_string();
+    }
+    if matches!(data_type.as_str(), "bool" | "boolean")
+        && matches!(raw_value.to_ascii_lowercase().as_str(), "true" | "false")
+    {
+        return raw_value.to_ascii_uppercase();
+    }
+
+    format!("'{}'", raw_value.replace('\'', "''"))
+}
+
 fn format_postgres_error(e: tokio_postgres::Error) -> String {
     if let Some(db_err) = e.as_db_error() {
         let mut msg = format!("{}: {}", db_err.severity(), db_err.message());
@@ -1092,5 +1327,42 @@ mod tests {
     fn returns_original_for_non_select_statement() {
         let result = apply_limit_if_missing("DELETE FROM users WHERE id = 1", 1000);
         assert_eq!(result, "DELETE FROM users WHERE id = 1");
+    }
+
+    #[test]
+    fn renders_update_statement_for_table_edit_batch() {
+        let batch = TableEditBatch {
+            schema: "public".into(),
+            table: "users".into(),
+            rows: vec![sqlab_drivers_core::TableEditRow {
+                keys: vec![TableEditValue {
+                    column: "id".into(),
+                    data_type: "int4".into(),
+                    value: Some("1".into()),
+                }],
+                assignments: vec![
+                    TableEditValue {
+                        column: "name".into(),
+                        data_type: "text".into(),
+                        value: Some("Ada's".into()),
+                    },
+                    TableEditValue {
+                        column: "enabled".into(),
+                        data_type: "bool".into(),
+                        value: Some("true".into()),
+                    },
+                    TableEditValue {
+                        column: "deleted_at".into(),
+                        data_type: "timestamp".into(),
+                        value: None,
+                    },
+                ],
+            }],
+        };
+
+        assert_eq!(
+            postgres_update_statement(&batch, &batch.rows[0]).unwrap(),
+            "UPDATE \"public\".\"users\" SET \"name\" = 'Ada''s', \"enabled\" = TRUE, \"deleted_at\" = NULL WHERE \"id\" = 1"
+        );
     }
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write as FmtWrite,
     io::{Cursor, Write},
 };
@@ -12,11 +12,11 @@ use gpui::{
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable, WindowExt,
+    ActiveTheme, Disableable, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockPlacement, Panel, PanelControl, PanelEvent, PanelState},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     menu::{DropdownMenu as _, PopupMenuItem},
     table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState},
     v_flex,
@@ -25,7 +25,11 @@ use gpui_component::{
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
-use sqlab_drivers_core::{ColumnMetadata, DataSourceConfig, QueryResult};
+use sqlab_drivers_core::{
+    ColumnMetadata, DataSourceConfig, DataSourceError, QueryResult, TableEditBatch, TableEditRow,
+    TableEditValue, TableInfo, TableKind, manager::create_data_source,
+};
+use sqlab_drivers_postgres::create_postgres_data_source;
 
 actions!(
     results_panel,
@@ -36,7 +40,8 @@ actions!(
         ExtendResultSelectionUp,
         ExtendResultSelectionDown,
         ExtendResultSelectionLeft,
-        ExtendResultSelectionRight
+        ExtendResultSelectionRight,
+        EditResultCell
     ]
 );
 
@@ -110,6 +115,8 @@ pub struct ResultPanel {
     is_zoomed: bool,
     selected_export_format: ExportFormat,
     activity_tracker: gpui::Entity<ActivityTracker>,
+    submitting_edits: bool,
+    edit_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -117,9 +124,38 @@ pub struct ResultsTableDelegate {
     pub columns: Vec<String>,
     pub column_metadata: Vec<ColumnMetadata>,
     pub rows: Vec<Vec<String>>,
+    pub nulls: Vec<Vec<bool>>,
+    original_rows: Vec<Vec<String>>,
+    original_nulls: Vec<Vec<bool>>,
+    row_ids: Vec<usize>,
+    editable_table: Option<EditableTable>,
+    dirty_cells: BTreeMap<(usize, usize), Option<String>>,
+    editing_cell: Option<EditingCell>,
     selected_cells: BTreeSet<(usize, usize)>,
     selection_anchor: Option<(usize, usize)>,
     selection_cursor: Option<(usize, usize)>,
+}
+
+#[derive(Clone)]
+struct EditingCell {
+    row_ix: usize,
+    col_ix: usize,
+    input: gpui::Entity<InputState>,
+}
+
+#[derive(Clone, Debug)]
+struct EditableTable {
+    schema: String,
+    table: String,
+    columns: Vec<EditableColumn>,
+    pk_col_indices: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct EditableColumn {
+    name: String,
+    data_type: String,
+    editable: bool,
 }
 
 impl TableDelegate for ResultsTableDelegate {
@@ -180,21 +216,35 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) {
-        self.rows.sort_by(|a, b| {
-            let ord = match self.columns[col_ix].as_str() {
-                "id" => {
-                    // Numeric sort for id column
-                    let a_num: i32 = a[col_ix].parse().unwrap_or(0);
-                    let b_num: i32 = b[col_ix].parse().unwrap_or(0);
+        let mut order = (0..self.rows.len()).collect::<Vec<_>>();
+        order.sort_by(|&a_ix, &b_ix| {
+            let a = &self.rows[a_ix];
+            let b = &self.rows[b_ix];
+            let ord = match self.columns.get(col_ix).map(String::as_str) {
+                Some("id") => {
+                    let a_num: i32 = a.get(col_ix).and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let b_num: i32 = b.get(col_ix).and_then(|v| v.parse().ok()).unwrap_or(0);
                     a_num.cmp(&b_num)
                 }
-                _ => a[col_ix].cmp(&b[col_ix]),
+                _ => a.get(col_ix).cmp(&b.get(col_ix)),
             };
             match sort {
                 ColumnSort::Descending => ord.reverse(),
                 _ => ord,
             }
         });
+        self.rows = order
+            .iter()
+            .filter_map(|&ix| self.rows.get(ix).cloned())
+            .collect();
+        self.nulls = order
+            .iter()
+            .filter_map(|&ix| self.nulls.get(ix).cloned())
+            .collect();
+        self.row_ids = order
+            .iter()
+            .filter_map(|&ix| self.row_ids.get(ix).copied())
+            .collect();
     }
 
     fn render_td(
@@ -205,12 +255,44 @@ impl TableDelegate for ResultsTableDelegate {
         _cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let is_selected = self.selected_cells.contains(&(row_ix, col_ix));
+        let row_id = self.row_id(row_ix);
+        let is_dirty = self.dirty_cells.contains_key(&(row_id, col_ix));
+        let is_editable = self.is_editable_cell(row_ix, col_ix);
+        let is_editing = self
+            .editing_cell
+            .as_ref()
+            .is_some_and(|cell| cell.row_ix == row_ix && cell.col_ix == col_ix);
+        let display = self.cell_text(row_ix, col_ix, _cx);
 
         div()
             .id(format!("result-cell-content:{row_ix}:{col_ix}"))
             .relative()
             .size_full()
-            .child(self.rows[row_ix][col_ix].clone())
+            .when(is_editing, |this| {
+                if let Some(input) = self.editing_cell.as_ref().map(|cell| cell.input.clone()) {
+                    this.child(Input::new(&input).xsmall().bordered(false).p_0())
+                } else {
+                    this
+                }
+            })
+            .when(!is_editing, |this| {
+                this.child(
+                    div()
+                        .size_full()
+                        .when(is_editable, |this| this.cursor_text())
+                        .child(display),
+                )
+            })
+            .when(is_dirty, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size(gpui::px(5.))
+                        .bg(rgb(0x58a65c)),
+                )
+            })
             .when(is_selected, |this| {
                 this.child(
                     div()
@@ -232,20 +314,21 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
-        self.rows[row_ix][col_ix].clone()
+        let row_id = self.row_id(row_ix);
+        if let Some(value) = self.dirty_cells.get(&(row_id, col_ix)) {
+            return value.clone().unwrap_or_default();
+        }
+        self.rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
 impl ResultsTableDelegate {
     fn empty() -> Self {
-        Self {
-            columns: Vec::new(),
-            column_metadata: Vec::new(),
-            rows: Vec::new(),
-            selected_cells: BTreeSet::new(),
-            selection_anchor: None,
-            selection_cursor: None,
-        }
+        Self::from_parts(Vec::new(), Vec::new(), Vec::new())
     }
 
     fn from_parts(
@@ -253,14 +336,233 @@ impl ResultsTableDelegate {
         column_metadata: Vec<ColumnMetadata>,
         rows: Vec<Vec<String>>,
     ) -> Self {
+        let nulls = rows
+            .iter()
+            .map(|row| vec![false; row.len()])
+            .collect::<Vec<_>>();
+        Self::from_query(columns, column_metadata, rows, nulls, None)
+    }
+
+    fn from_query(
+        columns: Vec<String>,
+        column_metadata: Vec<ColumnMetadata>,
+        rows: Vec<Vec<String>>,
+        nulls: Vec<Vec<bool>>,
+        editable_table: Option<EditableTable>,
+    ) -> Self {
+        let row_ids = (0..rows.len()).collect::<Vec<_>>();
+        Self::from_query_state(
+            columns,
+            column_metadata,
+            rows.clone(),
+            nulls.clone(),
+            rows,
+            nulls,
+            row_ids,
+            BTreeMap::new(),
+            editable_table,
+        )
+    }
+
+    fn from_query_state(
+        columns: Vec<String>,
+        column_metadata: Vec<ColumnMetadata>,
+        rows: Vec<Vec<String>>,
+        nulls: Vec<Vec<bool>>,
+        original_rows: Vec<Vec<String>>,
+        original_nulls: Vec<Vec<bool>>,
+        row_ids: Vec<usize>,
+        dirty_cells: BTreeMap<(usize, usize), Option<String>>,
+        editable_table: Option<EditableTable>,
+    ) -> Self {
         Self {
             columns,
             column_metadata,
+            original_rows,
+            original_nulls,
             rows,
+            nulls,
+            row_ids,
+            editable_table,
+            dirty_cells,
+            editing_cell: None,
             selected_cells: BTreeSet::new(),
             selection_anchor: None,
             selection_cursor: None,
         }
+    }
+
+    fn row_id(&self, row_ix: usize) -> usize {
+        self.row_ids.get(row_ix).copied().unwrap_or(row_ix)
+    }
+
+    fn is_editable_cell(&self, row_ix: usize, col_ix: usize) -> bool {
+        row_ix < self.rows.len()
+            && self
+                .editable_table
+                .as_ref()
+                .and_then(|table| table.columns.get(col_ix))
+                .map(|column| column.editable)
+                .unwrap_or(false)
+    }
+
+    fn has_dirty_cells(&self) -> bool {
+        !self.dirty_cells.is_empty()
+    }
+
+    fn start_editing(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        input: gpui::Entity<InputState>,
+    ) -> bool {
+        if !self.is_editable_cell(row_ix, col_ix) {
+            return false;
+        }
+        self.editing_cell = Some(EditingCell {
+            row_ix,
+            col_ix,
+            input,
+        });
+        true
+    }
+
+    fn commit_editing(&mut self, cx: &App) -> bool {
+        let Some(editing) = self.editing_cell.take() else {
+            return false;
+        };
+        if !self.is_editable_cell(editing.row_ix, editing.col_ix) {
+            return false;
+        }
+
+        let value = editing.input.read(cx).value().to_string();
+        let new_value = if value.is_empty() { None } else { Some(value) };
+        self.set_cell_value(editing.row_ix, editing.col_ix, new_value);
+        true
+    }
+
+    fn set_cell_value(&mut self, row_ix: usize, col_ix: usize, value: Option<String>) {
+        let row_id = self.row_id(row_ix);
+        let display_value = value.clone().unwrap_or_default();
+        if let Some(row) = self.rows.get_mut(row_ix)
+            && let Some(cell) = row.get_mut(col_ix)
+        {
+            *cell = display_value;
+        }
+        if let Some(row) = self.nulls.get_mut(row_ix)
+            && let Some(cell) = row.get_mut(col_ix)
+        {
+            *cell = value.is_none();
+        }
+
+        let original_value = self
+            .original_rows
+            .get(row_id)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .unwrap_or_default();
+        let original_is_null = self
+            .original_nulls
+            .get(row_id)
+            .and_then(|row| row.get(col_ix))
+            .copied()
+            .unwrap_or(false);
+        let matches_original = match &value {
+            Some(value) => !original_is_null && *value == original_value,
+            None => original_is_null,
+        };
+
+        if matches_original {
+            self.dirty_cells.remove(&(row_id, col_ix));
+        } else {
+            self.dirty_cells.insert((row_id, col_ix), value);
+        }
+    }
+
+    fn edit_batch(&self) -> Option<TableEditBatch> {
+        let editable_table = self.editable_table.as_ref()?;
+        if self.dirty_cells.is_empty() {
+            return None;
+        }
+
+        let mut rows = BTreeMap::<usize, Vec<(usize, Option<String>)>>::new();
+        for (&(row_id, col_ix), value) in &self.dirty_cells {
+            if editable_table
+                .columns
+                .get(col_ix)
+                .map(|column| column.editable)
+                .unwrap_or(false)
+            {
+                rows.entry(row_id)
+                    .or_default()
+                    .push((col_ix, value.clone()));
+            }
+        }
+
+        let rows = rows
+            .into_iter()
+            .filter_map(|(row_id, assignments)| {
+                let keys = editable_table
+                    .pk_col_indices
+                    .iter()
+                    .filter_map(|&col_ix| {
+                        let column = editable_table.columns.get(col_ix)?;
+                        Some(TableEditValue {
+                            column: column.name.clone(),
+                            data_type: column.data_type.clone(),
+                            value: self.original_cell_value(row_id, col_ix),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let assignments = assignments
+                    .into_iter()
+                    .filter_map(|(col_ix, value)| {
+                        let column = editable_table.columns.get(col_ix)?;
+                        Some(TableEditValue {
+                            column: column.name.clone(),
+                            data_type: column.data_type.clone(),
+                            value,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (!keys.is_empty() && !assignments.is_empty())
+                    .then_some(TableEditRow { keys, assignments })
+            })
+            .collect::<Vec<_>>();
+
+        (!rows.is_empty()).then_some(TableEditBatch {
+            schema: editable_table.schema.clone(),
+            table: editable_table.table.clone(),
+            rows,
+        })
+    }
+
+    fn original_cell_value(&self, row_id: usize, col_ix: usize) -> Option<String> {
+        let is_null = self
+            .original_nulls
+            .get(row_id)
+            .and_then(|row| row.get(col_ix))
+            .copied()
+            .unwrap_or(false);
+        if is_null {
+            None
+        } else {
+            Some(
+                self.original_rows
+                    .get(row_id)
+                    .and_then(|row| row.get(col_ix))
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        }
+    }
+
+    fn mark_submitted(&mut self) {
+        self.original_rows = self.rows.clone();
+        self.original_nulls = self.nulls.clone();
+        self.row_ids = (0..self.rows.len()).collect();
+        self.dirty_cells.clear();
+        self.editing_cell = None;
     }
 
     fn select_cell(&mut self, row_ix: usize, col_ix: usize, modifiers: Modifiers) {
@@ -419,6 +721,10 @@ struct QueryExecution {
     id: usize,
     query: String,
     result: QueryResult,
+    original_rows: Vec<Vec<String>>,
+    original_nulls: Vec<Vec<bool>>,
+    row_ids: Vec<usize>,
+    dirty_cells: BTreeMap<(usize, usize), Option<String>>,
     succeeded: bool,
     created_at: String,
     config: Option<DataSourceConfig>,
@@ -441,7 +747,7 @@ impl ResultPanel {
                 .col_movable(true)
                 .sortable(true)
         });
-        Self::subscribe_table_selection(&table_state, cx);
+        Self::subscribe_table_selection(&table_state, window, cx);
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -455,6 +761,8 @@ impl ResultPanel {
             is_zoomed: false,
             selected_export_format: ExportFormat::Csv,
             activity_tracker,
+            submitting_edits: false,
+            edit_error: None,
         }
     }
 
@@ -472,10 +780,17 @@ impl ResultPanel {
     ) {
         let id = self.next_result_id;
         self.next_result_id += 1;
+        let original_rows = result.rows.clone();
+        let original_nulls = result.nulls.clone();
+        let row_ids = (0..result.rows.len()).collect();
         self.pending_result = Some(QueryExecution {
             id,
             query,
             result,
+            original_rows,
+            original_nulls,
+            row_ids,
+            dirty_cells: BTreeMap::new(),
             succeeded,
             created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             config,
@@ -532,10 +847,21 @@ impl ResultPanel {
                 execution.config.as_ref(),
                 execution.result.column_metadata.clone(),
             );
-            ResultsTableDelegate::from_parts(
+            let editable_table = editable_table_for_execution(
+                &execution.query,
+                execution.config.as_ref(),
+                &execution.result.columns,
+            );
+            ResultsTableDelegate::from_query_state(
                 execution.result.columns.clone(),
                 enriched_metadata,
                 execution.result.rows.clone(),
+                execution.result.nulls.clone(),
+                execution.original_rows.clone(),
+                execution.original_nulls.clone(),
+                execution.row_ids.clone(),
+                execution.dirty_cells.clone(),
+                editable_table,
             )
         };
 
@@ -547,32 +873,224 @@ impl ResultPanel {
                 .col_movable(true)
                 .sortable(true)
         });
-        Self::subscribe_table_selection(&self.table_state, cx);
+        Self::subscribe_table_selection(&self.table_state, window, cx);
     }
 
     fn subscribe_table_selection(
         table_state: &gpui::Entity<TableState<ResultsTableDelegate>>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.subscribe(
+        cx.subscribe_in(
             table_state,
-            |_: &mut Self, table, event: &TableEvent, cx| {
-                table.update(cx, |table, cx| {
-                    match event {
-                        TableEvent::SelectRow(row_ix) => table.delegate_mut().select_row(*row_ix),
-                        TableEvent::SelectColumn(col_ix) => {
-                            table.delegate_mut().select_col(*col_ix)
-                        }
-                        TableEvent::SelectCell(row_ix, col_ix) => {
-                            table.delegate_mut().select_emitted_cell(*row_ix, *col_ix)
-                        }
-                        _ => {}
-                    }
-                    cx.notify();
-                });
+            window,
+            |this: &mut Self, table, event: &TableEvent, window, cx| match event {
+                TableEvent::SelectRow(row_ix) => {
+                    table.update(cx, |table, cx| {
+                        table.delegate_mut().select_row(*row_ix);
+                        cx.notify();
+                    });
+                }
+                TableEvent::SelectColumn(col_ix) => {
+                    table.update(cx, |table, cx| {
+                        table.delegate_mut().select_col(*col_ix);
+                        cx.notify();
+                    });
+                }
+                TableEvent::SelectCell(row_ix, col_ix) => {
+                    table.update(cx, |table, cx| {
+                        table.delegate_mut().select_emitted_cell(*row_ix, *col_ix);
+                        cx.notify();
+                    });
+                }
+                TableEvent::DoubleClickedCell(row_ix, col_ix) => {
+                    this.start_edit_cell(*row_ix, *col_ix, window, cx);
+                }
+                _ => {}
             },
         )
         .detach();
+    }
+
+    fn start_edit_selected_cell(
+        &mut self,
+        _: &EditResultCell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_cell = self.table_state.read(cx).selected_cell();
+        if let Some((row_ix, col_ix)) = selected_cell {
+            self.start_edit_cell(row_ix, col_ix, window, cx);
+        }
+    }
+
+    fn start_edit_cell(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_current_edit(cx);
+        let value = self
+            .table_state
+            .read(cx)
+            .delegate()
+            .cell_text(row_ix, col_ix, cx);
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+
+        let input_for_subscription = input.clone();
+        cx.subscribe_in(
+            &input_for_subscription,
+            window,
+            move |this, _input, event: &InputEvent, _window, cx| match event {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    this.commit_current_edit(cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+
+        let started = self.table_state.update(cx, |table, cx| {
+            let started = table
+                .delegate_mut()
+                .start_editing(row_ix, col_ix, input.clone());
+            if started {
+                table.set_selected_cell(row_ix, col_ix, cx);
+            }
+            started
+        });
+
+        if started {
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+        }
+    }
+
+    fn commit_current_edit(&mut self, cx: &mut Context<Self>) -> bool {
+        let committed = self.table_state.update(cx, |table, cx| {
+            let committed = table.delegate_mut().commit_editing(cx);
+            if committed {
+                cx.notify();
+            }
+            committed
+        });
+        if committed {
+            self.sync_active_execution_from_delegate(cx);
+            self.edit_error = None;
+            cx.notify();
+        }
+        committed
+    }
+
+    fn sync_active_execution_from_delegate(&mut self, cx: &App) {
+        let Some(active_ix) = self.active_tab.checked_sub(1) else {
+            return;
+        };
+        let table = self.table_state.read(cx);
+        let delegate = table.delegate();
+        if let Some(execution) = self.executions.get_mut(active_ix) {
+            execution.result.rows = delegate.rows.clone();
+            execution.result.nulls = delegate.nulls.clone();
+            execution.row_ids = delegate.row_ids.clone();
+            execution.dirty_cells = delegate.dirty_cells.clone();
+        }
+    }
+
+    fn has_dirty_edits(&self, cx: &App) -> bool {
+        self.table_state.read(cx).delegate().has_dirty_cells()
+    }
+
+    fn submit_edits(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.submitting_edits {
+            return;
+        }
+        self.commit_current_edit(cx);
+
+        let Some(active_ix) = self.active_tab.checked_sub(1) else {
+            return;
+        };
+        let Some(config) = self
+            .executions
+            .get(active_ix)
+            .and_then(|execution| execution.config.clone())
+        else {
+            return;
+        };
+        let Some(batch) = self.table_state.read(cx).delegate().edit_batch() else {
+            return;
+        };
+
+        self.submitting_edits = true;
+        self.edit_error = None;
+        cx.notify();
+
+        let panel = cx.entity();
+        let activity_tracker = self.activity_tracker.clone();
+        let activity_id = cx.update_entity(&activity_tracker, |tracker, cx| {
+            tracker.begin("Submitting result edits", cx)
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut source = create_data_source(create_postgres_data_source, &config)?;
+                    source.connect().await?;
+                    let result = source.apply_table_edits(batch).await;
+                    source.disconnect().await?;
+                    result
+                })
+                .await;
+
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
+            });
+
+            cx.update_entity(&panel, move |this, cx| {
+                this.submitting_edits = false;
+                match result {
+                    Ok(()) => this.mark_active_edits_submitted(cx),
+                    Err(error) => {
+                        this.edit_error = Some(match error {
+                            DataSourceError::QueryFailed(message) => message,
+                            other => other.to_string(),
+                        });
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn mark_active_edits_submitted(&mut self, cx: &mut Context<Self>) {
+        let Some(active_ix) = self.active_tab.checked_sub(1) else {
+            return;
+        };
+
+        let (rows, nulls, row_ids, dirty_cells, original_rows, original_nulls) =
+            self.table_state.update(cx, |table, cx| {
+                let delegate = table.delegate_mut();
+                delegate.mark_submitted();
+                cx.notify();
+                (
+                    delegate.rows.clone(),
+                    delegate.nulls.clone(),
+                    delegate.row_ids.clone(),
+                    delegate.dirty_cells.clone(),
+                    delegate.original_rows.clone(),
+                    delegate.original_nulls.clone(),
+                )
+            });
+        if let Some(execution) = self.executions.get_mut(active_ix) {
+            execution.result.rows = rows;
+            execution.result.nulls = nulls;
+            execution.row_ids = row_ids;
+            execution.dirty_cells = dirty_cells;
+            execution.original_rows = original_rows;
+            execution.original_nulls = original_nulls;
+        }
     }
 
     fn close_result_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -905,6 +1423,8 @@ impl Render for ResultPanel {
         let row_label = active_execution
             .map(|execution| format!("{} rows", execution.result.row_count))
             .unwrap_or_else(|| format!("{} queries", self.executions.len()));
+        let has_dirty_edits = self.has_dirty_edits(cx);
+        let submit_disabled = !has_dirty_edits || self.submitting_edits;
 
         let entity = cx.entity();
         let tab_bar = TabBar::new("results-tab-bar")
@@ -955,6 +1475,7 @@ impl Render for ResultPanel {
             .on_action(cx.listener(Self::on_extend_selection_right))
             .on_action(cx.listener(Self::on_cycle_tab_forward))
             .on_action(cx.listener(Self::on_cycle_tab_backward))
+            .on_action(cx.listener(Self::start_edit_selected_cell))
             .on_click(cx.listener(|this, _, window, cx| {
                 window.focus(&this.focus_handle, cx);
             }))
@@ -996,6 +1517,22 @@ impl Render for ResultPanel {
                             .child(name)
                     }))
                     .child(
+                        Button::new("results-submit-edits")
+                            .icon(IconName::ArrowUp)
+                            .xsmall()
+                            .ghost()
+                            .when(!submit_disabled, |button| button.text_color(rgb(0x58a65c)))
+                            .tooltip(if has_dirty_edits {
+                                "Submit result edits"
+                            } else {
+                                "No result edits to submit"
+                            })
+                            .disabled(submit_disabled)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.submit_edits(window, cx);
+                            })),
+                    )
+                    .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
@@ -1003,6 +1540,13 @@ impl Render for ResultPanel {
                             .truncate()
                             .child(query_label),
                     )
+                    .children(self.edit_error.as_ref().map(|error| {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0xef4444))
+                            .truncate()
+                            .child(error.clone())
+                    }))
                     .child(div().flex_1())
                     .child(
                         div()
@@ -1205,6 +1749,231 @@ fn enrich_column_metadata(
             m
         })
         .collect()
+}
+
+fn editable_table_for_execution(
+    query: &str,
+    config: Option<&DataSourceConfig>,
+    result_columns: &[String],
+) -> Option<EditableTable> {
+    let config = config?;
+    let table_ref = single_table_select(query)?;
+    let cache_key = schema_cache::cache_key(config);
+    let schema = schema_cache::load(&cache_key).ok().flatten()?;
+    let table = find_schema_table(&schema.tables, config, &table_ref)?;
+    if !matches!(table.kind, TableKind::Table) {
+        return None;
+    }
+
+    let column_counts =
+        result_columns
+            .iter()
+            .fold(HashMap::<String, usize>::new(), |mut counts, column| {
+                *counts.entry(column.clone()).or_default() += 1;
+                counts
+            });
+    let table_columns = table
+        .columns
+        .iter()
+        .map(|column| (column.name.clone(), column))
+        .collect::<HashMap<_, _>>();
+
+    let mut columns = Vec::with_capacity(result_columns.len());
+    for column_name in result_columns {
+        let unique = column_counts.get(column_name).copied().unwrap_or(0) == 1;
+        let Some(column) = table_columns.get(column_name) else {
+            columns.push(EditableColumn {
+                name: column_name.clone(),
+                data_type: String::new(),
+                editable: false,
+            });
+            continue;
+        };
+        columns.push(EditableColumn {
+            name: column.name.clone(),
+            data_type: column.data_type.clone(),
+            editable: unique && !column.is_pk && !column.is_generated,
+        });
+    }
+
+    let pk_names = table
+        .columns
+        .iter()
+        .filter(|column| column.is_pk)
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    if pk_names.is_empty() {
+        return None;
+    }
+    let pk_col_indices = pk_names
+        .iter()
+        .map(|pk_name| {
+            result_columns.iter().enumerate().find_map(|(ix, column)| {
+                (column == pk_name && column_counts.get(column).copied() == Some(1)).then_some(ix)
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    Some(EditableTable {
+        schema: table.schema.clone(),
+        table: table.name.clone(),
+        columns,
+        pk_col_indices,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedTableRef {
+    schema: Option<String>,
+    table: String,
+}
+
+fn find_schema_table<'a>(
+    tables: &'a [TableInfo],
+    config: &DataSourceConfig,
+    table_ref: &ParsedTableRef,
+) -> Option<&'a TableInfo> {
+    tables.iter().find(|table| {
+        table.name == table_ref.table
+            && table_ref
+                .schema
+                .as_ref()
+                .map(|schema| table.schema == *schema)
+                .unwrap_or_else(|| table.schema == config.schema)
+    })
+}
+
+fn single_table_select(query: &str) -> Option<ParsedTableRef> {
+    let tokens = sql_tokens(query);
+    if tokens.is_empty() || !tokens[0].eq_ignore_ascii_case("select") {
+        return None;
+    }
+    if tokens
+        .get(1)
+        .is_some_and(|token| token.eq_ignore_ascii_case("distinct"))
+    {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut from_ix = None;
+    for (ix, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => depth += 1,
+            ")" => depth = depth.saturating_sub(1),
+            _ if depth == 0 && token.eq_ignore_ascii_case("from") => {
+                from_ix = Some(ix);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let from_ix = from_ix?;
+    let table_token = tokens.get(from_ix + 1)?;
+    if table_token == "(" {
+        return None;
+    }
+
+    let stop_words = [
+        "where",
+        "order",
+        "limit",
+        "offset",
+        "fetch",
+        "for",
+        "group",
+        "having",
+        "union",
+        "intersect",
+        "except",
+    ];
+    let mut ix = from_ix + 2;
+    while ix < tokens.len() {
+        let token = &tokens[ix];
+        if token == "(" {
+            depth += 1;
+        } else if token == ")" {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 {
+            if token == "," || token.eq_ignore_ascii_case("join") {
+                return None;
+            }
+            if matches!(
+                token.to_ascii_lowercase().as_str(),
+                "group" | "having" | "union" | "intersect" | "except"
+            ) {
+                return None;
+            }
+            if stop_words
+                .iter()
+                .any(|stop_word| token.eq_ignore_ascii_case(stop_word))
+            {
+                break;
+            }
+        }
+        ix += 1;
+    }
+
+    split_qualified_identifier(table_token)
+}
+
+fn sql_tokens(query: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = query.trim().trim_end_matches(';').chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch.is_whitespace() {
+            push_token(&mut tokens, &mut current);
+            continue;
+        }
+        if matches!(ch, '(' | ')' | ',') {
+            push_token(&mut tokens, &mut current);
+            tokens.push(ch.to_string());
+            continue;
+        }
+        if ch == '\'' {
+            push_token(&mut tokens, &mut current);
+            while let Some(next) = chars.next() {
+                if next == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        let _ = chars.next();
+                        continue;
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+        current.push(ch);
+    }
+    push_token(&mut tokens, &mut current);
+    tokens
+}
+
+fn push_token(tokens: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        tokens.push(std::mem::take(current));
+    }
+}
+
+fn split_qualified_identifier(token: &str) -> Option<ParsedTableRef> {
+    let parts = token
+        .split('.')
+        .map(clean_identifier_token)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        [table] => Some(ParsedTableRef {
+            schema: None,
+            table: table.clone(),
+        }),
+        [schema, table] => Some(ParsedTableRef {
+            schema: Some(schema.clone()),
+            table: table.clone(),
+        }),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1737,5 +2506,114 @@ mod tests {
                 vec![String::new(), "Paris".to_string()]
             ]
         );
+    }
+
+    #[test]
+    fn detects_strict_single_table_selects() {
+        assert_eq!(
+            single_table_select("select id, name from public.users where id = 1"),
+            Some(ParsedTableRef {
+                schema: Some("public".into()),
+                table: "users".into(),
+            })
+        );
+        assert_eq!(
+            single_table_select("select * from users order by id limit 10"),
+            Some(ParsedTableRef {
+                schema: None,
+                table: "users".into(),
+            })
+        );
+        assert_eq!(
+            single_table_select("with u as (select * from users) select * from u"),
+            None
+        );
+        assert_eq!(
+            single_table_select("select * from users join posts on true"),
+            None
+        );
+        assert_eq!(
+            single_table_select("select count(*) from users group by name"),
+            None
+        );
+        assert_eq!(
+            single_table_select("select * from (select * from users) u"),
+            None
+        );
+    }
+
+    #[test]
+    fn dirty_cells_are_removed_when_value_matches_original() {
+        let editable_table = EditableTable {
+            schema: "public".into(),
+            table: "users".into(),
+            columns: vec![
+                EditableColumn {
+                    name: "id".into(),
+                    data_type: "int4".into(),
+                    editable: false,
+                },
+                EditableColumn {
+                    name: "name".into(),
+                    data_type: "text".into(),
+                    editable: true,
+                },
+            ],
+            pk_col_indices: vec![0],
+        };
+        let mut delegate = ResultsTableDelegate::from_query(
+            vec!["id".into(), "name".into()],
+            sample_data().column_metadata,
+            vec![vec!["1".into(), "Ada".into()]],
+            vec![vec![false, false]],
+            Some(editable_table),
+        );
+
+        delegate.set_cell_value(0, 1, Some("Grace".into()));
+        assert!(delegate.has_dirty_cells());
+
+        delegate.set_cell_value(0, 1, Some("Ada".into()));
+        assert!(!delegate.has_dirty_cells());
+    }
+
+    #[test]
+    fn builds_edit_batch_from_dirty_cells_with_original_primary_key() {
+        let editable_table = EditableTable {
+            schema: "public".into(),
+            table: "users".into(),
+            columns: vec![
+                EditableColumn {
+                    name: "id".into(),
+                    data_type: "int4".into(),
+                    editable: false,
+                },
+                EditableColumn {
+                    name: "name".into(),
+                    data_type: "text".into(),
+                    editable: true,
+                },
+            ],
+            pk_col_indices: vec![0],
+        };
+        let mut delegate = ResultsTableDelegate::from_query(
+            vec!["id".into(), "name".into()],
+            sample_data().column_metadata,
+            vec![vec!["1".into(), "Ada".into()]],
+            vec![vec![false, false]],
+            Some(editable_table),
+        );
+
+        delegate.set_cell_value(0, 1, Some("Grace".into()));
+        let batch = delegate
+            .edit_batch()
+            .expect("dirty cell should build batch");
+
+        assert_eq!(batch.schema, "public");
+        assert_eq!(batch.table, "users");
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(batch.rows[0].keys[0].column, "id");
+        assert_eq!(batch.rows[0].keys[0].value.as_deref(), Some("1"));
+        assert_eq!(batch.rows[0].assignments[0].column, "name");
+        assert_eq!(batch.rows[0].assignments[0].value.as_deref(), Some("Grace"));
     }
 }

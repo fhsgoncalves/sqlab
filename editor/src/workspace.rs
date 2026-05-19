@@ -967,6 +967,7 @@ fn error_result(error: DataSourceError) -> QueryResult {
             is_fk: false,
         }],
         rows: vec![vec![error_msg]],
+        nulls: vec![vec![false]],
         row_count: 1,
         execution_time_ms: 0,
     }
