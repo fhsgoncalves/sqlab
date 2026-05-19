@@ -263,7 +263,7 @@ h1 .slash { color: var(--accent); font-weight: 500; }
 }
 
 /* SECTION HEADING */
-.section { padding: 5rem 2.5rem; max-width: 1100px; margin: 0 auto; }
+.section { padding: 5rem 2.5rem; max-width: 900px; margin: 0 auto; }
 
 .section-eyebrow {
   font-family: var(--mono);
@@ -290,36 +290,93 @@ h2 {
   font-weight: 300;
 }
 
-/* GALLERY */
+/* GALLERY / CAROUSEL */
 .gallery-section {
   padding: 5rem 2.5rem;
-  max-width: 1100px;
+  max-width: 900px;
   margin: 0 auto;
 }
-.gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-}
-.gallery-item {
+.carousel {
+  position: relative;
   border: 1px solid var(--border2);
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg2);
+}
+.carousel-track {
+  display: flex;
+  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.carousel-slide {
+  min-width: 100%;
   cursor: zoom-in;
-  transition: border-color 0.15s, transform 0.15s;
 }
-.gallery-item:hover {
-  border-color: var(--accent);
-  transform: translateY(-2px);
-}
-.gallery-item img {
+.carousel-slide img {
   width: 100%;
   display: block;
 }
-
-@media (max-width: 760px) {
-  .gallery-grid { grid-template-columns: 1fr; }
+.carousel-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border2);
+  border-radius: 50%;
+  background: rgba(21,23,38,0.7);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+  z-index: 10;
+}
+.carousel-btn:hover {
+  background: rgba(21,23,38,0.9);
+  border-color: var(--accent);
+}
+.carousel-btn-prev { left: 12px; }
+.carousel-btn-next { right: 12px; }
+.carousel-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 0;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+}
+.carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border2);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+  padding: 0;
+}
+.carousel-dot.active {
+  background: var(--accent);
+  transform: scale(1.2);
+}
+.carousel-dot:hover {
+  background: var(--accent2);
+}
+.carousel-counter {
+  position: absolute;
+  bottom: 52px;
+  right: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(21,23,38,0.7);
+  backdrop-filter: blur(8px);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  z-index: 10;
 }
 
 /* FEATURE GRID */
@@ -369,9 +426,12 @@ h2 {
 
 /* DB SUPPORT */
 .db-section {
-  padding: 0 2.5rem 5rem;
-  max-width: 1100px;
+  padding: 0 0 5rem;
+}
+.db-section-inner {
+  max-width: 900px;
   margin: 0 auto;
+  padding: 0 2.5rem;
 }
 .db-label {
   font-family: var(--mono);
@@ -391,10 +451,9 @@ h2 {
   background: var(--border);
 }
 .db-row {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 10px;
-  flex-wrap: wrap;
 }
 .db-pill {
   display: flex;
@@ -409,7 +468,7 @@ h2 {
   transition: border-color 0.15s, color 0.15s;
 }
 .db-pill:hover { border-color: var(--accent); color: var(--text); }
-.db-pill svg { opacity: 0.7; }
+.db-pill img { opacity: 0.9; }
 .db-pill.supported {
   border-color: var(--accent2);
   color: var(--text);
@@ -428,7 +487,7 @@ h2 {
 /* DEVELOPER WORKFLOW */
 .workflow-section {
   padding: 5rem 2.5rem;
-  max-width: 700px;
+  max-width: 900px;
   margin: 0 auto;
 }
 .workflow-copy h2 { margin-bottom: 1rem; }
@@ -437,7 +496,7 @@ h2 {
   font-size: 15px;
   font-weight: 300;
   line-height: 1.75;
-  max-width: 460px;
+  max-width: 480px;
   margin-bottom: 1.5rem;
 }
 .workflow-list {
@@ -477,6 +536,8 @@ h2 {
 /* QUOTE */
 .quote-section {
   padding: 5rem 2.5rem;
+  max-width: 900px;
+  margin: 0 auto;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   text-align: center;
@@ -502,7 +563,7 @@ h2 {
 .cta-section {
   padding: 6rem 2.5rem;
   text-align: center;
-  max-width: 600px;
+  max-width: 900px;
   margin: 0 auto;
 }
 .cta-section h2 { margin-bottom: 0.75rem; }
@@ -569,11 +630,13 @@ footer {
   nav { padding: 0 1rem; }
   .nav-links { gap: 1rem; }
   .nav-links a:not(.nav-cta) { display: none; }
-  .hero, .gallery-section, .db-section, .section, .workflow-section, .quote-section, .cta-section {
+  .hero, .gallery-section, .db-section, .db-section-inner, .section, .workflow-section, .quote-section, .cta-section {
     padding-left: 1rem;
     padding-right: 1rem;
   }
   .feature-grid { grid-template-columns: 1fr; }
+  .db-row { grid-template-columns: 1fr; }
+  .db-pill { width: 100%; justify-content: flex-start; }
   .stats-bar {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -654,46 +717,59 @@ footer {
   <div class="section-eyebrow">// screenshots</div>
   <h2>See it in action.</h2>
   <p class="section-desc">A glimpse of the sq/lab workspace — fast, native, and distraction-free.</p>
-  <div class="gallery-grid">
-    <div class="gallery-item" data-src="screenshots/screenshot-banner.png">
-      <img src="screenshots/screenshot-banner.png" alt="sq/lab main editor view" loading="lazy">
+  <div class="carousel" id="carousel">
+    <div class="carousel-track" id="carouselTrack">
+      <div class="carousel-slide" data-src="screenshots/screenshot-banner.png">
+        <img src="screenshots/screenshot-banner.png" alt="sq/lab main editor view" loading="lazy">
+      </div>
+      <div class="carousel-slide" data-src="screenshots/screenshot-autocomplete-1.png">
+        <img src="screenshots/screenshot-autocomplete-1.png" alt="sq/lab autocomplete" loading="lazy">
+      </div>
+      <div class="carousel-slide" data-src="screenshots/print-diagram.png">
+        <img src="screenshots/print-diagram.png" alt="sq/lab diagram" loading="lazy">
+      </div>
     </div>
-    <div class="gallery-item" data-src="screenshots/screenshot-autocomplete-1.png">
-      <img src="screenshots/screenshot-autocomplete-1.png" alt="sq/lab autocomplete" loading="lazy">
-    </div>
+    <button class="carousel-btn carousel-btn-prev" id="carouselPrev" aria-label="Previous screenshot">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <button class="carousel-btn carousel-btn-next" id="carouselNext" aria-label="Next screenshot">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <div class="carousel-counter" id="carouselCounter">1 / 3</div>
+    <div class="carousel-dots" id="carouselDots"></div>
   </div>
 </section>
 
-<hr class="divider">
-
 <!-- DB SUPPORT -->
 <div class="db-section">
-  <div class="db-label">Supported databases</div>
-  <div class="db-row">
+  <div class="db-section-inner">
+    <div class="db-label">Supported databases</div>
+    <div class="db-row">
     <div class="db-pill supported">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+      <img src="icons/postgresql.svg" alt="PostgreSQL" width="16" height="16">
       PostgreSQL
       <span class="db-status">Supported</span>
     </div>
     <div class="db-pill">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+      <img src="icons/mysql.svg" alt="MySQL" width="16" height="16">
       MySQL
       <span class="db-status">Coming soon</span>
     </div>
     <div class="db-pill">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      <img src="icons/sqlite.svg" alt="SQLite" width="16" height="16">
       SQLite
       <span class="db-status">Coming soon</span>
     </div>
     <div class="db-pill">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      <img src="icons/duckdb.svg" alt="DuckDB" width="16" height="16">
       DuckDB
       <span class="db-status">Coming soon</span>
     </div>
     <div class="db-pill">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      <img src="icons/databend.svg" alt="Databend" width="16" height="16">
       Databend
       <span class="db-status">Coming soon</span>
+    </div>
     </div>
   </div>
 </div>
@@ -829,15 +905,62 @@ footer {
 
 <script>
 (function(){
-  var lb=document.getElementById('lightbox'),lbImg=lb.querySelector('img');
-  document.querySelectorAll('.gallery-item').forEach(function(item){
-    item.addEventListener('click',function(){
-      lbImg.src=this.getAttribute('data-src');
+  // Carousel
+  var track = document.getElementById('carouselTrack');
+  var slides = track.querySelectorAll('.carousel-slide');
+  var dotsContainer = document.getElementById('carouselDots');
+  var counter = document.getElementById('carouselCounter');
+  var prevBtn = document.getElementById('carouselPrev');
+  var nextBtn = document.getElementById('carouselNext');
+  var current = 0;
+  var total = slides.length;
+
+  // Build dots
+  for (var i = 0; i < total; i++) {
+    var dot = document.createElement('button');
+    dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+    dot.setAttribute('aria-label', 'Go to screenshot ' + (i + 1));
+    dot.setAttribute('data-index', i);
+    dotsContainer.appendChild(dot);
+  }
+  var dots = dotsContainer.querySelectorAll('.carousel-dot');
+
+  function goTo(index) {
+    if (index < 0) index = total - 1;
+    if (index >= total) index = 0;
+    current = index;
+    track.style.transform = 'translateX(-' + (current * 100) + '%)';
+    for (var i = 0; i < dots.length; i++) {
+      dots[i].className = 'carousel-dot' + (i === current ? ' active' : '');
+    }
+    counter.textContent = (current + 1) + ' / ' + total;
+  }
+
+  prevBtn.addEventListener('click', function() { goTo(current - 1); });
+  nextBtn.addEventListener('click', function() { goTo(current + 1); });
+  dots.forEach(function(dot) {
+    dot.addEventListener('click', function() { goTo(parseInt(this.getAttribute('data-index'))); });
+  });
+
+  // Keyboard navigation
+  document.addEventListener('keydown', function(e) {
+    if (lb.classList.contains('open')) return;
+    if (e.key === 'ArrowLeft') goTo(current - 1);
+    if (e.key === 'ArrowRight') goTo(current + 1);
+  });
+
+  // Lightbox
+  var lb = document.getElementById('lightbox'), lbImg = lb.querySelector('img');
+  slides.forEach(function(slide) {
+    slide.addEventListener('click', function() {
+      lbImg.src = this.getAttribute('data-src');
       lb.classList.add('open');
     });
   });
-  lb.addEventListener('click',function(){lb.classList.remove('open');});
-  document.addEventListener('keydown',function(e){if(e.key==='Escape')lb.classList.remove('open');});
+  lb.addEventListener('click', function() { lb.classList.remove('open'); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') lb.classList.remove('open');
+  });
 })();
 </script>
 
