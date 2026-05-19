@@ -19,6 +19,7 @@ use gpui_component::{
 use crate::credentials;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
+use crate::ui::panels::diagram::{DiagramScope, ShowDiagramEvent};
 use sqlab_drivers_core::ddl::create_ddl_generator;
 use sqlab_drivers_core::{
     ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind,
@@ -40,6 +41,7 @@ pub struct ConnectionPanel {
 }
 
 impl EventEmitter<PanelEvent> for ConnectionPanel {}
+impl EventEmitter<ShowDiagramEvent> for ConnectionPanel {}
 
 impl ConnectionPanel {
     pub fn new(
@@ -324,12 +326,24 @@ impl ConnectionPanel {
             let menu_name_for_delete = menu_name.clone();
             let menu_name_for_configure = menu_name.clone();
             let menu_config_for_configure = menu_config.clone();
+            let menu_config_for_diagram = menu_config.clone();
             let view_for_refresh = view.clone();
             let view_for_duplicate = view.clone();
             let view_for_delete = view.clone();
             let view_for_configure = view.clone();
+            let view_for_diagram = view.clone();
 
             menu.item(
+                PopupMenuItem::new("Show diagram")
+                    .icon(IconName::Network)
+                    .on_click(window.listener_for(&view_for_diagram, {
+                        let menu_config = menu_config_for_diagram.clone();
+                        move |this, _, _window, cx| {
+                            this.show_diagram(menu_config.clone(), DiagramScope::Database, cx);
+                        }
+                    })),
+            )
+            .item(
                 PopupMenuItem::new("Refresh Schema")
                     .icon(IconName::Redo)
                     .on_click(window.listener_for(&view_for_refresh, {
@@ -520,6 +534,15 @@ impl ConnectionPanel {
         };
 
         self.introspect_schema(config, cx);
+    }
+
+    fn show_diagram(
+        &mut self,
+        config: DataSourceConfig,
+        scope: DiagramScope,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(ShowDiagramEvent { config, scope });
     }
 
     fn toggle_connection_expanded(&mut self, name: &str) {
@@ -1090,11 +1113,16 @@ impl ConnectionPanel {
         node_id: String,
         _label: String,
         schema: sqlab_drivers_core::DatabaseSchema,
+        config: DataSourceConfig,
+        view: Entity<Self>,
     ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
-        move |menu, _window, _cx| {
+        move |menu, window, _cx| {
             let ddl_node_id = node_id.clone();
             let ddl_label = _label.clone();
             let ddl_schema = schema.clone();
+            let diagram_scope = Self::diagram_scope_for_node(&node_id);
+            let diagram_config = config.clone();
+            let diagram_view = view.clone();
 
             let is_folder_node = node_id.ends_with(":tables")
                 || node_id.ends_with(":views")
@@ -1114,6 +1142,18 @@ impl ConnectionPanel {
                         }
                     }),
             )
+            .when_some(diagram_scope, |menu, scope| {
+                menu.item(
+                    PopupMenuItem::new("Show diagram")
+                        .icon(IconName::Network)
+                        .on_click(window.listener_for(&diagram_view, {
+                            let config = diagram_config.clone();
+                            move |this, _, _window, cx| {
+                                this.show_diagram(config.clone(), scope.clone(), cx);
+                            }
+                        })),
+                )
+            })
             .when(!is_folder_node, |menu| {
                 menu.item(
                     PopupMenuItem::new("Generate and copy DDL")
@@ -1132,6 +1172,30 @@ impl ConnectionPanel {
                 )
             })
         }
+    }
+
+    fn diagram_scope_for_node(node_id: &str) -> Option<DiagramScope> {
+        let segments = node_id.split(':').collect::<Vec<_>>();
+        if node_id.ends_with(":schemas") {
+            return Some(DiagramScope::Database);
+        }
+
+        let schema_name_idx = segments.iter().position(|&segment| segment == "schema")?;
+        let schema_name = segments.get(schema_name_idx + 1)?;
+        let after_schema = &segments[schema_name_idx + 2..];
+        if after_schema.is_empty() {
+            return Some(DiagramScope::Schema((*schema_name).to_string()));
+        }
+
+        if let Some(table_idx) = segments.iter().position(|&segment| segment == "table") {
+            let table_name = segments.get(table_idx + 1)?;
+            return Some(DiagramScope::Table {
+                schema: (*schema_name).to_string(),
+                table: (*table_name).to_string(),
+            });
+        }
+
+        None
     }
 }
 
@@ -1517,6 +1581,8 @@ impl Render for ConnectionPanel {
                                     id.clone(),
                                     label_for_menu,
                                     schema.clone(),
+                                    config.clone(),
+                                    view.clone(),
                                 ))
                                 .into_any_element(),
                         );

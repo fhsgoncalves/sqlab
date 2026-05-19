@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions, div, hsla,
-    prelude::FluentBuilder, px, rgb,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions,
+    div, hsla, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, IconName, Sizable,
@@ -14,17 +14,52 @@ use gpui_component::{
 
 use super::editor::{EditorPanel, ExecuteQuery};
 use crate::ui::components::tab::{Tab, TabBar};
+use crate::ui::panels::diagram::{DiagramModel, DiagramPanel};
 use sqlab_drivers_core::{ConnectionStatus, manager::DataSourceManager};
 
 actions!(editor_tabs, [CycleTabForward, CycleTabBackward]);
 
 pub struct EditorTabs {
-    editors: Vec<Entity<EditorPanel>>,
+    tabs: Vec<EditorTab>,
     active_ix: usize,
     focus_handle: FocusHandle,
     dock_area: Option<WeakEntity<DockArea>>,
     data_source_manager: Entity<DataSourceManager>,
     is_zoomed: bool,
+}
+
+enum EditorTab {
+    Sql(Entity<EditorPanel>),
+    Diagram(Entity<DiagramPanel>),
+}
+
+impl EditorTab {
+    fn label(&self, cx: &App) -> String {
+        match self {
+            EditorTab::Sql(editor) => editor
+                .read(cx)
+                .path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Untitled")
+                .to_string(),
+            EditorTab::Diagram(diagram) => diagram.read(cx).title().to_string(),
+        }
+    }
+
+    fn as_sql(&self) -> Option<&Entity<EditorPanel>> {
+        match self {
+            EditorTab::Sql(editor) => Some(editor),
+            EditorTab::Diagram(_) => None,
+        }
+    }
+
+    fn element(&self) -> AnyElement {
+        match self {
+            EditorTab::Sql(editor) => editor.clone().into_any_element(),
+            EditorTab::Diagram(diagram) => diagram.clone().into_any_element(),
+        }
+    }
 }
 
 impl EditorTabs {
@@ -34,7 +69,7 @@ impl EditorTabs {
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
-            editors: Vec::new(),
+            tabs: Vec::new(),
             active_ix: 0,
             focus_handle: cx.focus_handle(),
             dock_area: None,
@@ -48,8 +83,11 @@ impl EditorTabs {
     }
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // Check if already open
-        if let Some(ix) = self.editors.iter().position(|e| *e.read(cx).path() == path) {
+        if let Some(ix) = self.tabs.iter().position(|tab| {
+            tab.as_sql()
+                .map(|editor| *editor.read(cx).path() == path)
+                .unwrap_or(false)
+        }) {
             self.active_ix = ix;
             cx.notify();
             return;
@@ -57,8 +95,29 @@ impl EditorTabs {
 
         let data_source_manager = self.data_source_manager.clone();
         let editor = cx.new(|cx| EditorPanel::new(path, data_source_manager, window, cx));
-        self.editors.push(editor);
-        self.active_ix = self.editors.len() - 1;
+        self.tabs.push(EditorTab::Sql(editor));
+        self.active_ix = self.tabs.len() - 1;
+        cx.notify();
+    }
+
+    pub fn open_diagram(
+        &mut self,
+        model: DiagramModel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self.tabs.iter().position(|tab| match tab {
+            EditorTab::Diagram(diagram) => diagram.read(cx).title() == model.title,
+            EditorTab::Sql(_) => false,
+        }) {
+            self.active_ix = ix;
+            cx.notify();
+            return;
+        }
+
+        let diagram = cx.new(|cx| DiagramPanel::new(model, window, cx));
+        self.tabs.push(EditorTab::Diagram(diagram));
+        self.active_ix = self.tabs.len() - 1;
         cx.notify();
     }
 
@@ -71,7 +130,7 @@ impl EditorTabs {
         cx: &mut Context<Self>,
     ) {
         self.open_file(path, window, cx);
-        if let Some(editor) = self.editors.get(self.active_ix) {
+        if let Some(editor) = self.active_editor() {
             editor.update(cx, |editor, cx| {
                 editor.go_to_position(line_number, column, window, cx);
             });
@@ -79,33 +138,34 @@ impl EditorTabs {
     }
 
     pub fn active_path(&self, cx: &App) -> Option<PathBuf> {
-        self.editors
+        self.tabs
             .get(self.active_ix)
+            .and_then(|tab| tab.as_sql())
             .map(|editor| editor.read(cx).path().clone())
     }
 
     fn close_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
-        if ix < self.editors.len() {
-            self.editors.remove(ix);
-            if self.active_ix >= self.editors.len() {
-                self.active_ix = self.editors.len().saturating_sub(1);
+        if ix < self.tabs.len() {
+            self.tabs.remove(ix);
+            if self.active_ix >= self.tabs.len() {
+                self.active_ix = self.tabs.len().saturating_sub(1);
             }
             cx.notify();
         }
     }
 
     pub fn clear_tabs(&mut self, cx: &mut Context<Self>) {
-        self.editors.clear();
+        self.tabs.clear();
         self.active_ix = 0;
         cx.notify();
     }
 
     pub fn active_editor(&self) -> Option<&Entity<EditorPanel>> {
-        self.editors.get(self.active_ix)
+        self.tabs.get(self.active_ix).and_then(|tab| tab.as_sql())
     }
 
     pub fn toggle_replace_in_active_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.editors.get(self.active_ix) {
+        if let Some(editor) = self.active_editor() {
             editor.update(cx, |editor, cx| {
                 editor.toggle_search_replace(window, cx);
             });
@@ -118,10 +178,10 @@ impl EditorTabs {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.editors.len() > 1 {
-            self.active_ix = (self.active_ix + 1) % self.editors.len();
+        if self.tabs.len() > 1 {
+            self.active_ix = (self.active_ix + 1) % self.tabs.len();
             cx.notify();
-            if let Some(editor) = self.editors.get(self.active_ix) {
+            if let Some(editor) = self.active_editor() {
                 let focus_handle = editor.read(cx).editor_focus_handle(cx);
                 window.focus(&focus_handle, cx);
             }
@@ -134,10 +194,10 @@ impl EditorTabs {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.editors.len() > 1 {
-            self.active_ix = (self.active_ix + self.editors.len() - 1) % self.editors.len();
+        if self.tabs.len() > 1 {
+            self.active_ix = (self.active_ix + self.tabs.len() - 1) % self.tabs.len();
             cx.notify();
-            if let Some(editor) = self.editors.get(self.active_ix) {
+            if let Some(editor) = self.active_editor() {
                 let focus_handle = editor.read(cx).editor_focus_handle(cx);
                 window.focus(&focus_handle, cx);
             }
@@ -145,11 +205,11 @@ impl EditorTabs {
     }
 
     fn reorder_tab(&mut self, from_ix: usize, to_ix: usize, cx: &mut Context<Self>) {
-        if from_ix >= self.editors.len() || to_ix >= self.editors.len() || from_ix == to_ix {
+        if from_ix >= self.tabs.len() || to_ix >= self.tabs.len() || from_ix == to_ix {
             return;
         }
-        let editor = self.editors.remove(from_ix);
-        self.editors.insert(to_ix, editor);
+        let tab = self.tabs.remove(from_ix);
+        self.tabs.insert(to_ix, tab);
         if self.active_ix == from_ix {
             self.active_ix = to_ix;
         } else if from_ix < self.active_ix && to_ix >= self.active_ix {
@@ -161,10 +221,12 @@ impl EditorTabs {
     }
 
     pub fn save_all(&mut self, cx: &mut Context<Self>) {
-        for editor in &self.editors {
-            editor.update(cx, |editor, cx| {
-                editor.save(cx);
-            });
+        for tab in &self.tabs {
+            if let Some(editor) = tab.as_sql() {
+                editor.update(cx, |editor, cx| {
+                    editor.save(cx);
+                });
+            }
         }
     }
 }
@@ -249,22 +311,16 @@ impl Render for EditorTabs {
             }));
 
         let tab_bar = self
-            .editors
+            .tabs
             .iter()
             .enumerate()
-            .fold(tab_bar, |tab_bar, (ix, editor)| {
+            .fold(tab_bar, |tab_bar, (ix, tab)| {
                 let entity = entity.clone();
-                let path = editor.read(cx).path().clone();
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("Untitled")
-                    .to_string();
                 let is_active = ix == self.active_ix;
 
                 tab_bar.child(
                     Tab::new()
-                        .label(file_name)
+                        .label(tab.label(cx))
                         .selected(is_active)
                         .closable(true)
                         .on_close(move |_window, cx| {
@@ -346,8 +402,8 @@ impl Render for EditorTabs {
                     .flex_1()
                     .overflow_hidden()
                     .map(|this| {
-                        if let Some(editor) = self.editors.get(self.active_ix) {
-                            this.child(editor.clone())
+                        if let Some(tab) = self.tabs.get(self.active_ix) {
+                            this.child(tab.element())
                         } else {
                             this
                         }

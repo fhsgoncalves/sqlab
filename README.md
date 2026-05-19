@@ -41,6 +41,12 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | Export to CSV, JSON, Excel, SQL Inserts, SQL Updates, WHERE clause | ✅ |
 | Column type info on result panel | ✅ |
 | DDL generation from schema item | ✅ |
+| Generate and export diagrams | ✅ |
+| In-place data editor | ⏳ |
+| MySQL driver | ⏳ |
+| SQLite driver | ⏳ |
+| DuckDB driver | ⏳ |
+| Databend driver | ⏳ |
 
 ## Supported Databases
 
@@ -53,13 +59,7 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 ## Roadmap
 
 - [ ] App distribution
-- [ ] Allow in-place editing in the data table
-- [ ] Format current query (cmd+option+l)
-- [ ] Support diagrams
-- [ ] Support MySQL
-- [ ] Support SQLite
-- [ ] Support duckdb
-- [ ] Support Databend
+- [ ] Add undo (cmd+z) on file editor
 
 ## Tech Stack
 
@@ -67,8 +67,8 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 - **GPUI** — GPU-accelerated UI framework (from Zed)
 - **gpui-component** — higher-level UI components
 - **tree-sitter-sql** — syntax highlighting
-- **tokio / tokio-postgres** — async PostgreSQL driver
-- **rustls** — TLS for database connections
+- **sqlparser** — sql query parsing
+- **sqlformat** — sql query formatting
 
 ## Alternative projects
 

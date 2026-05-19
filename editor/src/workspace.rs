@@ -15,9 +15,11 @@ use gpui_component::{
     v_flex,
 };
 
+use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::bottom_panel::{BottomPanel, BottomPanelMode, ToggleBottomPanelMode};
 use crate::ui::panels::connection::ConnectionPanel;
+use crate::ui::panels::diagram::{DiagramModel, ShowDiagramEvent};
 use crate::ui::panels::file_editor::{
     EditorTabs, ExecuteQuery, QueryChoice, QuerySelected, QuerySelector, SaveFile,
 };
@@ -223,6 +225,14 @@ impl Workspace {
                 cx,
             )
         });
+        cx.subscribe_in(
+            &database_panel,
+            window,
+            |this, _panel, event: &ShowDiagramEvent, window, cx| {
+                this.open_diagram(event.clone(), window, cx);
+            },
+        )
+        .detach();
         let right_panels = DockItem::panel(Arc::new(database_panel));
 
         let results_panel = cx.new(|cx| {
@@ -315,6 +325,28 @@ impl Workspace {
     ) {
         self.editor_tabs.update(cx, |editor_tabs, cx| {
             editor_tabs.open_file_at_position(path, line_number, column, window, cx);
+        });
+    }
+
+    fn open_diagram(
+        &mut self,
+        event: ShowDiagramEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cache_key = schema_cache::cache_key(&event.config);
+        let Ok(Some(schema)) = schema_cache::load(&cache_key) else {
+            window.open_alert_dialog(cx, |alert, _, _| {
+                alert
+                    .title("Schema Not Cached")
+                    .child("Refresh schema before showing a diagram.")
+            });
+            return;
+        };
+
+        let model = DiagramModel::build(&event.config, &schema, event.scope);
+        self.editor_tabs.update(cx, |tabs, cx| {
+            tabs.open_diagram(model, window, cx);
         });
     }
 
