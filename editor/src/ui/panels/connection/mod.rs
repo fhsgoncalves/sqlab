@@ -1849,6 +1849,15 @@ impl ConnectionConfigForm {
         set_input_value(&self.database, parsed.database, window, cx);
         set_input_value(&self.schema, parsed.schema, window, cx);
         set_input_value(&self.query_string, parsed.query_string, window, cx);
+
+        let config = self.config(cx);
+        let sanitized_url = connection_url_from_config(&config);
+        self.connection_url.update(cx, |input, cx| {
+            if input.value().as_ref() != sanitized_url {
+                input.set_value(sanitized_url, window, cx);
+            }
+        });
+
         cx.notify();
     }
 }
@@ -1982,18 +1991,10 @@ fn connection_url_from_config(config: &DataSourceConfig) -> String {
         Database::MySql => "mysql",
         Database::SQLite => unreachable!(),
     };
-    let auth = if config.user.is_empty() && config.password.is_empty() {
+    let auth = if config.user.is_empty() {
         String::new()
     } else {
-        format!(
-            "{}{}@",
-            percent_encode_component(&config.user),
-            if config.password.is_empty() {
-                String::new()
-            } else {
-                format!(":{}", percent_encode_component(&config.password))
-            }
-        )
+        format!("{}@", percent_encode_component(&config.user))
     };
     let mut query_parts = Vec::new();
     if !config.schema.is_empty() {
@@ -2207,15 +2208,48 @@ mod tests {
         let url = connection_url_from_config(&config);
         assert_eq!(
             url,
-            "postgresql://app%20user:p%40ss@localhost:5432/app?schema=analytics&sslmode=require&connect_timeout=5"
+            "postgresql://app%20user@localhost:5432/app?schema=analytics&sslmode=require&connect_timeout=5"
         );
 
         let parsed = parse_connection_url(&url).unwrap();
         assert_eq!(parsed.db_type, Database::Postgres);
         assert_eq!(parsed.user, "app user");
-        assert_eq!(parsed.password, "p@ss");
+        assert_eq!(parsed.password, "");
         assert_eq!(parsed.schema, "analytics");
         assert_eq!(parsed.query_string, "sslmode=require connect_timeout=5");
+    }
+
+    #[test]
+    fn parses_password_from_url_but_does_not_reflect_it_back() {
+        let url_with_password =
+            "postgresql://myuser:secret123@db.example.com:5432/mydb?schema=public";
+        let parsed = parse_connection_url(url_with_password).unwrap();
+        assert_eq!(parsed.db_type, Database::Postgres);
+        assert_eq!(parsed.user, "myuser");
+        assert_eq!(parsed.password, "secret123");
+        assert_eq!(parsed.host, "db.example.com");
+        assert_eq!(parsed.port, 5432);
+        assert_eq!(parsed.database, "mydb");
+        assert_eq!(parsed.schema, "public");
+
+        let config = DataSourceConfig {
+            name: "test".into(),
+            db_type: Database::Postgres,
+            host: parsed.host,
+            port: parsed.port,
+            user: parsed.user,
+            password: parsed.password,
+            database: parsed.database,
+            schema: parsed.schema,
+            query_string: parsed.query_string,
+        };
+
+        let sanitized_url = connection_url_from_config(&config);
+        assert!(!sanitized_url.contains("secret123"));
+        assert_eq!(
+            sanitized_url,
+            "postgresql://myuser@db.example.com:5432/mydb?schema=public"
+        );
     }
 
     #[test]
