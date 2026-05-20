@@ -1005,6 +1005,9 @@ fn cell_is_null(row: &Row, ix: usize, ty: &Type) -> bool {
             .unwrap_or(None)
             .is_none();
     }
+    if let Ok(raw) = row.try_get::<_, Option<&[u8]>>(ix) {
+        return raw.is_none();
+    }
     false
 }
 
@@ -1218,10 +1221,14 @@ fn cell_to_string(row: &Row, ix: usize, ty: &Type) -> Result<String, DataSourceE
         return Ok(value.unwrap_or_default());
     }
 
-    Ok(row
-        .try_get::<_, Option<String>>(ix)
-        .unwrap_or_else(|_| Some(format!("<{}>", ty.name())))
-        .unwrap_or_default())
+    if let Ok(raw) = row.try_get::<_, Option<&[u8]>>(ix) {
+        return Ok(raw
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .unwrap_or_default()
+            .to_string());
+    }
+
+    Ok(format!("<{}>", ty.name()))
 }
 
 fn array_cell_to_string<T, F>(row: &Row, ix: usize, format: F) -> String
