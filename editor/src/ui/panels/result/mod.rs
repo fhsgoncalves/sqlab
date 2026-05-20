@@ -27,8 +27,8 @@ use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 use sqlab_drivers_core::{
-    ColumnMetadata, DataSourceConfig, DataSourceError, QueryResult, TableEditBatch, TableEditRow,
-    TableEditValue, TableInfo, TableKind,
+    ColumnMetadata, DataSourceConfig, DataSourceError, Database, QueryResult, TableEditBatch,
+    TableEditRow, TableEditValue, TableInfo, TableKind,
 };
 
 actions!(
@@ -1833,14 +1833,33 @@ fn find_schema_table<'a>(
     config: &DataSourceConfig,
     table_ref: &ParsedTableRef,
 ) -> Option<&'a TableInfo> {
-    tables.iter().find(|table| {
-        table.name == table_ref.table
-            && table_ref
-                .schema
-                .as_ref()
-                .map(|schema| table.schema == *schema)
-                .unwrap_or_else(|| table.schema == config.schema)
-    })
+    if let Some(schema) = &table_ref.schema {
+        return tables
+            .iter()
+            .find(|table| table.name == table_ref.table && table.schema == *schema);
+    }
+
+    if !config.schema.is_empty() {
+        return tables
+            .iter()
+            .find(|table| table.name == table_ref.table && table.schema == config.schema);
+    }
+
+    let matches = tables
+        .iter()
+        .filter(|table| table.name == table_ref.table)
+        .collect::<Vec<_>>();
+    if config.db_type == Database::Postgres {
+        if let Some(table) = matches.iter().find(|table| table.schema == "public") {
+            return Some(table);
+        }
+    }
+
+    if matches.len() == 1 {
+        Some(matches[0])
+    } else {
+        None
+    }
 }
 
 fn single_table_select(query: &str) -> Option<ParsedTableRef> {
@@ -2540,6 +2559,51 @@ mod tests {
             single_table_select("select * from (select * from users) u"),
             None
         );
+    }
+
+    #[test]
+    fn resolves_unqualified_tables_with_blank_schema() {
+        let tables = vec![
+            table_info("analytics", "users"),
+            table_info("public", "users"),
+            table_info("analytics", "events"),
+        ];
+        let config = DataSourceConfig {
+            db_type: Database::Postgres,
+            schema: String::new(),
+            ..DataSourceConfig::default()
+        };
+
+        let users = find_schema_table(
+            &tables,
+            &config,
+            &ParsedTableRef {
+                schema: None,
+                table: "users".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(users.schema, "public");
+
+        let events = find_schema_table(
+            &tables,
+            &config,
+            &ParsedTableRef {
+                schema: None,
+                table: "events".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(events.schema, "analytics");
+    }
+
+    fn table_info(schema: &str, name: &str) -> TableInfo {
+        TableInfo {
+            schema: schema.into(),
+            name: name.into(),
+            kind: TableKind::Table,
+            columns: Vec::new(),
+        }
     }
 
     #[test]

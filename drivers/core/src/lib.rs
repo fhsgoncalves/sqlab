@@ -71,6 +71,58 @@ impl std::fmt::Display for Database {
     }
 }
 
+pub fn display_data_type(db_type: Database, data_type: impl AsRef<str>) -> String {
+    match db_type {
+        Database::Postgres => display_postgres_data_type(data_type.as_ref()),
+        Database::MySql | Database::SQLite => data_type.as_ref().to_string(),
+    }
+}
+
+fn display_postgres_data_type(data_type: &str) -> String {
+    let mut base = data_type.trim();
+    let mut array_suffix = String::new();
+    while let Some(stripped) = base.strip_suffix("[]") {
+        base = stripped.trim_end();
+        array_suffix.push_str("[]");
+    }
+
+    let normalized_base = normalize_postgres_timestamp_type(base);
+    if array_suffix.is_empty() && normalized_base.as_deref() == Some(data_type) {
+        data_type.to_string()
+    } else {
+        format!(
+            "{}{}",
+            normalized_base.unwrap_or_else(|| base.to_string()),
+            array_suffix
+        )
+    }
+}
+
+fn normalize_postgres_timestamp_type(data_type: &str) -> Option<String> {
+    let lower = data_type.to_ascii_lowercase();
+    let suffix = lower.strip_prefix("timestamp")?;
+
+    if suffix == " with time zone" {
+        return Some("timestamptz".to_string());
+    }
+    if suffix == " without time zone" {
+        return Some("timestamp".to_string());
+    }
+
+    if let Some(precision) = suffix.strip_suffix(" with time zone") {
+        if precision.starts_with('(') && precision.ends_with(')') {
+            return Some(format!("timestamptz{precision}"));
+        }
+    }
+    if let Some(precision) = suffix.strip_suffix(" without time zone") {
+        if precision.starts_with('(') && precision.ends_with(')') {
+            return Some(format!("timestamp{precision}"));
+        }
+    }
+
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataSourceConfig {
     pub name: String,
@@ -333,5 +385,29 @@ query_string = ""
             toml::from_str(toml).expect("deserialize data source config");
 
         assert!(config.password.is_empty());
+    }
+
+    #[test]
+    fn shortens_postgres_timestamp_type_names_for_display() {
+        assert_eq!(
+            display_data_type(Database::Postgres, "timestamp with time zone"),
+            "timestamptz"
+        );
+        assert_eq!(
+            display_data_type(Database::Postgres, "timestamp without time zone"),
+            "timestamp"
+        );
+        assert_eq!(
+            display_data_type(Database::Postgres, "timestamp(3) with time zone"),
+            "timestamptz(3)"
+        );
+        assert_eq!(
+            display_data_type(Database::Postgres, "timestamp(6) without time zone[]"),
+            "timestamp(6)[]"
+        );
+        assert_eq!(
+            display_data_type(Database::MySql, "timestamp with time zone"),
+            "timestamp with time zone"
+        );
     }
 }

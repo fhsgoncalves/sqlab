@@ -1,6 +1,6 @@
 use sqlab_drivers_core::{
     ColumnInfo, Database, DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, SchemaInfo,
-    SequenceInfo, TableInfo, TableKind, TriggerInfo,
+    SequenceInfo, TableInfo, TableKind, TriggerInfo, display_data_type,
 };
 
 pub fn schema_to_rows(
@@ -190,7 +190,7 @@ pub fn rows_to_schema(
         {
             table.columns.push(ColumnInfo {
                 name: c.name,
-                data_type: c.data_type,
+                data_type: display_data_type(db_type, c.data_type),
                 nullable: c.nullable != 0,
                 ordinal: c.ordinal,
                 is_pk: c.is_pk != 0,
@@ -208,7 +208,7 @@ pub fn rows_to_schema(
             schema: f.schema_name,
             name: f.name,
             arguments: f.arguments,
-            return_type: f.return_type.unwrap_or_default(),
+            return_type: display_data_type(db_type, f.return_type.unwrap_or_default()),
             definition: f.definition,
             language: f.language.unwrap_or_else(|| "unknown".to_string()),
             body: f.body,
@@ -222,7 +222,7 @@ pub fn rows_to_schema(
         .map(|s| SequenceInfo {
             schema: s.schema_name,
             name: s.name,
-            data_type: s.data_type.unwrap_or_default(),
+            data_type: display_data_type(db_type, s.data_type.unwrap_or_default()),
             start_value: s.start_value.unwrap_or_default(),
             min_value: s.min_value.unwrap_or_default(),
             max_value: s.max_value.unwrap_or_default(),

@@ -13,7 +13,7 @@ use rustls::ClientConfig;
 use sqlab_drivers_core::{
     ColumnInfo, ColumnMetadata, DataSource, DataSourceConfig, DataSourceError, Database,
     DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
-    TableEditBatch, TableEditValue, TableInfo, TableKind, TriggerInfo,
+    TableEditBatch, TableEditValue, TableInfo, TableKind, TriggerInfo, display_data_type,
 };
 use sqlparser::ast::Statement;
 use sqlparser::dialect::PostgreSqlDialect;
@@ -116,7 +116,7 @@ impl PostgresDataSource {
                     .iter()
                     .map(|column| ColumnMetadata {
                         name: column.name().to_string(),
-                        data_type: column.type_().name().to_string(),
+                        data_type: display_data_type(Database::Postgres, column.type_().name()),
                         is_pk: false,
                         is_fk: false,
                     })
@@ -460,7 +460,7 @@ impl PostgresDataSource {
 
             let column = ColumnInfo {
                 name: column_name,
-                data_type: row.get("data_type"),
+                data_type: display_data_type(Database::Postgres, row.get::<_, String>("data_type")),
                 nullable: !row.get::<_, bool>("attnotnull"),
                 ordinal: i32::from(row.get::<_, i16>("attnum")),
                 is_pk,
@@ -493,9 +493,11 @@ impl PostgresDataSource {
                 arguments: row
                     .get::<_, Option<String>>("arguments")
                     .unwrap_or_default(),
-                return_type: row
-                    .get::<_, Option<String>>("return_type")
-                    .unwrap_or_default(),
+                return_type: display_data_type(
+                    Database::Postgres,
+                    row.get::<_, Option<String>>("return_type")
+                        .unwrap_or_default(),
+                ),
                 definition: row.get("definition"),
                 language: row
                     .get::<_, Option<String>>("language")
@@ -511,7 +513,7 @@ impl PostgresDataSource {
             .map(|row| SequenceInfo {
                 schema: row.get("schema_name"),
                 name: row.get("sequence_name"),
-                data_type: row.get("data_type"),
+                data_type: display_data_type(Database::Postgres, row.get::<_, String>("data_type")),
                 start_value: row.get("start_value"),
                 min_value: row.get("min_value"),
                 max_value: row.get("max_value"),

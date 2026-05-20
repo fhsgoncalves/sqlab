@@ -12,18 +12,26 @@ use sqlab_drivers_core::{
 use sqlparser::ast::Statement;
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
+use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 
 const DEFAULT_ROW_LIMIT: usize = 1000;
 
 pub struct MySqlDataSource {
     config: DataSourceConfig,
+    runtime: Arc<Runtime>,
     conn: Option<Arc<Mutex<Conn>>>,
 }
 
 impl MySqlDataSource {
-    pub fn new(config: DataSourceConfig) -> Self {
-        Self { config, conn: None }
+    pub fn new(config: DataSourceConfig) -> Result<Self, DataSourceError> {
+        let runtime =
+            Arc::new(Runtime::new().map_err(|e| DataSourceError::ConnectionFailed(e.to_string()))?);
+        Ok(Self {
+            config,
+            runtime,
+            conn: None,
+        })
     }
 
     fn schema_filter(&self) -> String {
@@ -64,7 +72,7 @@ impl MySqlDataSource {
         builder
     }
 
-    pub async fn connect_async(&mut self) -> Result<(), DataSourceError> {
+    async fn connect_async(&mut self) -> Result<(), DataSourceError> {
         let conn = Conn::new(self.opts())
             .await
             .map_err(|e| DataSourceError::ConnectionFailed(e.to_string()))?;
@@ -72,7 +80,7 @@ impl MySqlDataSource {
         Ok(())
     }
 
-    pub async fn disconnect_async(&mut self) -> Result<(), DataSourceError> {
+    async fn disconnect_async(&mut self) -> Result<(), DataSourceError> {
         if let Some(conn) = self.conn.take() {
             let conn = Arc::try_unwrap(conn)
                 .map_err(|_| DataSourceError::ConnectionFailed("MySQL connection is busy".into()))?
@@ -84,7 +92,7 @@ impl MySqlDataSource {
         Ok(())
     }
 
-    pub async fn execute_query_async(
+    async fn execute_query_async(
         &self,
         query: &str,
         apply_limit: bool,
@@ -137,22 +145,14 @@ impl MySqlDataSource {
         })
     }
 
-    pub async fn introspect_schema_async(&self) -> Result<DatabaseSchema, DataSourceError> {
+    async fn introspect_schema_async(&self) -> Result<DatabaseSchema, DataSourceError> {
         let conn = self.connection()?;
         let mut conn = conn.lock().await;
         let configured_schema = self.schema_filter();
-        let schema_predicate = if configured_schema.is_empty() {
-            "schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')"
-                .to_string()
-        } else {
-            format!("schema_name = {}", quote_mysql_string(&configured_schema))
-        };
-        let table_schema_predicate = if configured_schema.is_empty() {
-            "table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')"
-                .to_string()
-        } else {
-            format!("table_schema = {}", quote_mysql_string(&configured_schema))
-        };
+        let schema_predicate = mysql_schema_predicate("schema_name", &configured_schema);
+        let table_schema_predicate = mysql_schema_predicate("table_schema", &configured_schema);
+        let trigger_schema_predicate = mysql_schema_predicate("trigger_schema", &configured_schema);
+        let routine_schema_predicate = mysql_schema_predicate("routine_schema", &configured_schema);
 
         let schemas = conn
             .query::<(String, Option<String>), _>(format!(
@@ -220,7 +220,7 @@ impl MySqlDataSource {
                 "SELECT trigger_schema, event_object_table, trigger_name,
                         event_manipulation, action_timing, action_statement
                  FROM information_schema.triggers
-                 WHERE {schema_predicate}
+                 WHERE {trigger_schema_predicate}
                  ORDER BY trigger_schema, event_object_table, trigger_name"
             ))
             .await
@@ -241,7 +241,7 @@ impl MySqlDataSource {
                 "SELECT routine_schema, routine_name, routine_type, dtd_identifier,
                         routine_definition, external_language, definer
                  FROM information_schema.routines
-                 WHERE {schema_predicate}
+                 WHERE {routine_schema_predicate}
                  ORDER BY routine_schema, routine_name"
             ))
             .await
@@ -291,10 +291,7 @@ impl MySqlDataSource {
         })
     }
 
-    pub async fn apply_table_edits_async(
-        &self,
-        batch: TableEditBatch,
-    ) -> Result<(), DataSourceError> {
+    async fn apply_table_edits_async(&self, batch: TableEditBatch) -> Result<(), DataSourceError> {
         if batch.rows.is_empty() {
             return Ok(());
         }
@@ -326,6 +323,33 @@ impl MySqlDataSource {
             .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
         Ok(())
     }
+
+    pub fn connect_blocking(&mut self) -> Result<(), DataSourceError> {
+        let runtime = self.runtime.clone();
+        runtime.block_on(self.connect_async())
+    }
+
+    pub fn disconnect_blocking(&mut self) -> Result<(), DataSourceError> {
+        let runtime = self.runtime.clone();
+        runtime.block_on(self.disconnect_async())
+    }
+
+    pub fn execute_query_blocking(
+        &self,
+        query: &str,
+        apply_limit: bool,
+    ) -> Result<QueryResult, DataSourceError> {
+        self.runtime
+            .block_on(self.execute_query_async(query, apply_limit))
+    }
+
+    pub fn introspect_schema_blocking(&self) -> Result<DatabaseSchema, DataSourceError> {
+        self.runtime.block_on(self.introspect_schema_async())
+    }
+
+    pub fn apply_table_edits_blocking(&self, batch: TableEditBatch) -> Result<(), DataSourceError> {
+        self.runtime.block_on(self.apply_table_edits_async(batch))
+    }
 }
 
 #[async_trait]
@@ -347,30 +371,30 @@ impl DataSource for MySqlDataSource {
     }
 
     async fn connect(&mut self) -> Result<(), DataSourceError> {
-        self.connect_async().await
+        self.connect_blocking()
     }
 
     async fn disconnect(&mut self) -> Result<(), DataSourceError> {
-        self.disconnect_async().await
+        self.disconnect_blocking()
     }
 
     async fn execute_query(&self, query: &str) -> Result<QueryResult, DataSourceError> {
-        self.execute_query_async(query, true).await
+        self.execute_query_blocking(query, true)
     }
 
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError> {
-        self.introspect_schema_async().await
+        self.introspect_schema_blocking()
     }
 
     async fn apply_table_edits(&self, batch: TableEditBatch) -> Result<(), DataSourceError> {
-        self.apply_table_edits_async(batch).await
+        self.apply_table_edits_blocking(batch)
     }
 }
 
 pub fn create_mysql_data_source(
     config: &DataSourceConfig,
 ) -> Result<Box<dyn DataSource>, DataSourceError> {
-    Ok(Box::new(MySqlDataSource::new(config.clone())))
+    Ok(Box::new(MySqlDataSource::new(config.clone())?))
 }
 
 type MySqlColumnRow = (
@@ -492,11 +516,13 @@ fn group_indexes(rows: Vec<MySqlIndexRow>) -> Vec<IndexInfo> {
         {
             existing.columns.push(column);
         } else {
+            let is_primary = row.2 == "PRIMARY";
+            let name = row.2;
             indexes.push(IndexInfo {
                 schema: row.0,
                 table_name: row.1,
-                is_primary: row.2 == "PRIMARY",
-                name: row.2,
+                is_primary,
+                name,
                 is_unique: row.3 == 0,
                 columns: vec![column],
             });
@@ -628,6 +654,14 @@ fn quote_mysql_string(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
 }
 
+fn mysql_schema_predicate(column: &str, configured_schema: &str) -> String {
+    if configured_schema.is_empty() {
+        format!("{column} NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')")
+    } else {
+        format!("{column} = {}", quote_mysql_string(configured_schema))
+    }
+}
+
 fn mysql_literal(value: &TableEditValue) -> String {
     let Some(raw_value) = value.value.as_ref() else {
         return "NULL".to_string();
@@ -704,5 +738,17 @@ mod tests {
         let keys = group_foreign_keys(rows);
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].source_columns, vec!["org_id", "org_tenant"]);
+    }
+
+    #[test]
+    fn builds_schema_predicate_for_mysql_information_schema_column() {
+        assert_eq!(
+            mysql_schema_predicate("trigger_schema", "app"),
+            "trigger_schema = 'app'"
+        );
+        assert_eq!(
+            mysql_schema_predicate("routine_schema", ""),
+            "routine_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')"
+        );
     }
 }

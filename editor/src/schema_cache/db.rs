@@ -27,6 +27,21 @@ pub fn with_conn<T>(
 }
 
 fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Migration: recreate indexes table with table_name in primary key
+    let needs_migration: bool = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='indexes'",
+            [],
+            |row| {
+                let sql: String = row.get(0)?;
+                Ok(!sql.contains("table_name, name)"))
+            },
+        )
+        .unwrap_or(false);
+    if needs_migration {
+        conn.execute_batch("DROP TABLE IF EXISTS indexes;")?;
+    }
+
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -103,7 +118,7 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             is_unique INTEGER NOT NULL,
             is_primary INTEGER NOT NULL,
             columns TEXT NOT NULL,
-            PRIMARY KEY (connection_key, schema_name, name)
+            PRIMARY KEY (connection_key, schema_name, table_name, name)
         );
 
         CREATE TABLE IF NOT EXISTS triggers (

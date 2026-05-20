@@ -2,15 +2,15 @@ use std::collections::HashSet;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, hsla, prelude::FluentBuilder, px, rgb,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Window, div, hsla, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
     dock::{Panel, PanelEvent, PanelState},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem},
     tree::TreeItem,
     v_flex,
@@ -45,82 +45,6 @@ impl EventEmitter<ShowDiagramEvent> for ConnectionPanel {}
 
 const DATABASE_OPTIONS: [Database; 3] = [Database::Postgres, Database::MySql, Database::SQLite];
 
-struct DatabaseTypePicker {
-    selected: Database,
-    port: Entity<InputState>,
-    schema: Entity<InputState>,
-}
-
-impl DatabaseTypePicker {
-    fn new(selected: Database, port: Entity<InputState>, schema: Entity<InputState>) -> Self {
-        Self {
-            selected,
-            port,
-            schema,
-        }
-    }
-
-    fn select_database(&mut self, database: Database, window: &mut Window, cx: &mut Context<Self>) {
-        let previous = self.selected;
-        if database == previous {
-            return;
-        }
-
-        let previous_port = previous.default_port().to_string();
-        let current_port = self.port.read(cx).value().trim().to_string();
-        if current_port == previous_port {
-            self.port.update(cx, |input, cx| {
-                input.set_value(database.default_port().to_string(), window, cx);
-            });
-        }
-
-        let previous_schema = previous.default_schema();
-        let current_schema = self.schema.read(cx).value().trim().to_string();
-        if current_schema == previous_schema {
-            self.schema.update(cx, |input, cx| {
-                input.set_value(database.default_schema().to_string(), window, cx);
-            });
-        }
-
-        self.selected = database;
-        cx.notify();
-    }
-}
-
-impl Render for DatabaseTypePicker {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.selected;
-        let picker = cx.entity();
-
-        Button::new("database-type-picker")
-            .icon(Icon::new(IconName::File).path(ConnectionPanel::database_icon_path(selected)))
-            .label(database_label(selected))
-            .dropdown_caret(true)
-            .w_full()
-            .dropdown_menu(move |menu, window, _cx| {
-                let mut menu = menu;
-                for database in DATABASE_OPTIONS {
-                    let picker_for_item = picker.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(database_label(database))
-                            .icon(
-                                Icon::new(IconName::File)
-                                    .path(ConnectionPanel::database_icon_path(database)),
-                            )
-                            .checked(database == selected)
-                            .on_click(window.listener_for(
-                                &picker_for_item,
-                                move |this, _, window, cx| {
-                                    this.select_database(database, window, cx);
-                                },
-                            )),
-                    );
-                }
-                menu
-            })
-    }
-}
-
 impl ConnectionPanel {
     pub fn new(
         manager: Entity<DataSourceManager>,
@@ -148,7 +72,9 @@ impl ConnectionPanel {
     }
 
     fn open_create_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_config_dialog(None, DataSourceConfig::default(), window, cx);
+        let mut config = DataSourceConfig::default();
+        config.schema.clear();
+        self.open_config_dialog(None, config, window, cx);
     }
 
     fn open_edit_dialog(
@@ -194,21 +120,7 @@ impl ConnectionPanel {
         cx: &mut Context<Self>,
     ) {
         let manager = self.manager.clone();
-        let name = cx.new(|cx| InputState::new(window, cx).default_value(config.name));
-        let host = cx.new(|cx| InputState::new(window, cx).default_value(config.host));
-        let port = cx.new(|cx| InputState::new(window, cx).default_value(config.port.to_string()));
-        let user = cx.new(|cx| InputState::new(window, cx).default_value(config.user));
-        let password = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(config.password)
-                .masked(true)
-        });
-        let database = cx.new(|cx| InputState::new(window, cx).default_value(config.database));
-        let schema = cx.new(|cx| InputState::new(window, cx).default_value(config.schema));
-        let db_type =
-            cx.new(|_| DatabaseTypePicker::new(config.db_type, port.clone(), schema.clone()));
-        let query_string =
-            cx.new(|cx| InputState::new(window, cx).default_value(config.query_string));
+        let form = cx.new(|cx| ConnectionConfigForm::new(config, window, cx));
 
         let title = if old_name.is_some() {
             "Edit Data Source"
@@ -221,54 +133,25 @@ impl ConnectionPanel {
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             alert
                 .title(title)
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .w(px(420.))
-                        .child(form_field("Name", Input::new(&name)))
-                        .child(form_field("Type", db_type.clone()))
-                        .child(form_field("Host", Input::new(&host)))
-                        .child(form_field("Port", Input::new(&port)))
-                        .child(form_field("User", Input::new(&user)))
-                        .child(form_field("Password", Input::new(&password)))
-                        .child(form_field("Database", Input::new(&database)))
-                        .child(form_field("Schema", Input::new(&schema)))
-                        .child(form_field("Query String", Input::new(&query_string))),
-                )
+                .width(px(624.))
+                .child(v_flex().gap_2().w_full().child(form.clone()))
                 .show_cancel(true)
                 .on_ok({
                     let manager = manager.clone();
                     let old_name = old_name.clone();
-                    let name_for_ok = name.clone();
-                    let db_type_for_ok = db_type.clone();
-                    let host_for_ok = host.clone();
-                    let port_for_ok = port.clone();
-                    let user_for_ok = user.clone();
-                    let password_for_ok = password.clone();
-                    let database_for_ok = database.clone();
-                    let schema_for_ok = schema.clone();
-                    let query_string_for_ok = query_string.clone();
+                    let form_for_ok = form.clone();
                     let view = view.clone();
                     move |_, window: &mut Window, cx: &mut App| {
-                        let name = name_for_ok.read(cx).value().trim().to_string();
-                        let db_type = db_type_for_ok.read(cx).selected;
-                        let host = host_for_ok.read(cx).value().trim().to_string();
-                        let port = port_for_ok
-                            .read(cx)
-                            .value()
-                            .trim()
-                            .parse::<u16>()
-                            .unwrap_or_else(|_| db_type.default_port());
-                        let user = user_for_ok.read(cx).value().trim().to_string();
-                        let password = password_for_ok.read(cx).value().to_string();
-                        let database = database_for_ok.read(cx).value().trim().to_string();
-                        let schema = schema_for_ok.read(cx).value().trim().to_string();
-                        let query_string = query_string_for_ok.read(cx).value().trim().to_string();
+                        let config = form_for_ok.read(cx).config(cx);
+                        let name = config.name.clone();
+                        let db_type = config.db_type;
 
-                        if name.is_empty() || database.is_empty() {
+                        if name.is_empty() || config.database.is_empty() {
                             return false;
                         }
-                        if db_type != Database::SQLite && (host.is_empty() || user.is_empty()) {
+                        if db_type != Database::SQLite
+                            && (config.host.is_empty() || config.user.is_empty())
+                        {
                             return false;
                         }
 
@@ -278,22 +161,6 @@ impl ConnectionPanel {
                         if duplicate {
                             return false;
                         }
-
-                        let config = DataSourceConfig {
-                            name: name.clone(),
-                            db_type,
-                            host,
-                            port,
-                            user,
-                            password,
-                            database,
-                            schema: if schema.is_empty() {
-                                db_type.default_schema().to_string()
-                            } else {
-                                schema
-                            },
-                            query_string,
-                        };
 
                         let is_new = old_name.is_none();
                         let save_result = manager.update(cx, |manager, cx| {
@@ -807,17 +674,15 @@ impl ConnectionPanel {
                             TreeItem::new(idxs_id.clone(), SharedString::from("Indexes"));
                         for idx in indexes {
                             let idx_id = format!("{}:idx:{}", idxs_id, idx.name);
-                            let label = format!(
-                                "{}{}",
-                                idx.name,
-                                if idx.is_primary {
-                                    " (primary)"
-                                } else if idx.is_unique {
-                                    " (unique)"
-                                } else {
-                                    ""
-                                }
-                            );
+                            let label = if idx.is_primary {
+                                format!("PK ({})", idx.columns.join(", "))
+                            } else {
+                                format!(
+                                    "{}{}",
+                                    idx.name,
+                                    if idx.is_unique { " (unique)" } else { "" }
+                                )
+                            };
                             idxs_item =
                                 idxs_item.child(TreeItem::new(idx_id, SharedString::from(label)));
                         }
@@ -1387,37 +1252,36 @@ impl Render for ConnectionPanel {
         let active_name = self.manager.read(cx).active_name().map(str::to_string);
         let manager = self.manager.clone();
 
-        let mut children: Vec<gpui::AnyElement> = Vec::new();
+        let mut list_children: Vec<gpui::AnyElement> = Vec::new();
 
         // Header
-        children.push(
-            h_flex()
-                .w_full()
-                .items_center()
-                .justify_between()
-                .pl(px(4.))
-                .pb_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child("Connections"),
-                )
-                .child(
-                    Button::new("add-connection")
-                        .icon(IconName::Plus)
-                        .xsmall()
-                        .ghost()
-                        .tooltip("Add Connection")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_create_dialog(window, cx);
-                        })),
-                )
-                .into_any_element(),
-        );
+        let header = h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .pl(px(4.))
+            .pb_1()
+            .p_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child("Connections"),
+            )
+            .child(
+                Button::new("add-connection")
+                    .icon(IconName::Plus)
+                    .xsmall()
+                    .ghost()
+                    .tooltip("Add Connection")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_create_dialog(window, cx);
+                    })),
+            )
+            .into_any_element();
 
         if configs.is_empty() {
-            children.push(
+            list_children.push(
                 div()
                     .p_2()
                     .text_xs()
@@ -1433,7 +1297,7 @@ impl Render for ConnectionPanel {
             let status = manager.read(cx).status(&config.name);
             let status_color = if is_active {
                 match status {
-                    ConnectionStatus::Connected => rgb(0x16a34a),
+                    ConnectionStatus::Connected => rgb(0xa855f7),
                     ConnectionStatus::Failed => rgb(0xef4444),
                     ConnectionStatus::Idle => rgb(0x9ca3af),
                 }
@@ -1454,7 +1318,7 @@ impl Render for ConnectionPanel {
             // Connection row
             let row_name_for_active = row_name.clone();
             let row_name_for_expand = row_name.clone();
-            children.push(
+            list_children.push(
                 h_flex()
                     .id(format!("connection-row-{}", row_name))
                     .w_full()
@@ -1575,7 +1439,7 @@ impl Render for ConnectionPanel {
                             (label.clone(), None)
                         };
 
-                        children.push(
+                        list_children.push(
                             div()
                                 .id(id.clone())
                                 .min_w_full()
@@ -1688,7 +1552,7 @@ impl Render for ConnectionPanel {
                         }
                         _ => "Schema not cached. Click Refresh to load.",
                     };
-                    children.push(
+                    list_children.push(
                         div()
                             .pl(px(32.))
                             .py_1()
@@ -1815,15 +1679,18 @@ impl Render for ConnectionPanel {
                     }
                 }),
             )
+            .child(header)
             .child(
                 v_flex()
                     .id("connection-panel-inner")
-                    .children(children)
+                    .flex_1()
+                    .w_full()
+                    .overflow_y_scroll()
+                    .children(list_children)
                     .text_sm()
                     .p_1()
                     .min_w_full(),
             )
-            .overflow_scroll()
     }
 }
 
@@ -1833,11 +1700,539 @@ impl Focusable for ConnectionPanel {
     }
 }
 
+struct ConnectionConfigForm {
+    selected_db_type: Database,
+    advanced_open: bool,
+    name: Entity<InputState>,
+    host: Entity<InputState>,
+    port: Entity<InputState>,
+    user: Entity<InputState>,
+    password: Entity<InputState>,
+    database: Entity<InputState>,
+    schema: Entity<InputState>,
+    query_string: Entity<InputState>,
+    connection_url: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl ConnectionConfigForm {
+    fn new(config: DataSourceConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let connection_url_value = connection_url_from_config(&config);
+        let name = cx.new(|cx| InputState::new(window, cx).default_value(config.name));
+        let host = cx.new(|cx| InputState::new(window, cx).default_value(config.host));
+        let port = cx.new(|cx| InputState::new(window, cx).default_value(config.port.to_string()));
+        let user = cx.new(|cx| InputState::new(window, cx).default_value(config.user));
+        let password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(config.password)
+                .masked(true)
+        });
+        let database = cx.new(|cx| InputState::new(window, cx).default_value(config.database));
+        let schema = cx.new(|cx| InputState::new(window, cx).default_value(config.schema));
+        let query_string =
+            cx.new(|cx| InputState::new(window, cx).default_value(config.query_string));
+        let connection_url =
+            cx.new(|cx| InputState::new(window, cx).default_value(connection_url_value));
+
+        let mut subscriptions = Vec::new();
+        for input in [
+            host.clone(),
+            port.clone(),
+            user.clone(),
+            password.clone(),
+            database.clone(),
+            schema.clone(),
+            query_string.clone(),
+        ] {
+            subscriptions.push(cx.subscribe_in(&input, window, {
+                move |this: &mut Self, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        this.sync_url_from_fields(window, cx);
+                    }
+                }
+            }));
+        }
+
+        subscriptions.push(cx.subscribe_in(&connection_url, window, {
+            move |this: &mut Self, url, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let value = url.read(cx).value().to_string();
+                    this.apply_connection_url(&value, window, cx);
+                }
+            }
+        }));
+
+        Self {
+            selected_db_type: config.db_type,
+            advanced_open: false,
+            name,
+            host,
+            port,
+            user,
+            password,
+            database,
+            schema,
+            query_string,
+            connection_url,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn config(&self, cx: &App) -> DataSourceConfig {
+        let db_type = self.selected_db_type;
+        DataSourceConfig {
+            name: self.name.read(cx).value().trim().to_string(),
+            db_type,
+            host: self.host.read(cx).value().trim().to_string(),
+            port: self
+                .port
+                .read(cx)
+                .value()
+                .trim()
+                .parse::<u16>()
+                .unwrap_or_else(|_| db_type.default_port()),
+            user: self.user.read(cx).value().trim().to_string(),
+            password: self.password.read(cx).value().to_string(),
+            database: self.database.read(cx).value().trim().to_string(),
+            schema: self.schema.read(cx).value().trim().to_string(),
+            query_string: self.query_string.read(cx).value().trim().to_string(),
+        }
+    }
+
+    fn select_database(&mut self, database: Database, window: &mut Window, cx: &mut Context<Self>) {
+        let previous = self.selected_db_type;
+        if database == previous {
+            return;
+        }
+
+        let previous_port = previous.default_port().to_string();
+        let current_port = self.port.read(cx).value().trim().to_string();
+        if current_port == previous_port {
+            self.port.update(cx, |input, cx| {
+                input.set_value(database.default_port().to_string(), window, cx);
+            });
+        }
+
+        let previous_schema = previous.default_schema();
+        let current_schema = self.schema.read(cx).value().trim().to_string();
+        if !current_schema.is_empty() && current_schema == previous_schema {
+            self.schema.update(cx, |input, cx| {
+                input.set_value(database.default_schema().to_string(), window, cx);
+            });
+        }
+
+        self.selected_db_type = database;
+        self.sync_url_from_fields(window, cx);
+        cx.notify();
+    }
+
+    fn sync_url_from_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let config = self.config(cx);
+        let url = connection_url_from_config(&config);
+        self.connection_url.update(cx, |input, cx| {
+            if input.value().as_ref() != url {
+                input.set_value(url, window, cx);
+            }
+        });
+    }
+
+    fn apply_connection_url(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(parsed) = parse_connection_url(value) else {
+            return;
+        };
+
+        self.selected_db_type = parsed.db_type;
+        set_input_value(&self.host, parsed.host, window, cx);
+        set_input_value(&self.port, parsed.port.to_string(), window, cx);
+        set_input_value(&self.user, parsed.user, window, cx);
+        set_input_value(&self.password, parsed.password, window, cx);
+        set_input_value(&self.database, parsed.database, window, cx);
+        set_input_value(&self.schema, parsed.schema, window, cx);
+        set_input_value(&self.query_string, parsed.query_string, window, cx);
+        cx.notify();
+    }
+}
+
+impl Render for ConnectionConfigForm {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.selected_db_type;
+        let form = cx.entity();
+        let advanced_open = self.advanced_open;
+
+        let file_database = selected == Database::SQLite;
+
+        v_flex()
+            .gap_2()
+            .child(form_field("Name", Input::new(&self.name)))
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .mt_1()
+                    .pt_2(),
+            )
+            .child(form_field(
+                "Connection URL",
+                Input::new(&self.connection_url),
+            ))
+            .child(form_field(
+                "Type",
+                Button::new("database-type-picker")
+                    .icon(
+                        Icon::new(IconName::File)
+                            .path(ConnectionPanel::database_icon_path(selected)),
+                    )
+                    .label(database_label(selected))
+                    .dropdown_caret(true)
+                    .w_full()
+                    .dropdown_menu(move |menu, window, _cx| {
+                        let mut menu = menu;
+                        for database in DATABASE_OPTIONS {
+                            let form_for_item = form.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(database_label(database))
+                                    .icon(
+                                        Icon::new(IconName::File)
+                                            .path(ConnectionPanel::database_icon_path(database)),
+                                    )
+                                    .checked(database == selected)
+                                    .on_click(window.listener_for(
+                                        &form_for_item,
+                                        move |this, _, window, cx| {
+                                            this.select_database(database, window, cx);
+                                        },
+                                    )),
+                            );
+                        }
+                        menu
+                    }),
+            ))
+            .when(file_database, |this| {
+                this.child(form_field("File location", Input::new(&self.database)))
+            })
+            .when(!file_database, |this| {
+                this.child(form_field("Host", Input::new(&self.host)))
+                    .child(form_field("Port", Input::new(&self.port)))
+                    .child(form_field("User", Input::new(&self.user)))
+                    .child(form_field("Password", Input::new(&self.password)))
+                    .child(form_field("Database", Input::new(&self.database)))
+            })
+            .child(
+                v_flex()
+                    .gap_2()
+                    .pt_1()
+                    .child(
+                        Button::new("advanced-options")
+                            .icon(if advanced_open {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .label("Advanced options")
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.advanced_open = !this.advanced_open;
+                                cx.notify();
+                            })),
+                    )
+                    .when(advanced_open, |this| {
+                        this.child(form_field("Schema", Input::new(&self.schema)))
+                            .child(form_field("Query String", Input::new(&self.query_string)))
+                    }),
+            )
+    }
+}
+
+fn set_input_value(
+    input: &Entity<InputState>,
+    value: String,
+    window: &mut Window,
+    cx: &mut Context<ConnectionConfigForm>,
+) {
+    input.update(cx, |input, cx| {
+        if input.value().as_ref() != value {
+            input.set_value(value, window, cx);
+        }
+    });
+}
+
+struct ParsedConnectionUrl {
+    db_type: Database,
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: String,
+    schema: String,
+    query_string: String,
+}
+
+fn connection_url_from_config(config: &DataSourceConfig) -> String {
+    if config.db_type == Database::SQLite {
+        let database = if config.database.is_empty() {
+            String::new()
+        } else {
+            percent_encode_path(&config.database)
+        };
+        return format!("sqlite://{}", database);
+    }
+
+    let scheme = match config.db_type {
+        Database::Postgres => "postgresql",
+        Database::MySql => "mysql",
+        Database::SQLite => unreachable!(),
+    };
+    let auth = if config.user.is_empty() && config.password.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{}{}@",
+            percent_encode_component(&config.user),
+            if config.password.is_empty() {
+                String::new()
+            } else {
+                format!(":{}", percent_encode_component(&config.password))
+            }
+        )
+    };
+    let mut query_parts = Vec::new();
+    if !config.schema.is_empty() {
+        query_parts.push(format!(
+            "schema={}",
+            percent_encode_component(&config.schema)
+        ));
+    }
+    if !config.query_string.trim().is_empty() {
+        query_parts.push(query_string_for_url(&config.query_string));
+    }
+    let query = if query_parts.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", query_parts.join("&"))
+    };
+
+    format!(
+        "{}://{}{}:{}/{}{}",
+        scheme,
+        auth,
+        config.host,
+        config.port,
+        percent_encode_component(&config.database),
+        query
+    )
+}
+
+fn parse_connection_url(value: &str) -> Option<ParsedConnectionUrl> {
+    let value = value.trim();
+    let (scheme, rest) = value.split_once("://")?;
+    let db_type = match scheme.to_ascii_lowercase().as_str() {
+        "postgres" | "postgresql" => Database::Postgres,
+        "mysql" => Database::MySql,
+        "sqlite" | "sqlite3" => Database::SQLite,
+        _ => return None,
+    };
+
+    if db_type == Database::SQLite {
+        let (path, query) = split_query(rest);
+        let (schema, query_string) = parse_url_query(db_type, query);
+        return Some(ParsedConnectionUrl {
+            db_type,
+            host: String::new(),
+            port: db_type.default_port(),
+            user: String::new(),
+            password: String::new(),
+            database: percent_decode(path),
+            schema,
+            query_string,
+        });
+    }
+
+    let (without_query, query) = split_query(rest);
+    let (authority, path) = without_query.split_once('/').unwrap_or((without_query, ""));
+    let (auth, host_port) = authority
+        .rsplit_once('@')
+        .map(|(auth, host_port)| (Some(auth), host_port))
+        .unwrap_or((None, authority));
+    let (user, password) = auth
+        .map(|auth| {
+            auth.split_once(':')
+                .map(|(user, password)| (percent_decode(user), percent_decode(password)))
+                .unwrap_or_else(|| (percent_decode(auth), String::new()))
+        })
+        .unwrap_or_default();
+    let (host, port) = parse_host_port(host_port, db_type.default_port());
+    let (schema, query_string) = parse_url_query(db_type, query);
+
+    Some(ParsedConnectionUrl {
+        db_type,
+        host,
+        port,
+        user,
+        password,
+        database: percent_decode(path),
+        schema,
+        query_string,
+    })
+}
+
+fn split_query(value: &str) -> (&str, &str) {
+    value.split_once('?').unwrap_or((value, ""))
+}
+
+fn parse_host_port(value: &str, default_port: u16) -> (String, u16) {
+    if let Some(rest) = value.strip_prefix('[') {
+        if let Some((host, port_part)) = rest.split_once("]:") {
+            return (
+                host.to_string(),
+                port_part.parse::<u16>().unwrap_or(default_port),
+            );
+        }
+    }
+    value
+        .rsplit_once(':')
+        .filter(|(_, port)| port.chars().all(|ch| ch.is_ascii_digit()))
+        .map(|(host, port)| {
+            (
+                host.to_string(),
+                port.parse::<u16>().unwrap_or(default_port),
+            )
+        })
+        .unwrap_or_else(|| (value.to_string(), default_port))
+}
+
+fn parse_url_query(db_type: Database, query: &str) -> (String, String) {
+    let mut schema = String::new();
+    let mut options = Vec::new();
+    for part in query.split('&').filter(|part| !part.is_empty()) {
+        let (key, value) = part.split_once('=').unwrap_or((part, ""));
+        let decoded_key = percent_decode(key);
+        let decoded_value = percent_decode(value);
+        if decoded_key.eq_ignore_ascii_case("schema") {
+            schema = decoded_value;
+        } else if db_type == Database::Postgres {
+            options.push(format!("{}={}", decoded_key, decoded_value));
+        } else {
+            options.push(format!("{}={}", decoded_key, decoded_value));
+        }
+    }
+
+    let separator = if db_type == Database::Postgres {
+        " "
+    } else {
+        "&"
+    };
+    (schema, options.join(separator))
+}
+
+fn query_string_for_url(query_string: &str) -> String {
+    let trimmed = query_string.trim().trim_start_matches('?');
+    if trimmed.contains('&') {
+        trimmed.to_string()
+    } else {
+        trimmed.split_whitespace().collect::<Vec<_>>().join("&")
+    }
+}
+
+fn percent_encode_component(value: &str) -> String {
+    percent_encode(value, false)
+}
+
+fn percent_encode_path(value: &str) -> String {
+    percent_encode(value, true)
+}
+
+fn percent_encode(value: &str, preserve_slash: bool) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        let ch = byte as char;
+        if ch.is_ascii_alphanumeric()
+            || matches!(ch, '-' | '.' | '_' | '~')
+            || (preserve_slash && ch == '/')
+        {
+            encoded.push(ch);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn percent_decode(value: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut ix = 0;
+    let raw = value.as_bytes();
+    while ix < raw.len() {
+        if raw[ix] == b'%' && ix + 2 < raw.len() {
+            if let Ok(hex) = std::str::from_utf8(&raw[ix + 1..ix + 3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    bytes.push(byte);
+                    ix += 3;
+                    continue;
+                }
+            }
+        }
+        bytes.push(raw[ix]);
+        ix += 1;
+    }
+    String::from_utf8_lossy(&bytes).replace('+', " ")
+}
+
 fn form_field(label: &'static str, input: impl IntoElement) -> impl IntoElement {
-    v_flex()
-        .gap_1()
-        .child(div().text_xs().child(label))
-        .child(input)
+    h_flex()
+        .w_full()
+        .gap_2()
+        .items_center()
+        .child(div().w(px(96.)).flex_none().text_xs().child(label))
+        .child(div().flex_1().child(input))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_and_parses_postgres_connection_url() {
+        let config = DataSourceConfig {
+            name: "local".into(),
+            db_type: Database::Postgres,
+            host: "localhost".into(),
+            port: 5432,
+            user: "app user".into(),
+            password: "p@ss".into(),
+            database: "app".into(),
+            schema: "analytics".into(),
+            query_string: "sslmode=require connect_timeout=5".into(),
+        };
+
+        let url = connection_url_from_config(&config);
+        assert_eq!(
+            url,
+            "postgresql://app%20user:p%40ss@localhost:5432/app?schema=analytics&sslmode=require&connect_timeout=5"
+        );
+
+        let parsed = parse_connection_url(&url).unwrap();
+        assert_eq!(parsed.db_type, Database::Postgres);
+        assert_eq!(parsed.user, "app user");
+        assert_eq!(parsed.password, "p@ss");
+        assert_eq!(parsed.schema, "analytics");
+        assert_eq!(parsed.query_string, "sslmode=require connect_timeout=5");
+    }
+
+    #[test]
+    fn preserves_sqlite_absolute_paths_in_connection_url() {
+        let config = DataSourceConfig {
+            db_type: Database::SQLite,
+            database: "/tmp/app data.sqlite".into(),
+            ..DataSourceConfig::default()
+        };
+
+        let url = connection_url_from_config(&config);
+        assert_eq!(url, "sqlite:///tmp/app%20data.sqlite");
+        assert_eq!(
+            parse_connection_url(&url).unwrap().database,
+            "/tmp/app data.sqlite"
+        );
+    }
 }
 
 fn database_label(database: Database) -> &'static str {
