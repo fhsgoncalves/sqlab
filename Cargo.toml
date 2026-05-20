@@ -1,5 +1,5 @@
 [workspace]
-members = ["editor", "drivers/core", "drivers/postgres"]
+members = ["editor", "drivers/core", "drivers/postgres", "drivers/mysql", "drivers/sqlite"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -15,7 +15,10 @@ tokio-postgres = { version = "0.7", features = ["array-impls", "with-chrono-0_4"
 postgres_rustls = "0.1"
 rustls = "0.23"
 rustls-native-certs = "0.7"
+rustls-pemfile = "2"
 rusqlite = { version = "0.34", features = ["bundled"] }
+mysql_async = { version = "0.36", default-features = false, features = ["default-rustls-ring"] }
+sqlparser = "0.56"
 toml = "0.8"
 
 [profile.dist]

@@ -1198,6 +1198,14 @@ fn is_reserved_token(token: &str, schema: &DatabaseSchema) -> bool {
         return true;
     }
 
+    if schema.db_type == Database::MySql && is_mysql_reserved_token(token) {
+        return true;
+    }
+
+    if schema.db_type == Database::SQLite && is_sqlite_reserved_token(token) {
+        return true;
+    }
+
     false
 }
 
@@ -1299,6 +1307,61 @@ fn is_postgres_reserved_token(token: &str) -> bool {
             | "jsonb_agg"
             | "json_build_object"
             | "jsonb_build_object"
+    )
+}
+
+fn is_mysql_reserved_token(token: &str) -> bool {
+    matches!(
+        token,
+        "database"
+            | "schema"
+            | "show"
+            | "describe"
+            | "explain"
+            | "use"
+            | "replace"
+            | "ignore"
+            | "key"
+            | "primary"
+            | "foreign"
+            | "references"
+            | "index"
+            | "auto_increment"
+            | "unsigned"
+            | "charset"
+            | "collate"
+            | "engine"
+            | "if"
+            | "lock"
+            | "unlock"
+            | "straight_join"
+            | "regexp"
+            | "rlike"
+            | "utc_timestamp"
+    )
+}
+
+fn is_sqlite_reserved_token(token: &str) -> bool {
+    matches!(
+        token,
+        "pragma"
+            | "vacuum"
+            | "explain"
+            | "replace"
+            | "without"
+            | "rowid"
+            | "virtual"
+            | "indexed"
+            | "glob"
+            | "regexp"
+            | "match"
+            | "raise"
+            | "attach"
+            | "detach"
+            | "conflict"
+            | "deferrable"
+            | "deferred"
+            | "immediate"
     )
 }
 

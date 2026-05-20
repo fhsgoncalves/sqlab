@@ -8,12 +8,32 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Database {
     Postgres,
+    MySql,
+    SQLite,
 }
 
 impl Database {
     pub fn as_str(&self) -> &'static str {
         match self {
             Database::Postgres => "postgres",
+            Database::MySql => "mysql",
+            Database::SQLite => "sqlite",
+        }
+    }
+
+    pub fn default_port(&self) -> u16 {
+        match self {
+            Database::Postgres => 5432,
+            Database::MySql => 3306,
+            Database::SQLite => 0,
+        }
+    }
+
+    pub fn default_schema(&self) -> &'static str {
+        match self {
+            Database::Postgres => "public",
+            Database::MySql => "",
+            Database::SQLite => "main",
         }
     }
 }
@@ -30,6 +50,8 @@ impl TryFrom<&str> for Database {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "postgres" => Ok(Database::Postgres),
+            "mysql" => Ok(Database::MySql),
+            "sqlite" => Ok(Database::SQLite),
             _ => Err("unsupported database type"),
         }
     }
@@ -58,9 +80,11 @@ pub struct DataSourceConfig {
     pub host: String,
     #[serde(default = "default_postgres_port")]
     pub port: u16,
+    #[serde(default)]
     pub user: String,
     #[serde(skip)]
     pub password: String,
+    #[serde(default)]
     pub database: String,
     #[serde(default = "default_postgres_schema")]
     pub schema: String,

@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt::Write as FmtWrite;
+use std::io::{BufRead, BufReader, Cursor};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,6 +23,7 @@ use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Client, Row};
 
 const DEFAULT_ROW_LIMIT: usize = 1000;
+const AWS_RDS_GLOBAL_BUNDLE_PEM: &str = include_str!("aws_rds_global_bundle.pem");
 
 pub struct PostgresDataSource {
     config: DataSourceConfig,
@@ -40,7 +42,7 @@ impl PostgresDataSource {
         })
     }
 
-    fn connection_string(&self) -> String {
+    fn connection_string(&self) -> Result<(String, Option<String>), DataSourceError> {
         let base = format!(
             "host={} port={} user={} password={} dbname={}",
             self.config.host,
@@ -49,16 +51,18 @@ impl PostgresDataSource {
             self.config.password,
             self.config.database
         );
-        if self.config.query_string.is_empty() {
-            base
+        let (query_string, ssl_root_cert) = postgres_driver_options(&self.config.query_string)?;
+        if query_string.is_empty() {
+            Ok((base, ssl_root_cert))
         } else {
-            format!("{} {}", base, self.config.query_string)
+            Ok((format!("{} {}", base, query_string), ssl_root_cert))
         }
     }
 
     pub fn connect_blocking(&mut self) -> Result<(), DataSourceError> {
-        let connection_string = self.connection_string();
-        let tls = make_rustls_connector()?;
+        let (connection_string, ssl_root_cert) = self.connection_string()?;
+        let tls =
+            make_rustls_connector(ssl_root_cert.as_deref(), is_aws_rds_host(&self.config.host))?;
 
         let (client, connection) = self
             .runtime
@@ -651,7 +655,10 @@ pub fn create_postgres_data_source(
     Ok(Box::new(PostgresDataSource::new(config.clone())?))
 }
 
-fn make_rustls_connector() -> Result<MakeTlsConnector, DataSourceError> {
+fn make_rustls_connector(
+    ssl_root_cert: Option<&str>,
+    include_aws_rds_roots: bool,
+) -> Result<MakeTlsConnector, DataSourceError> {
     let certs = rustls_native_certs::load_native_certs().map_err(|e| {
         DataSourceError::ConnectionFailed(format!("Failed to load root certs: {}", e))
     })?;
@@ -659,10 +666,213 @@ fn make_rustls_connector() -> Result<MakeTlsConnector, DataSourceError> {
     for cert in certs {
         let _ = root_store.add(cert);
     }
-    let config = ClientConfig::builder()
-        .with_root_certificates(std::sync::Arc::new(root_store))
-        .with_no_client_auth();
+    if include_aws_rds_roots {
+        let mut reader = Cursor::new(AWS_RDS_GLOBAL_BUNDLE_PEM.as_bytes());
+        add_pem_root_certs_from_reader(&mut root_store, &mut reader, "embedded AWS RDS CA bundle")?;
+    }
+    if let Some(path) = ssl_root_cert {
+        add_pem_root_certs(&mut root_store, path)?;
+    }
+    let config = ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| {
+        DataSourceError::ConnectionFailed(format!(
+            "Failed to configure rustls protocol versions: {}",
+            e
+        ))
+    })?
+    .with_root_certificates(std::sync::Arc::new(root_store))
+    .with_no_client_auth();
     Ok(MakeTlsConnector::new(std::sync::Arc::new(config).into()))
+}
+
+fn is_aws_rds_host(host: &str) -> bool {
+    host.split(',').any(|host| {
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        host.ends_with(".rds.amazonaws.com") || host.ends_with(".rds.amazonaws.com.cn")
+    })
+}
+
+fn add_pem_root_certs(
+    root_store: &mut rustls::RootCertStore,
+    path: &str,
+) -> Result<(), DataSourceError> {
+    let file = File::open(path).map_err(|e| {
+        DataSourceError::ConnectionFailed(format!("Failed to open sslrootcert '{}': {}", path, e))
+    })?;
+    let mut reader = BufReader::new(file);
+    add_pem_root_certs_from_reader(root_store, &mut reader, &format!("sslrootcert '{}'", path))
+}
+
+fn add_pem_root_certs_from_reader(
+    root_store: &mut rustls::RootCertStore,
+    reader: &mut dyn BufRead,
+    source: &str,
+) -> Result<(), DataSourceError> {
+    let mut added = 0;
+    for cert in rustls_pemfile::certs(reader) {
+        let cert = cert.map_err(|e| {
+            DataSourceError::ConnectionFailed(format!("Failed to read {}: {}", source, e))
+        })?;
+        root_store.add(cert).map_err(|e| {
+            DataSourceError::ConnectionFailed(format!(
+                "Failed to add certificate from {}: {}",
+                source, e
+            ))
+        })?;
+        added += 1;
+    }
+    if added == 0 {
+        return Err(DataSourceError::ConnectionFailed(format!(
+            "{} did not contain any PEM certificates",
+            source
+        )));
+    }
+    Ok(())
+}
+
+fn postgres_driver_options(
+    query_string: &str,
+) -> Result<(String, Option<String>), DataSourceError> {
+    if query_string.trim().is_empty() {
+        return Ok((String::new(), None));
+    }
+
+    let mut sanitized = Vec::new();
+    let mut ssl_root_cert = None;
+    for (key, value) in parse_postgres_options(query_string)? {
+        match key.as_str() {
+            "sslrootcert" => ssl_root_cert = Some(value),
+            "sslmode" if matches!(value.as_str(), "verify-ca" | "verify-full") => {
+                sanitized.push((key, "require".to_string()));
+            }
+            _ => sanitized.push((key, value)),
+        }
+    }
+
+    Ok((format_postgres_options(&sanitized), ssl_root_cert))
+}
+
+fn parse_postgres_options(input: &str) -> Result<Vec<(String, String)>, DataSourceError> {
+    let mut options = Vec::new();
+    let mut chars = input.char_indices().peekable();
+
+    while let Some((_, ch)) = chars.peek().copied() {
+        if ch.is_whitespace() {
+            chars.next();
+            continue;
+        }
+
+        let key_start = chars.peek().map(|(idx, _)| *idx).unwrap_or(input.len());
+        while let Some((_, ch)) = chars.peek().copied() {
+            if ch == '=' || ch.is_whitespace() {
+                break;
+            }
+            chars.next();
+        }
+        let key_end = chars.peek().map(|(idx, _)| *idx).unwrap_or(input.len());
+        let key = input[key_start..key_end].to_string();
+        if key.is_empty() {
+            return Err(DataSourceError::ConnectionFailed(
+                "Invalid PostgreSQL query string option".to_string(),
+            ));
+        }
+
+        while let Some((_, ch)) = chars.peek().copied() {
+            if ch.is_whitespace() {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        match chars.next() {
+            Some((_, '=')) => {}
+            _ => {
+                return Err(DataSourceError::ConnectionFailed(format!(
+                    "Invalid PostgreSQL query string option '{}': expected '='",
+                    key
+                )));
+            }
+        }
+        while let Some((_, ch)) = chars.peek().copied() {
+            if ch.is_whitespace() {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        let value = if matches!(chars.peek(), Some((_, '\''))) {
+            chars.next();
+            let mut value = String::new();
+            let mut closed = false;
+            while let Some((_, ch)) = chars.next() {
+                match ch {
+                    '\\' => {
+                        if let Some((_, escaped)) = chars.next() {
+                            value.push(escaped);
+                        }
+                    }
+                    '\'' => {
+                        closed = true;
+                        break;
+                    }
+                    _ => value.push(ch),
+                }
+            }
+            if !closed {
+                return Err(DataSourceError::ConnectionFailed(format!(
+                    "Invalid PostgreSQL query string option '{}': unterminated quoted value",
+                    key
+                )));
+            }
+            value
+        } else {
+            let value_start = chars.peek().map(|(idx, _)| *idx).unwrap_or(input.len());
+            while let Some((_, ch)) = chars.peek().copied() {
+                if ch.is_whitespace() {
+                    break;
+                }
+                chars.next();
+            }
+            let value_end = chars.peek().map(|(idx, _)| *idx).unwrap_or(input.len());
+            input[value_start..value_end].to_string()
+        };
+
+        options.push((key, value));
+    }
+
+    Ok(options)
+}
+
+fn format_postgres_options(options: &[(String, String)]) -> String {
+    options
+        .iter()
+        .map(|(key, value)| format!("{}={}", key, quote_postgres_option_value(value)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_postgres_option_value(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| !ch.is_whitespace() && ch != '\'' && ch != '\\')
+    {
+        return value.to_string();
+    }
+
+    let mut quoted = String::from("'");
+    for ch in value.chars() {
+        if matches!(ch, '\'' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(ch);
+    }
+    quoted.push('\'');
+    quoted
 }
 
 fn apply_limit_if_missing(query: &str, limit: usize) -> String {
@@ -1271,7 +1481,13 @@ fn format_postgres_error(e: tokio_postgres::Error) -> String {
         }
         msg
     } else {
-        e.to_string()
+        let mut msg = e.to_string();
+        let mut source = e.source();
+        while let Some(error) = source {
+            let _ = write!(msg, "\nCaused by: {}", error);
+            source = error.source();
+        }
+        msg
     }
 }
 
@@ -1327,6 +1543,50 @@ mod tests {
     fn returns_original_for_non_select_statement() {
         let result = apply_limit_if_missing("DELETE FROM users WHERE id = 1", 1000);
         assert_eq!(result, "DELETE FROM users WHERE id = 1");
+    }
+
+    #[test]
+    fn extracts_sslrootcert_from_postgres_options() {
+        let (options, ssl_root_cert) = postgres_driver_options(
+            "sslmode=verify-full sslrootcert=/tmp/global-bundle.pem connect_timeout=5",
+        )
+        .unwrap();
+
+        assert_eq!(ssl_root_cert.as_deref(), Some("/tmp/global-bundle.pem"));
+        assert_eq!(options, "sslmode=require connect_timeout=5");
+    }
+
+    #[test]
+    fn extracts_quoted_sslrootcert_from_postgres_options() {
+        let (options, ssl_root_cert) = postgres_driver_options(
+            "sslrootcert='/tmp/aws bundle.pem' application_name='sq\\'lab'",
+        )
+        .unwrap();
+
+        assert_eq!(ssl_root_cert.as_deref(), Some("/tmp/aws bundle.pem"));
+        assert_eq!(options, "application_name='sq\\'lab'");
+    }
+
+    #[test]
+    fn reports_invalid_postgres_options() {
+        let error = postgres_driver_options("sslrootcert").unwrap_err();
+
+        assert!(error.to_string().contains("expected '='"));
+    }
+
+    #[test]
+    fn detects_aws_rds_hosts() {
+        assert!(is_aws_rds_host(
+            "my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com"
+        ));
+        assert!(is_aws_rds_host(
+            "my-cluster.cluster-abc123.cn-north-1.rds.amazonaws.com.cn"
+        ));
+        assert!(is_aws_rds_host(
+            "localhost,my-cluster.cluster-abc123.eu-west-1.rds.amazonaws.com"
+        ));
+        assert!(!is_aws_rds_host("localhost"));
+        assert!(!is_aws_rds_host("postgres.example.com"));
     }
 
     #[test]

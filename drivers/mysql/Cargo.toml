@@ -1,0 +1,12 @@
+[package]
+name = "sqlab-drivers-mysql"
+version = "0.1.0"
+edition = "2024"
+description = "MySQL driver for sq/lab"
+
+[dependencies]
+sqlab-drivers-core = { path = "../core" }
+async-trait = { workspace = true }
+mysql_async = { workspace = true }
+sqlparser = { workspace = true }
+tokio = { workspace = true }

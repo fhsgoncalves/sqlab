@@ -1,0 +1,11 @@
+[package]
+name = "sqlab-drivers-sqlite"
+version = "0.1.0"
+edition = "2024"
+description = "SQLite driver for sq/lab"
+
+[dependencies]
+sqlab-drivers-core = { path = "../core" }
+async-trait = { workspace = true }
+rusqlite = { workspace = true, features = ["column_decltype"] }
+sqlparser = { workspace = true }

@@ -22,14 +22,14 @@ use gpui_component::{
     v_flex,
 };
 
+use crate::drivers::create_configured_data_source;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 use sqlab_drivers_core::{
     ColumnMetadata, DataSourceConfig, DataSourceError, QueryResult, TableEditBatch, TableEditRow,
-    TableEditValue, TableInfo, TableKind, manager::create_data_source,
+    TableEditValue, TableInfo, TableKind,
 };
-use sqlab_drivers_postgres::create_postgres_data_source;
 
 actions!(
     results_panel,
@@ -1035,7 +1035,7 @@ impl ResultPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut source = create_data_source(create_postgres_data_source, &config)?;
+                    let mut source = create_configured_data_source(&config)?;
                     source.connect().await?;
                     let result = source.apply_table_edits(batch).await;
                     source.disconnect().await?;

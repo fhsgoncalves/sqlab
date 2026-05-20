@@ -46,8 +46,8 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | Generate and export diagrams | ✅ |
 | In-place data editor | ✅ |
 | Table data editor | ⏳ |
-| MySQL driver | ⏳ |
-| SQLite driver | ⏳ |
+| MySQL driver | ✅ |
+| SQLite driver | ✅ |
 | MSSQL Server driver | ⏳ |
 | DuckDB driver | ⏳ |
 | Databend driver | ⏳ |
@@ -55,8 +55,9 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 ## Supported Databases
 
 - **PostgreSQL** — fully supported via `tokio-postgres` and `rustls`.
-- **MySQL** — planned / coming soon.
-- **SQLite** — planned / coming soon.
+- **MySQL** — fully supported via `mysql_async`.
+- **SQLite** — fully supported via `rusqlite`.
+- **MSSQL Server** — planned / coming soon.
 - **DuckDB** — planned / coming soon.
 - **Databend** — planned / coming soon.
 

@@ -17,6 +17,8 @@ pub trait DdlGenerator {
 
 /// PostgreSQL-specific DDL generator.
 pub struct PostgresDdlGenerator;
+pub struct MySqlDdlGenerator;
+pub struct SQLiteDdlGenerator;
 
 impl DdlGenerator for PostgresDdlGenerator {
     fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
@@ -476,10 +478,202 @@ fn qualified_name(schema: &str, name: &str) -> String {
     format!("{}.{}", quote_identifier(schema), quote_identifier(name))
 }
 
+impl DdlGenerator for MySqlDdlGenerator {
+    fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
+        format!(
+            "CREATE DATABASE {};\n",
+            quote_mysql_identifier(&schema.name)
+        )
+    }
+
+    fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
+        generic_table_ddl(schema, table, quote_mysql_identifier, mysql_qualified_name)
+    }
+
+    fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
+        format!(
+            "-- View: {}\n-- View definition is not available in schema cache.\n",
+            mysql_qualified_name(&table.schema, &table.name)
+        )
+    }
+
+    fn generate_function_ddl(&self, func: &FunctionInfo) -> String {
+        func.definition
+            .clone()
+            .unwrap_or_else(|| format!("-- Routine definition unavailable: {}\n", func.name))
+    }
+
+    fn generate_index_ddl(&self, idx: &IndexInfo) -> String {
+        generic_index_ddl(idx, quote_mysql_identifier, mysql_qualified_name)
+    }
+
+    fn generate_trigger_ddl(&self, trig: &TriggerInfo) -> String {
+        if trig.definition.is_empty() {
+            format!("-- Trigger definition unavailable: {}\n", trig.name)
+        } else {
+            format!("{};\n", trig.definition.trim_end_matches(';'))
+        }
+    }
+
+    fn generate_sequence_ddl(&self, seq: &SequenceInfo) -> String {
+        format!("-- MySQL sequence definition unavailable: {}\n", seq.name)
+    }
+
+    fn generate_column_ddl(&self, table: &TableInfo, column: &ColumnInfo) -> String {
+        format!(
+            "ALTER TABLE {} ADD COLUMN {} {};\n",
+            mysql_qualified_name(&table.schema, &table.name),
+            quote_mysql_identifier(&column.name),
+            format_column_type(column)
+        )
+    }
+}
+
+impl DdlGenerator for SQLiteDdlGenerator {
+    fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
+        format!("-- SQLite schema: {}\n", schema.name)
+    }
+
+    fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
+        generic_table_ddl(schema, table, quote_identifier, sqlite_qualified_name)
+    }
+
+    fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
+        format!(
+            "-- View: {}\n-- View definition is not available in schema cache.\n",
+            sqlite_qualified_name(&table.schema, &table.name)
+        )
+    }
+
+    fn generate_function_ddl(&self, func: &FunctionInfo) -> String {
+        format!("-- SQLite function definition unavailable: {}\n", func.name)
+    }
+
+    fn generate_index_ddl(&self, idx: &IndexInfo) -> String {
+        generic_index_ddl(idx, quote_identifier, sqlite_qualified_name)
+    }
+
+    fn generate_trigger_ddl(&self, trig: &TriggerInfo) -> String {
+        if trig.definition.is_empty() {
+            format!("-- Trigger definition unavailable: {}\n", trig.name)
+        } else {
+            format!("{};\n", trig.definition.trim_end_matches(';'))
+        }
+    }
+
+    fn generate_sequence_ddl(&self, seq: &SequenceInfo) -> String {
+        format!("-- SQLite does not support sequences: {}\n", seq.name)
+    }
+
+    fn generate_column_ddl(&self, table: &TableInfo, column: &ColumnInfo) -> String {
+        format!(
+            "ALTER TABLE {} ADD COLUMN {} {};\n",
+            sqlite_qualified_name(&table.schema, &table.name),
+            quote_identifier(&column.name),
+            format_column_type(column)
+        )
+    }
+}
+
+fn generic_table_ddl(
+    schema: &DatabaseSchema,
+    table: &TableInfo,
+    quote: fn(&str) -> String,
+    qualified: fn(&str, &str) -> String,
+) -> String {
+    let mut ddl = format!("CREATE TABLE {} (\n", qualified(&table.schema, &table.name));
+    let mut definitions = table
+        .columns
+        .iter()
+        .map(|col| {
+            let mut def = format!("    {} {}", quote(&col.name), format_column_type(col));
+            if !col.nullable {
+                def.push_str(" NOT NULL");
+            }
+            if let Some(default) = &col.default_value {
+                def.push_str(&format!(" DEFAULT {}", default));
+            }
+            if col.is_pk && table.columns.iter().filter(|c| c.is_pk).count() == 1 {
+                def.push_str(" PRIMARY KEY");
+            }
+            def
+        })
+        .collect::<Vec<_>>();
+
+    definitions.extend(schema.foreign_keys.iter().filter_map(|fk| {
+        (fk.source_schema == table.schema && fk.source_table == table.name).then(|| {
+            format!(
+                "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+                quote(&fk.name),
+                fk.source_columns
+                    .iter()
+                    .map(|column| quote(column))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                qualified(&fk.target_schema, &fk.target_table),
+                fk.target_columns
+                    .iter()
+                    .map(|column| quote(column))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+    }));
+
+    ddl.push_str(&definitions.join(",\n"));
+    ddl.push_str("\n);\n");
+    ddl
+}
+
+fn generic_index_ddl(
+    idx: &IndexInfo,
+    quote: fn(&str) -> String,
+    qualified: fn(&str, &str) -> String,
+) -> String {
+    let unique = if idx.is_unique { "UNIQUE " } else { "" };
+    format!(
+        "CREATE {}INDEX {} ON {} ({});\n",
+        unique,
+        quote(&idx.name),
+        qualified(&idx.schema, &idx.table_name),
+        idx.columns
+            .iter()
+            .map(|column| quote(column))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn quote_mysql_identifier(identifier: &str) -> String {
+    format!("`{}`", identifier.replace('`', "``"))
+}
+
+fn mysql_qualified_name(schema: &str, name: &str) -> String {
+    if schema.is_empty() {
+        quote_mysql_identifier(name)
+    } else {
+        format!(
+            "{}.{}",
+            quote_mysql_identifier(schema),
+            quote_mysql_identifier(name)
+        )
+    }
+}
+
+fn sqlite_qualified_name(schema: &str, name: &str) -> String {
+    if schema.is_empty() || schema == "main" {
+        quote_identifier(name)
+    } else {
+        format!("{}.{}", quote_identifier(schema), quote_identifier(name))
+    }
+}
+
 /// DDL generator factory based on database type.
 pub fn create_ddl_generator(db_type: Database) -> Box<dyn DdlGenerator> {
     match db_type {
         Database::Postgres => Box::new(PostgresDdlGenerator),
+        Database::MySql => Box::new(MySqlDdlGenerator),
+        Database::SQLite => Box::new(SQLiteDdlGenerator),
     }
 }
 

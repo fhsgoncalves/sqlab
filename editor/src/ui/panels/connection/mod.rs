@@ -11,21 +11,21 @@ use gpui_component::{
     dock::{Panel, PanelEvent, PanelState},
     h_flex,
     input::{Input, InputState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem},
     tree::TreeItem,
     v_flex,
 };
 
 use crate::credentials;
+use crate::drivers::create_configured_data_source;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::diagram::{DiagramScope, ShowDiagramEvent};
 use sqlab_drivers_core::ddl::create_ddl_generator;
 use sqlab_drivers_core::{
     ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind,
-    manager::{DataSourceManager, IntrospectionStatus, create_data_source},
+    manager::{DataSourceManager, IntrospectionStatus},
 };
-use sqlab_drivers_postgres::create_postgres_data_source;
 
 pub struct ConnectionPanel {
     manager: Entity<DataSourceManager>,
@@ -42,6 +42,84 @@ pub struct ConnectionPanel {
 
 impl EventEmitter<PanelEvent> for ConnectionPanel {}
 impl EventEmitter<ShowDiagramEvent> for ConnectionPanel {}
+
+const DATABASE_OPTIONS: [Database; 3] = [Database::Postgres, Database::MySql, Database::SQLite];
+
+struct DatabaseTypePicker {
+    selected: Database,
+    port: Entity<InputState>,
+    schema: Entity<InputState>,
+}
+
+impl DatabaseTypePicker {
+    fn new(selected: Database, port: Entity<InputState>, schema: Entity<InputState>) -> Self {
+        Self {
+            selected,
+            port,
+            schema,
+        }
+    }
+
+    fn select_database(&mut self, database: Database, window: &mut Window, cx: &mut Context<Self>) {
+        let previous = self.selected;
+        if database == previous {
+            return;
+        }
+
+        let previous_port = previous.default_port().to_string();
+        let current_port = self.port.read(cx).value().trim().to_string();
+        if current_port == previous_port {
+            self.port.update(cx, |input, cx| {
+                input.set_value(database.default_port().to_string(), window, cx);
+            });
+        }
+
+        let previous_schema = previous.default_schema();
+        let current_schema = self.schema.read(cx).value().trim().to_string();
+        if current_schema == previous_schema {
+            self.schema.update(cx, |input, cx| {
+                input.set_value(database.default_schema().to_string(), window, cx);
+            });
+        }
+
+        self.selected = database;
+        cx.notify();
+    }
+}
+
+impl Render for DatabaseTypePicker {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.selected;
+        let picker = cx.entity();
+
+        Button::new("database-type-picker")
+            .icon(Icon::new(IconName::File).path(ConnectionPanel::database_icon_path(selected)))
+            .label(database_label(selected))
+            .dropdown_caret(true)
+            .w_full()
+            .dropdown_menu(move |menu, window, _cx| {
+                let mut menu = menu;
+                for database in DATABASE_OPTIONS {
+                    let picker_for_item = picker.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(database_label(database))
+                            .icon(
+                                Icon::new(IconName::File)
+                                    .path(ConnectionPanel::database_icon_path(database)),
+                            )
+                            .checked(database == selected)
+                            .on_click(window.listener_for(
+                                &picker_for_item,
+                                move |this, _, window, cx| {
+                                    this.select_database(database, window, cx);
+                                },
+                            )),
+                    );
+                }
+                menu
+            })
+    }
+}
 
 impl ConnectionPanel {
     pub fn new(
@@ -117,8 +195,6 @@ impl ConnectionPanel {
     ) {
         let manager = self.manager.clone();
         let name = cx.new(|cx| InputState::new(window, cx).default_value(config.name));
-        let db_type =
-            cx.new(|cx| InputState::new(window, cx).default_value(config.db_type.as_str()));
         let host = cx.new(|cx| InputState::new(window, cx).default_value(config.host));
         let port = cx.new(|cx| InputState::new(window, cx).default_value(config.port.to_string()));
         let user = cx.new(|cx| InputState::new(window, cx).default_value(config.user));
@@ -129,6 +205,8 @@ impl ConnectionPanel {
         });
         let database = cx.new(|cx| InputState::new(window, cx).default_value(config.database));
         let schema = cx.new(|cx| InputState::new(window, cx).default_value(config.schema));
+        let db_type =
+            cx.new(|_| DatabaseTypePicker::new(config.db_type, port.clone(), schema.clone()));
         let query_string =
             cx.new(|cx| InputState::new(window, cx).default_value(config.query_string));
 
@@ -148,7 +226,7 @@ impl ConnectionPanel {
                         .gap_2()
                         .w(px(420.))
                         .child(form_field("Name", Input::new(&name)))
-                        .child(form_field("Type", Input::new(&db_type)))
+                        .child(form_field("Type", db_type.clone()))
                         .child(form_field("Host", Input::new(&host)))
                         .child(form_field("Port", Input::new(&port)))
                         .child(form_field("User", Input::new(&user)))
@@ -173,41 +251,24 @@ impl ConnectionPanel {
                     let view = view.clone();
                     move |_, window: &mut Window, cx: &mut App| {
                         let name = name_for_ok.read(cx).value().trim().to_string();
-                        let db_type_str = db_type_for_ok.read(cx).value().trim().to_string();
+                        let db_type = db_type_for_ok.read(cx).selected;
                         let host = host_for_ok.read(cx).value().trim().to_string();
                         let port = port_for_ok
                             .read(cx)
                             .value()
                             .trim()
                             .parse::<u16>()
-                            .unwrap_or(5432);
+                            .unwrap_or_else(|_| db_type.default_port());
                         let user = user_for_ok.read(cx).value().trim().to_string();
                         let password = password_for_ok.read(cx).value().to_string();
                         let database = database_for_ok.read(cx).value().trim().to_string();
                         let schema = schema_for_ok.read(cx).value().trim().to_string();
                         let query_string = query_string_for_ok.read(cx).value().trim().to_string();
 
-                        let db_type = match Database::try_from(db_type_str.as_str()) {
-                            Ok(db) => db,
-                            Err(_) => {
-                                let db_type_display = db_type_str.clone();
-                                window.open_alert_dialog(cx, move |alert, _, _| {
-                                    alert
-                                        .title("Unsupported Database Type")
-                                        .description(format!(
-                                            "The database type '{}' is not supported.",
-                                            db_type_display
-                                        ))
-                                });
-                                return false;
-                            }
-                        };
-
-                        if name.is_empty()
-                            || host.is_empty()
-                            || user.is_empty()
-                            || database.is_empty()
-                        {
+                        if name.is_empty() || database.is_empty() {
+                            return false;
+                        }
+                        if db_type != Database::SQLite && (host.is_empty() || user.is_empty()) {
                             return false;
                         }
 
@@ -226,7 +287,11 @@ impl ConnectionPanel {
                             user,
                             password,
                             database,
-                            schema,
+                            schema: if schema.is_empty() {
+                                db_type.default_schema().to_string()
+                            } else {
+                                schema
+                            },
                             query_string,
                         };
 
@@ -428,20 +493,43 @@ impl ConnectionPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut source = create_data_source(create_postgres_data_source, &config)?;
-                    source.connect().await?;
-                    let schema = source.introspect_schema().await?;
-                    source.disconnect().await?;
-                    schema_cache::save(&cache_key, &name_for_cache, &schema)?;
-                    Ok::<_, anyhow::Error>(())
+                    let mut connected = false;
+                    let result = async {
+                        let mut source = create_configured_data_source(&config)?;
+                        source.connect().await?;
+                        connected = true;
+                        let schema = source.introspect_schema().await?;
+                        source.disconnect().await?;
+                        schema_cache::save(&cache_key, &name_for_cache, &schema)?;
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    .await;
+
+                    result
+                        .map(|_| connected)
+                        .map_err(|error| (connected, error))
                 })
                 .await;
 
             cx.update_entity(&manager, |manager, cx| {
                 match result {
-                    Ok(_) => manager.set_introspection_status(&name, IntrospectionStatus::Cached),
-                    Err(e) => {
-                        eprintln!("Schema introspection failed for {}: {}", name, e);
+                    Ok(_) => {
+                        manager.set_status(&name, ConnectionStatus::Connected);
+                        manager.clear_last_error(&name);
+                        manager.set_introspection_status(&name, IntrospectionStatus::Cached);
+                    }
+                    Err((connected, e)) => {
+                        let message = e.to_string();
+                        eprintln!("Schema introspection failed for {}: {}", name, message);
+                        manager.set_status(
+                            &name,
+                            if connected {
+                                ConnectionStatus::Connected
+                            } else {
+                                ConnectionStatus::Failed
+                            },
+                        );
+                        manager.set_last_error(&name, message);
                         manager.set_introspection_status(&name, IntrospectionStatus::Failed);
                     }
                 }
@@ -492,7 +580,7 @@ impl ConnectionPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut source = create_data_source(create_postgres_data_source, &config)?;
+                    let mut source = create_configured_data_source(&config)?;
                     source.connect().await?;
                     source.disconnect().await?;
                     Ok::<(), DataSourceError>(())
@@ -522,18 +610,43 @@ impl ConnectionPanel {
     }
 
     fn refresh_schema(&mut self, name: String, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(config) = self
-            .manager
-            .read(cx)
-            .configs()
-            .iter()
-            .find(|c| c.name == name)
-            .cloned()
-        else {
+        let Some(config) = self.prepare_connection_operation(name, cx) else {
             return;
         };
 
         self.introspect_schema(config, cx);
+    }
+
+    fn prepare_connection_operation(
+        &mut self,
+        name: String,
+        cx: &mut Context<Self>,
+    ) -> Option<DataSourceConfig> {
+        self.manager.update(cx, |manager, cx| {
+            manager.set_active(Some(name.clone()));
+
+            if manager.status(&name) != ConnectionStatus::Connected {
+                manager.set_status(&name, ConnectionStatus::Idle);
+            }
+            manager.clear_last_error(&name);
+
+            if let Err(error) = manager.ensure_password_loaded(&name, |n| {
+                credentials::load_password(n).map_err(|e| credentials::recovery_error_message(&e))
+            }) {
+                manager.set_status(&name, ConnectionStatus::Failed);
+                manager.set_last_error(&name, error);
+                cx.notify();
+                return None;
+            }
+
+            let config = manager
+                .configs()
+                .iter()
+                .find(|config| config.name == name)
+                .cloned();
+            cx.notify();
+            config
+        })
     }
 
     fn show_diagram(
@@ -917,7 +1030,15 @@ impl ConnectionPanel {
         cx.notify();
     }
 
-    fn node_icon_path(id: &str) -> Option<&'static str> {
+    fn database_icon_path(database: Database) -> &'static str {
+        match database {
+            Database::Postgres => "icons/postgresql.svg",
+            Database::MySql => "icons/mysql.svg",
+            Database::SQLite => "icons/sqlite.svg",
+        }
+    }
+
+    fn node_icon_path(id: &str, database: Database) -> Option<&'static str> {
         if id.contains(":col:") {
             if id.contains(":pk:") {
                 Some("icons/primary_key.svg")
@@ -932,8 +1053,9 @@ impl ConnectionPanel {
             Some("icons/table.svg")
         } else if id.contains(":schema:") {
             Some("icons/schema.svg")
-        } else if id.contains(":schemas")
-            || id.ends_with(":tables")
+        } else if id.contains(":schemas") {
+            Some(Self::database_icon_path(database))
+        } else if id.ends_with(":tables")
             || id.ends_with(":views")
             || id.ends_with(":sequences")
             || id.ends_with(":indexes")
@@ -1345,63 +1467,15 @@ impl Render for ConnectionPanel {
                                 }
                             })),
                     )
-                    .child(div().id(format!("connection-icon-{}", row_name)).child(
-                        if config.db_type == Database::Postgres {
-                            div()
-                                .relative()
-                                .size(px(20.))
-                                .flex_none()
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(IconName::File)
-                                                .path("icons/postgresql.svg")
-                                                .size(px(19.))
-                                                .text_color(rgb(0x336791)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(IconName::File)
-                                                .path("icons/pg-details.svg")
-                                                .size(px(20.))
-                                                .text_color(rgb(0x000000)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(IconName::File)
-                                                .path("icons/pg-details.svg")
-                                                .size(px(18.))
-                                                .text_color(rgb(0xffffff)),
-                                        ),
-                                )
-                                .into_any_element()
-                        } else {
+                    .child(
+                        div().id(format!("connection-icon-{}", row_name)).child(
                             Icon::new(IconName::File)
-                                .path("icons/database-server.svg")
+                                .path(Self::database_icon_path(config.db_type))
                                 .size(px(17.))
                                 .text_color(status_color)
-                                .into_any_element()
-                        },
-                    ))
+                                .into_any_element(),
+                        ),
+                    )
                     .child(
                         h_flex()
                             .items_center()
@@ -1457,7 +1531,7 @@ impl Render for ConnectionPanel {
                         let label = item.label.to_string();
                         let is_selected = self.selected_node.as_deref() == Some(&id);
                         let icon = Self::node_icon(&id);
-                        let icon_path = Self::node_icon_path(&id);
+                        let icon_path = Self::node_icon_path(&id, config.db_type);
                         let is_leaf = Self::is_leaf_node(&id);
                         let is_node_expanded = item.is_expanded();
                         let id_click = id.clone();
@@ -1737,6 +1811,14 @@ fn form_field(label: &'static str, input: impl IntoElement) -> impl IntoElement 
         .gap_1()
         .child(div().text_xs().child(label))
         .child(input)
+}
+
+fn database_label(database: Database) -> &'static str {
+    match database {
+        Database::Postgres => "PostgreSQL",
+        Database::MySql => "MySQL",
+        Database::SQLite => "SQLite",
+    }
 }
 
 fn table_kind_label(kind: &TableKind) -> &'static str {

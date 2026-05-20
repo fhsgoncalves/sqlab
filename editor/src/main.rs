@@ -9,6 +9,7 @@ use gpui_component::dock::ClosePanel;
 mod app_theme;
 mod assets;
 mod credentials;
+mod drivers;
 mod schema_cache;
 mod ui;
 mod workspace;

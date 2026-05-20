@@ -22,6 +22,8 @@ gpui-component = { git = "https://github.com/fhsgoncalves/gpui-component", branc
 gpui-component-assets = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration" }
 sqlab-drivers-core = { path = "../drivers/core" }
 sqlab-drivers-postgres = { path = "../drivers/postgres" }
+sqlab-drivers-mysql = { path = "../drivers/mysql" }
+sqlab-drivers-sqlite = { path = "../drivers/sqlite" }
 image = "0.25.1"
 fontdue = "0.9"
 keyring-core = "1"
