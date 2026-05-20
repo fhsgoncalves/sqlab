@@ -730,13 +730,13 @@ impl ConnectionPanel {
                 .push(seq);
         }
 
-        let mut schema_indexes: std::collections::HashMap<
-            String,
+        let mut table_indexes: std::collections::HashMap<
+            (String, String),
             Vec<&sqlab_drivers_core::IndexInfo>,
         > = std::collections::HashMap::new();
         for idx in &schema.indexes {
-            schema_indexes
-                .entry(idx.schema.clone())
+            table_indexes
+                .entry((idx.schema.clone(), idx.table_name.clone()))
                 .or_default()
                 .push(idx);
         }
@@ -771,23 +771,62 @@ impl ConnectionPanel {
                     let table_id = format!("{}:table:{}", schema_id, table.name);
                     let mut table_item =
                         TreeItem::new(table_id.clone(), SharedString::from(table.name.clone()));
-                    for col in &table.columns {
-                        let mut col_id = format!("{}:col:{}", table_id, col.name);
-                        if col.is_pk {
-                            col_id.push_str(":pk");
+
+                    if !table.columns.is_empty() {
+                        let columns_id = format!("{}:columns", table_id);
+                        let mut columns_item =
+                            TreeItem::new(columns_id.clone(), SharedString::from("Columns"));
+                        for col in &table.columns {
+                            let mut col_id = format!("{}:col:{}", columns_id, col.name);
+                            if col.is_pk {
+                                col_id.push_str(":pk");
+                            }
+                            if col.is_fk {
+                                col_id.push_str(":fk");
+                            }
+                            let label = format!(
+                                "{} : {}{}",
+                                col.name,
+                                col.data_type,
+                                if col.nullable { "" } else { " NOT NULL" }
+                            );
+                            columns_item = columns_item
+                                .child(TreeItem::new(col_id, SharedString::from(label)));
                         }
-                        if col.is_fk {
-                            col_id.push_str(":fk");
+                        if expanded.contains(&columns_id) {
+                            columns_item = columns_item.expanded(true);
                         }
-                        let label = format!(
-                            "{} : {}{}",
-                            col.name,
-                            col.data_type,
-                            if col.nullable { "" } else { " NOT NULL" }
-                        );
-                        table_item =
-                            table_item.child(TreeItem::new(col_id, SharedString::from(label)));
+                        table_item = table_item.child(columns_item);
                     }
+
+                    if let Some(indexes) =
+                        table_indexes.get(&(schema_name.clone(), table.name.clone()))
+                    {
+                        let idxs_id = format!("{}:indexes", table_id);
+                        let mut idxs_item =
+                            TreeItem::new(idxs_id.clone(), SharedString::from("Indexes"));
+                        for idx in indexes {
+                            let idx_id = format!("{}:idx:{}", idxs_id, idx.name);
+                            let label = format!(
+                                "{}{}",
+                                idx.name,
+                                if idx.is_primary {
+                                    " (primary)"
+                                } else if idx.is_unique {
+                                    " (unique)"
+                                } else {
+                                    ""
+                                }
+                            );
+                            idxs_item =
+                                idxs_item.child(TreeItem::new(idx_id, SharedString::from(label)));
+                        }
+                        if expanded.contains(&idxs_id) {
+                            idxs_item = idxs_item.expanded(true);
+                        }
+                        table_item = table_item.child(idxs_item);
+                    }
+
                     if expanded.contains(&table_id) {
                         table_item = table_item.expanded(true);
                     }
@@ -830,31 +869,6 @@ impl ConnectionPanel {
                 schema_item = schema_item.child(seqs_item);
             }
 
-            // Indexes folder
-            if let Some(indexes) = schema_indexes.get(schema_name) {
-                let idxs_id = format!("{}:indexes", schema_id);
-                let mut idxs_item = TreeItem::new(idxs_id.clone(), SharedString::from("Indexes"));
-                for idx in indexes {
-                    let idx_id = format!("{}:idx:{}", schema_id, idx.name);
-                    let label = format!(
-                        "{}{}",
-                        idx.name,
-                        if idx.is_primary {
-                            " (primary)"
-                        } else if idx.is_unique {
-                            " (unique)"
-                        } else {
-                            ""
-                        }
-                    );
-                    idxs_item = idxs_item.child(TreeItem::new(idx_id, SharedString::from(label)));
-                }
-                if expanded.contains(&idxs_id) {
-                    idxs_item = idxs_item.expanded(true);
-                }
-                schema_item = schema_item.child(idxs_item);
-            }
-
             // Triggers folder
             if let Some(triggers) = schema_triggers.get(schema_name) {
                 let trigs_id = format!("{}:triggers", schema_id);
@@ -873,11 +887,11 @@ impl ConnectionPanel {
                 schema_item = schema_item.child(trigs_item);
             }
 
-            // Functions folder
+            // Routines folder
             if let Some(functions) = schema_functions.get(schema_name) {
                 let funcs_id = format!("{}:functions", schema_id);
                 let mut funcs_item =
-                    TreeItem::new(funcs_id.clone(), SharedString::from("Functions"));
+                    TreeItem::new(funcs_id.clone(), SharedString::from("Routines"));
                 for func in functions {
                     let func_id = format!("{}:func:{}:{}", schema_id, func.name, func.arguments);
                     let label =
@@ -923,6 +937,18 @@ impl ConnectionPanel {
             } else {
                 IconName::Minimize
             }
+        } else if id.contains(":idx:") {
+            IconName::Search
+        } else if id.contains(":schemas")
+            || id.ends_with(":tables")
+            || id.ends_with(":columns")
+            || id.ends_with(":views")
+            || id.ends_with(":sequences")
+            || id.ends_with(":indexes")
+            || id.ends_with(":triggers")
+            || id.ends_with(":functions")
+        {
+            IconName::Folder
         } else if id.contains(":view:") {
             IconName::Inbox
         } else if id.contains(":table:") {
@@ -931,21 +957,10 @@ impl ConnectionPanel {
             IconName::Cpu
         } else if id.contains(":seq:") {
             IconName::ArrowDown
-        } else if id.contains(":idx:") {
-            IconName::Search
         } else if id.contains(":trig:") {
             IconName::Bell
         } else if id.contains(":schema:") {
             IconName::FolderOpen
-        } else if id.contains(":schemas")
-            || id.ends_with(":tables")
-            || id.ends_with(":views")
-            || id.ends_with(":sequences")
-            || id.ends_with(":indexes")
-            || id.ends_with(":triggers")
-            || id.ends_with(":functions")
-        {
-            IconName::Folder
         } else {
             IconName::HardDrive
         }
@@ -1047,6 +1062,17 @@ impl ConnectionPanel {
             } else {
                 Some("icons/column.svg")
             }
+        } else if id.ends_with(":tables")
+            || id.ends_with(":columns")
+            || id.ends_with(":views")
+            || id.ends_with(":sequences")
+            || id.ends_with(":indexes")
+            || id.ends_with(":triggers")
+            || id.ends_with(":functions")
+        {
+            Some("icons/schema.svg")
+        } else if id.contains(":idx:") {
+            None
         } else if id.contains(":table:") {
             Some("icons/table.svg")
         } else if id.contains(":view:") {
@@ -1055,14 +1081,6 @@ impl ConnectionPanel {
             Some("icons/schema.svg")
         } else if id.contains(":schemas") {
             Some(Self::database_icon_path(database))
-        } else if id.ends_with(":tables")
-            || id.ends_with(":views")
-            || id.ends_with(":sequences")
-            || id.ends_with(":indexes")
-            || id.ends_with(":triggers")
-            || id.ends_with(":functions")
-        {
-            Some("icons/schema.svg")
         } else {
             None
         }
@@ -1078,25 +1096,8 @@ impl ConnectionPanel {
     }
 
     fn copyable_name(id: &str, label: &str) -> Option<String> {
-        if id.contains(":col:") {
-            // Column labels include the data type, like "id : bigint NOT NULL".
-            label
-                .split_once(" : ")
-                .map(|(name, _)| name.to_string())
-                .or_else(|| label.split_whitespace().next().map(|s| s.to_string()))
-        } else if id.contains(":table:") {
-            id.split(":table:").nth(1).map(|s| s.to_string())
-        } else if id.contains(":view:") {
-            id.split(":view:").nth(1).map(|s| s.to_string())
-        } else if id.contains(":seq:") {
-            id.split(":seq:").nth(1).map(|s| s.to_string())
-        } else if id.contains(":idx:") {
-            id.split(":idx:").nth(1).map(|s| s.to_string())
-        } else if id.contains(":trig:") {
-            id.split(":trig:").nth(1).map(|s| s.to_string())
-        } else if id.contains(":func:") {
-            id.split(":func:").nth(1).map(|s| s.to_string())
-        } else if id.ends_with(":tables")
+        if id.ends_with(":tables")
+            || id.ends_with(":columns")
             || id.ends_with(":views")
             || id.ends_with(":sequences")
             || id.ends_with(":indexes")
@@ -1105,6 +1106,24 @@ impl ConnectionPanel {
             || id.contains(":schemas")
         {
             Some(label.to_string())
+        } else if id.contains(":col:") {
+            // Column labels include the data type, like "id : bigint NOT NULL".
+            label
+                .split_once(" : ")
+                .map(|(name, _)| name.to_string())
+                .or_else(|| label.split_whitespace().next().map(|s| s.to_string()))
+        } else if id.contains(":idx:") {
+            id.split(":idx:").nth(1).map(|s| s.to_string())
+        } else if id.contains(":table:") {
+            id.split(":table:").nth(1).map(|s| s.to_string())
+        } else if id.contains(":view:") {
+            id.split(":view:").nth(1).map(|s| s.to_string())
+        } else if id.contains(":seq:") {
+            id.split(":seq:").nth(1).map(|s| s.to_string())
+        } else if id.contains(":trig:") {
+            id.split(":trig:").nth(1).map(|s| s.to_string())
+        } else if id.contains(":func:") {
+            id.split(":func:").nth(1).map(|s| s.to_string())
         } else if id.contains(":schema:") {
             id.split(":schema:").nth(1).map(|s| s.to_string())
         } else {
@@ -1123,7 +1142,7 @@ impl ConnectionPanel {
         let segments: Vec<&str> = node_id.split(':').collect();
 
         if node_id.contains(":col:") {
-            // conn:name:schema:schema_name:table:table_name:col:col_name[:pk][:fk]
+            // conn:name:schema:schema_name:table:table_name:columns:col:col_name[:pk][:fk]
             let col_name_idx = segments.iter().position(|&s| s == "col")?;
             let col_name = segments.get(col_name_idx + 1)?.split(':').next()?;
             let table_name_idx = segments.iter().position(|&s| s == "table")?;
@@ -1137,6 +1156,26 @@ impl ConnectionPanel {
                 .find(|t| t.schema == *schema_name && t.name == *table_name)?;
             let col = table.columns.iter().find(|c| c.name == col_name)?;
             return Some(generator.generate_column_ddl(table, col));
+        }
+
+        if node_id.contains(":idx:") {
+            let idx_name_idx = segments.iter().position(|&s| s == "idx")?;
+            let idx_name = segments.get(idx_name_idx + 1)?;
+            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
+            let schema_name = segments.get(schema_name_idx + 1)?;
+            let table_name = segments
+                .iter()
+                .position(|&s| s == "table")
+                .and_then(|idx| segments.get(idx + 1));
+
+            let idx = schema.indexes.iter().find(|i| {
+                i.schema == *schema_name
+                    && i.name == **idx_name
+                    && table_name
+                        .map(|table_name| i.table_name == *table_name)
+                        .unwrap_or(true)
+            })?;
+            return Some(generator.generate_index_ddl(idx));
         }
 
         if node_id.contains(":table:") {
@@ -1176,19 +1215,6 @@ impl ConnectionPanel {
                 .iter()
                 .find(|f| f.schema == *schema_name && f.name == **func_name)?;
             return Some(generator.generate_function_ddl(func));
-        }
-
-        if node_id.contains(":idx:") {
-            let idx_name_idx = segments.iter().position(|&s| s == "idx")?;
-            let idx_name = segments.get(idx_name_idx + 1)?;
-            let schema_name_idx = segments.iter().position(|&s| s == "schema")?;
-            let schema_name = segments.get(schema_name_idx + 1)?;
-
-            let idx = schema
-                .indexes
-                .iter()
-                .find(|i| i.schema == *schema_name && i.name == **idx_name)?;
-            return Some(generator.generate_index_ddl(idx));
         }
 
         if node_id.contains(":trig:") {
@@ -1247,6 +1273,7 @@ impl ConnectionPanel {
             let diagram_view = view.clone();
 
             let is_folder_node = node_id.ends_with(":tables")
+                || node_id.ends_with(":columns")
                 || node_id.ends_with(":views")
                 || node_id.ends_with(":functions")
                 || node_id.ends_with(":indexes")
