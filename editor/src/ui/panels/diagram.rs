@@ -24,6 +24,7 @@ use image::{Rgba, RgbaImage};
 use sqlab_drivers_core::{DataSourceConfig, DatabaseSchema, TableKind};
 use std::sync::Arc;
 
+use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 
 pub const MAX_DIAGRAM_TABLES: usize = 100;
@@ -179,6 +180,8 @@ pub struct DiagramModel {
     pub edges: Vec<DiagramEdge>,
     pub total_tables: usize,
     pub truncated: bool,
+    pub config: DataSourceConfig,
+    pub available_schemas: Vec<String>,
 }
 
 impl DiagramModel {
@@ -233,6 +236,12 @@ impl DiagramModel {
             })
             .collect::<Vec<_>>();
 
+        let available_schemas = schema
+            .schemas
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>();
+
         Self {
             title: scope.tab_title(&config.name),
             scope,
@@ -240,6 +249,8 @@ impl DiagramModel {
             edges,
             total_tables,
             truncated,
+            config: config.clone(),
+            available_schemas,
         }
     }
 }
@@ -515,6 +526,62 @@ impl DiagramPanel {
         self.zoom = 1.0;
         self.pan = DiagramPoint { x: 40.0, y: 40.0 };
         cx.notify();
+    }
+
+    fn select_schema(&mut self, schema_name: &str, cx: &mut Context<Self>) {
+        let cache_key = schema_cache::cache_key(&self.model.config);
+        let Ok(Some(schema)) = schema_cache::load(&cache_key) else {
+            return;
+        };
+
+        let new_scope = DiagramScope::Schema(schema_name.to_string());
+        let new_model = DiagramModel::build(&self.model.config, &schema, new_scope);
+
+        let layout = layout_diagram(&new_model);
+        let positions = layout
+            .nodes
+            .iter()
+            .map(|(id, node)| (id.clone(), node.position))
+            .collect();
+
+        self.model = new_model;
+        self.layout = layout;
+        self.positions = positions;
+        self.pan = DiagramPoint { x: 40.0, y: 40.0 };
+        self.zoom = 1.0;
+        cx.notify();
+    }
+
+    fn select_all_schemas(&mut self, cx: &mut Context<Self>) {
+        let cache_key = schema_cache::cache_key(&self.model.config);
+        let Ok(Some(schema)) = schema_cache::load(&cache_key) else {
+            return;
+        };
+
+        let new_scope = DiagramScope::Database;
+        let new_model = DiagramModel::build(&self.model.config, &schema, new_scope);
+
+        let layout = layout_diagram(&new_model);
+        let positions = layout
+            .nodes
+            .iter()
+            .map(|(id, node)| (id.clone(), node.position))
+            .collect();
+
+        self.model = new_model;
+        self.layout = layout;
+        self.positions = positions;
+        self.pan = DiagramPoint { x: 40.0, y: 40.0 };
+        self.zoom = 1.0;
+        cx.notify();
+    }
+
+    fn current_schema_label(&self) -> String {
+        match &self.model.scope {
+            DiagramScope::Database => "All schemas".to_string(),
+            DiagramScope::Schema(name) => name.clone(),
+            DiagramScope::Table { schema, table } => format!("{}.{}", schema, table),
+        }
     }
 
     fn export_diagram(
@@ -868,6 +935,48 @@ impl Render for DiagramPanel {
                             }),
                     )
                     .child(div().flex_1())
+                    .child({
+                        let view_for_schema = entity.clone();
+                        let schema_label = self.current_schema_label();
+                        let available_schemas = self.model.available_schemas.clone();
+                        let has_schemas = available_schemas.len() > 1;
+                        if has_schemas {
+                            Button::new("diagram-schema-selector")
+                                .label(schema_label)
+                                .xsmall()
+                                .ghost()
+                                .tooltip("Select schema")
+                                .dropdown_menu(move |menu, window, _cx| {
+                                    let mut menu = menu;
+                                    menu = menu.item(PopupMenuItem::new("All schemas").on_click(
+                                        window.listener_for(
+                                            &view_for_schema,
+                                            move |this, _, _window, cx| {
+                                                this.select_all_schemas(cx);
+                                            },
+                                        ),
+                                    ));
+                                    for schema_name in &available_schemas {
+                                        let view_for_item = view_for_schema.clone();
+                                        let schema_name = schema_name.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(schema_name.clone()).on_click(
+                                                window.listener_for(
+                                                    &view_for_item,
+                                                    move |this, _, _window, cx| {
+                                                        this.select_schema(&schema_name, cx);
+                                                    },
+                                                ),
+                                            ),
+                                        );
+                                    }
+                                    menu
+                                })
+                                .into_any_element()
+                        } else {
+                            div().into_any_element()
+                        }
+                    })
                     .child(
                         div()
                             .text_xs()
@@ -3009,6 +3118,8 @@ mod tests {
             }],
             total_tables: 3,
             truncated: false,
+            config: DataSourceConfig::default(),
+            available_schemas: vec!["public".to_string()],
         };
         let orders = TableRef::new("public", "orders");
         let customers = TableRef::new("public", "customers");
