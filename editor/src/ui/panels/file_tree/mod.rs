@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -388,7 +388,7 @@ impl FileTreePanel {
             if let Some(item) = Self::find_item(&self.items, &selected_id) {
                 if !item.is_expanded() {
                     Self::toggle_expanded(&mut self.items, &selected_id);
-                    cx.notify();
+                    self.refresh_tree(cx);
                 }
             }
         } else {
@@ -440,7 +440,7 @@ impl FileTreePanel {
         if let Some(item) = Self::find_item(&self.items, &selected_id) {
             if !item.is_expanded() {
                 Self::toggle_expanded(&mut self.items, &selected_id);
-                cx.notify();
+                self.refresh_tree(cx);
             }
         }
     }
@@ -728,38 +728,56 @@ impl FileTreePanel {
 }
 
 fn build_dir_items(
-    root: &PathBuf,
-    path: &PathBuf,
+    root: &Path,
+    path: &Path,
     expanded_ids: &HashSet<String>,
     folder_ids: &mut HashSet<String>,
 ) -> Vec<TreeItem> {
     let mut items = Vec::new();
+    let mut builder = ignore::WalkBuilder::new(path);
+    builder
+        .max_depth(Some(1))
+        .hidden(false)
+        .require_git(false)
+        .parents(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .ignore(true);
 
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let relative_path = path.strip_prefix(root).unwrap_or(&path);
-            if relative_path.ends_with(".git") || relative_path.ends_with("target") {
-                continue;
-            }
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("Unknown")
-                .to_string();
-            let id = path.to_string_lossy().to_string();
-            let is_dir = path.is_dir();
-            if is_dir {
-                folder_ids.insert(id.clone());
-                let children = build_dir_items(root, &path, expanded_ids, folder_ids);
-                let mut item = TreeItem::new(id.clone(), file_name).children(children);
-                if expanded_ids.contains(&id) {
-                    item = item.expanded(true);
-                }
-                items.push((item, true));
+    for entry in builder
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.depth() == 1)
+    {
+        let path = entry.path();
+        if path.file_name().and_then(|name| name.to_str()) == Some(".git") {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let id = path.to_string_lossy().to_string();
+        let is_dir = entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_dir());
+        if is_dir {
+            folder_ids.insert(id.clone());
+            let is_expanded = expanded_ids.contains(&id);
+            let children = if is_expanded {
+                build_dir_items(root, path, expanded_ids, folder_ids)
             } else {
-                items.push((TreeItem::new(id, file_name), false));
+                Vec::new()
+            };
+            let mut item = TreeItem::new(id.clone(), file_name).children(children);
+            if is_expanded {
+                item = item.expanded(true);
             }
+            items.push((item, true));
+        } else {
+            items.push((TreeItem::new(id, file_name), false));
         }
     }
 
@@ -769,7 +787,7 @@ fn build_dir_items(
 }
 
 fn build_file_items(
-    root: &PathBuf,
+    root: &Path,
     expanded_ids: &HashSet<String>,
 ) -> (Vec<TreeItem>, HashSet<String>) {
     let mut folder_ids = HashSet::new();
@@ -788,6 +806,83 @@ fn build_file_items(
         root_item = root_item.expanded(true);
     }
     (vec![root_item], folder_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "sqlab-file-tree-{name}-{}-{suffix}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn child_by_label<'a>(item: &'a TreeItem, label: &str) -> Option<&'a TreeItem> {
+        item.children.iter().find(|child| child.label == label)
+    }
+
+    #[test]
+    fn build_file_items_respects_gitignore() {
+        let dir = TestDir::new("gitignore");
+        fs::create_dir(dir.path.join(".git")).unwrap();
+        fs::write(dir.path.join(".gitignore"), "node_modules/\n").unwrap();
+        fs::create_dir_all(dir.path.join("node_modules/package")).unwrap();
+        fs::create_dir_all(dir.path.join("src")).unwrap();
+
+        let (items, folder_ids) = build_file_items(&dir.path, &HashSet::new());
+        let root = &items[0];
+
+        assert!(child_by_label(root, "src").is_some());
+        assert!(child_by_label(root, ".git").is_none());
+        assert!(child_by_label(root, "node_modules").is_none());
+        assert!(folder_ids.contains(dir.path.join("src").to_string_lossy().as_ref()));
+        assert!(!folder_ids.contains(dir.path.join("node_modules").to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn build_file_items_does_not_read_collapsed_directories() {
+        let dir = TestDir::new("lazy");
+        let large_dir = dir.path.join("large");
+        fs::create_dir_all(large_dir.join("nested")).unwrap();
+        fs::write(large_dir.join("nested").join("query.sql"), "select 1").unwrap();
+
+        let (items, folder_ids) = build_file_items(&dir.path, &HashSet::new());
+        let root = &items[0];
+        let large = child_by_label(root, "large").unwrap();
+
+        assert!(folder_ids.contains(large_dir.to_string_lossy().as_ref()));
+        assert!(large.children.is_empty());
+
+        let mut expanded_ids = HashSet::new();
+        expanded_ids.insert(large_dir.to_string_lossy().to_string());
+        let (items, _) = build_file_items(&dir.path, &expanded_ids);
+        let root = &items[0];
+        let large = child_by_label(root, "large").unwrap();
+
+        assert!(child_by_label(large, "nested").is_some());
+    }
 }
 
 impl Render for FileTreePanel {
