@@ -31,7 +31,7 @@ impl Database {
 
     pub fn default_schema(&self) -> &'static str {
         match self {
-            Database::Postgres => "public",
+            Database::Postgres => "",
             Database::MySql => "",
             Database::SQLite => "main",
         }
@@ -169,7 +169,7 @@ fn default_postgres_port() -> u16 {
 }
 
 fn default_postgres_schema() -> String {
-    "public".into()
+    "".into()
 }
 
 #[derive(Debug, Clone)]

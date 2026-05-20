@@ -918,7 +918,7 @@ impl ConnectionPanel {
         }
     }
 
-    fn node_icon_path(id: &str, database: Database) -> Option<&'static str> {
+    fn node_icon_path(id: &str, _database: Database) -> Option<&'static str> {
         if id.contains(":col:") {
             if id.contains(":pk:") {
                 Some("icons/primary_key.svg")
@@ -945,7 +945,7 @@ impl ConnectionPanel {
         } else if id.contains(":schema:") {
             Some("icons/schema.svg")
         } else if id.contains(":schemas") {
-            Some(Self::database_icon_path(database))
+            Some("icons/database-server.svg")
         } else {
             None
         }
