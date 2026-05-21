@@ -1246,7 +1246,21 @@ impl ResultPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.copy_selection_as(self.selected_export_format, cx);
+        let single_cell_value = self.table_state.update(cx, |table, cx| {
+            let delegate = table.delegate();
+            if delegate.selected_cells.len() == 1 {
+                let (row_ix, col_ix) = delegate.selected_cells.iter().next().unwrap();
+                Some(delegate.cell_text(*row_ix, *col_ix, cx))
+            } else {
+                None
+            }
+        });
+
+        if let Some(value) = single_cell_value {
+            cx.write_to_clipboard(ClipboardItem::new_string(value));
+        } else {
+            self.copy_selection_as(self.selected_export_format, cx);
+        }
     }
 
     fn extend_selection_by(
