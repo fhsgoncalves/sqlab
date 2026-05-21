@@ -20,7 +20,7 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 use tokio::runtime::Runtime;
-use tokio_postgres::types::{FromSql, Type};
+use tokio_postgres::types::{FromSql, Kind, Type};
 use tokio_postgres::{Client, Row};
 
 const DEFAULT_ROW_LIMIT: usize = 1000;
@@ -1056,6 +1056,18 @@ fn cell_is_null(row: &Row, ix: usize, ty: &Type) -> bool {
             .unwrap_or(None)
             .is_none();
     }
+    if PgEnumValue::accepts(ty) {
+        return row
+            .try_get::<_, Option<PgEnumValue>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
+    if matches!(ty.kind(), Kind::Array(inner) if PgEnumValue::accepts(inner)) {
+        return row
+            .try_get::<_, Option<Vec<Option<PgEnumValue>>>>(ix)
+            .unwrap_or(None)
+            .is_none();
+    }
     if let Ok(raw) = row.try_get::<_, Option<&[u8]>>(ix) {
         return raw.is_none();
     }
@@ -1191,6 +1203,13 @@ fn cell_to_string(row: &Row, ix: usize, ty: &Type) -> Result<String, DataSourceE
             .map(|v| v.to_string())
             .unwrap_or_default());
     }
+    if PgEnumValue::accepts(ty) {
+        return Ok(row
+            .try_get::<_, Option<PgEnumValue>>(ix)
+            .unwrap_or(None)
+            .map(|v| v.0)
+            .unwrap_or_default());
+    }
 
     if matches!(
         ty,
@@ -1267,6 +1286,9 @@ fn cell_to_string(row: &Row, ix: usize, ty: &Type) -> Result<String, DataSourceE
     if matches!(ty, &Type::CHAR_ARRAY) {
         return Ok(array_cell_to_string::<i8, _>(row, ix, format_postgres_char));
     }
+    if matches!(ty.kind(), Kind::Array(inner) if PgEnumValue::accepts(inner)) {
+        return Ok(array_cell_to_string::<PgEnumValue, _>(row, ix, |v| v.0));
+    }
 
     if let Ok(value) = row.try_get::<_, Option<String>>(ix) {
         return Ok(value.unwrap_or_default());
@@ -1341,6 +1363,23 @@ impl<'a> FromSql<'a> for PgNumeric {
 
     fn accepts(ty: &Type) -> bool {
         matches!(*ty, Type::NUMERIC)
+    }
+}
+
+#[derive(Debug)]
+struct PgEnumValue(String);
+
+impl<'a> FromSql<'a> for PgEnumValue {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<PgEnumValue, Box<dyn Error + Sync + Send>> {
+        Ok(PgEnumValue(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        match ty.kind() {
+            Kind::Enum(_) => true,
+            Kind::Domain(inner) => PgEnumValue::accepts(inner),
+            _ => false,
+        }
     }
 }
 
@@ -1663,6 +1702,37 @@ mod tests {
         ));
         assert!(!is_aws_rds_host("localhost"));
         assert!(!is_aws_rds_host("postgres.example.com"));
+    }
+
+    #[test]
+    fn decodes_postgres_enum_values_as_text() {
+        let enum_type = Type::new(
+            "mood".into(),
+            1,
+            Kind::Enum(vec!["sad".into(), "ok".into(), "happy".into()]),
+            "public".into(),
+        );
+
+        let value = PgEnumValue::from_sql(&enum_type, b"happy").unwrap();
+
+        assert!(PgEnumValue::accepts(&enum_type));
+        assert_eq!(value.0, "happy");
+    }
+
+    #[test]
+    fn accepts_postgres_enum_arrays() {
+        let enum_type = Type::new(
+            "mood".into(),
+            1,
+            Kind::Enum(vec!["sad".into(), "ok".into(), "happy".into()]),
+            "public".into(),
+        );
+        let enum_array_type = Type::new("_mood".into(), 2, Kind::Array(enum_type), "public".into());
+
+        assert!(matches!(
+            enum_array_type.kind(),
+            Kind::Array(inner) if PgEnumValue::accepts(inner)
+        ));
     }
 
     #[test]
