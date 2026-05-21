@@ -27,8 +27,8 @@ use ui::panels::result::{
     ExtendResultSelectionLeft, ExtendResultSelectionRight, ExtendResultSelectionUp,
 };
 use ui::panels::terminal::{
-    CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward,
-    NewTerminalTab, Paste,
+    CopyTerminalSelection, CycleTabBackward as TerminalCycleTabBackward,
+    CycleTabForward as TerminalCycleTabForward, NewTerminalTab, Paste,
 };
 use workspace::{OpenFolder, ToggleSearchReplace, Workspace};
 
@@ -56,6 +56,7 @@ fn set_app_menus(cx: &mut gpui::App) {
             MenuItem::action("Format Query", FormatQuery),
             MenuItem::separator(),
             MenuItem::action("Copy Result Selection", CopyResultSelection),
+            MenuItem::action("Copy Terminal Selection", CopyTerminalSelection),
             MenuItem::action("Edit Result Cell", EditResultCell),
             MenuItem::separator(),
             MenuItem::action("Save", SaveFile),
@@ -110,7 +111,6 @@ fn main() {
             KeyBinding::new("cmd-enter", ExecuteQuery, Some("Input")),
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-alt-l", FormatQuery, Some("Input")),
-            KeyBinding::new("cmd-c", CopyResultSelection, None),
             KeyBinding::new("shift-up", ExtendResultSelectionUp, Some("results_panel")),
             KeyBinding::new(
                 "shift-down",
@@ -134,7 +134,9 @@ fn main() {
             KeyBinding::new("enter", EditResultCell, Some("DataTable")),
             KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),
             KeyBinding::new("cmd-t", NewTerminalTab, Some("terminal_panel")),
+            KeyBinding::new("cmd-c", CopyTerminalSelection, Some("terminal_panel")),
             KeyBinding::new("cmd-v", Paste, Some("terminal_panel")),
+            KeyBinding::new("cmd-c", CopyResultSelection, None),
             KeyBinding::new("ctrl-tab", CycleTabForward, None),
             KeyBinding::new("ctrl-shift-tab", CycleTabBackward, None),
             KeyBinding::new("ctrl-tab", TerminalCycleTabForward, Some("terminal_panel")),

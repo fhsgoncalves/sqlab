@@ -13,9 +13,10 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
 use async_channel::{Receiver, Sender};
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement,
-    KeyDownEvent, Keystroke, ParentElement, Render, ScrollWheelEvent, StatefulInteractiveElement,
-    Styled, TextRun, TextStyle, WeakEntity, WhiteSpace, Window, actions, canvas, div, fill, point,
+    App, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement,
+    IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Render, ScrollWheelEvent, StatefulInteractiveElement, Styled,
+    TextRun, TextStyle, WeakEntity, WhiteSpace, Window, actions, canvas, div, fill, point,
     prelude::FluentBuilder, px, size,
 };
 
@@ -32,7 +33,13 @@ use crate::ui::components::tab::{Tab, TabBar};
 
 actions!(
     terminal_panel,
-    [NewTerminalTab, CycleTabForward, CycleTabBackward, Paste]
+    [
+        NewTerminalTab,
+        CycleTabForward,
+        CycleTabBackward,
+        Paste,
+        CopyTerminalSelection
+    ]
 );
 
 const CELL_WIDTH: f32 = 9.0;
@@ -48,6 +55,8 @@ pub struct TerminalPanel {
     dock_area: Option<WeakEntity<DockArea>>,
     last_size: TerminalSize,
     working_directory: Option<PathBuf>,
+    selection: Option<TerminalSelection>,
+    selecting: bool,
 }
 
 struct TerminalSession {
@@ -63,6 +72,32 @@ struct TerminalBackend {
         EventLoop<tty::Pty, TerminalEventProxy>,
         alacritty_terminal::event_loop::State,
     )>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TerminalPoint {
+    row: usize,
+    col: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TerminalSelection {
+    anchor: TerminalPoint,
+    cursor: TerminalPoint,
+}
+
+impl TerminalSelection {
+    fn normalized(&self) -> Option<(TerminalPoint, TerminalPoint)> {
+        if self.anchor == self.cursor {
+            return None;
+        }
+
+        if (self.anchor.row, self.anchor.col) <= (self.cursor.row, self.cursor.col) {
+            Some((self.anchor, self.cursor))
+        } else {
+            Some((self.cursor, self.anchor))
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -181,6 +216,8 @@ impl TerminalPanel {
             dock_area: None,
             last_size,
             working_directory: Some(working_directory),
+            selection: None,
+            selecting: false,
         };
         panel.start_event_task(cx);
         panel.new_tab(_window, cx);
@@ -306,6 +343,10 @@ impl TerminalPanel {
         self.sessions.get_mut(self.active_ix)
     }
 
+    fn active_session(&self) -> Option<&TerminalSession> {
+        self.sessions.get(self.active_ix)
+    }
+
     fn on_new_terminal_tab(
         &mut self,
         _: &NewTerminalTab,
@@ -345,6 +386,7 @@ impl TerminalPanel {
         let clipboard = cx.read_from_clipboard();
         if let Some(item) = clipboard {
             if let Some(text) = item.text() {
+                self.clear_selection(cx);
                 let Some(session) = self.active_session_mut() else {
                     return;
                 };
@@ -355,6 +397,32 @@ impl TerminalPanel {
                     cx.notify();
                 }
             }
+        }
+    }
+
+    fn on_action_copy_terminal_selection(
+        &mut self,
+        _: &CopyTerminalSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.selected_text(cx) else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    fn selected_text(&self, cx: &App) -> Option<String> {
+        let selection = self.selection?.normalized()?;
+        let lines = self.active_session()?.renderable_text_lines(cx);
+        selected_text_from_lines(&lines, selection)
+    }
+
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        if self.selection.is_some() || self.selecting {
+            self.selection = None;
+            self.selecting = false;
+            cx.notify();
         }
     }
 
@@ -392,6 +460,10 @@ impl TerminalPanel {
             return;
         }
 
+        if event.keystroke.key != "c" || !event.keystroke.modifiers.control {
+            self.clear_selection(cx);
+        }
+
         let Some(session) = self.active_session_mut() else {
             return;
         };
@@ -400,6 +472,50 @@ impl TerminalPanel {
             cx.stop_propagation();
             cx.notify();
         }
+    }
+
+    fn begin_selection(
+        &mut self,
+        point: TerminalPoint,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selection = Some(TerminalSelection {
+            anchor: point,
+            cursor: point,
+        });
+        self.selecting = true;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn update_selection(&mut self, point: TerminalPoint, cx: &mut Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+
+        if let Some(selection) = self.selection.as_mut() {
+            if selection.cursor != point {
+                selection.cursor = point;
+                cx.notify();
+            }
+        }
+    }
+
+    fn finish_selection(&mut self, point: TerminalPoint, cx: &mut Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+
+        if let Some(selection) = self.selection.as_mut() {
+            selection.cursor = point;
+            if selection.normalized().is_none() {
+                self.selection = None;
+            }
+        }
+
+        self.selecting = false;
+        cx.notify();
     }
 
     #[allow(dead_code)]
@@ -459,6 +575,7 @@ impl TerminalPanel {
             text_style,
             lines,
             background: cx.theme().background,
+            selection: self.selection.and_then(|selection| selection.normalized()),
         }
     }
 }
@@ -601,6 +718,13 @@ impl TerminalSession {
         }
 
         lines
+    }
+
+    fn renderable_text_lines(&self, cx: &App) -> Vec<String> {
+        self.renderable_cells(cx)
+            .into_iter()
+            .map(|line| line.into_iter().map(|cell| cell.c).collect())
+            .collect()
     }
 }
 
@@ -1013,6 +1137,7 @@ impl Render for TerminalPanel {
             .on_action(cx.listener(Self::on_cycle_tab_forward))
             .on_action(cx.listener(Self::on_cycle_tab_backward))
             .on_action(cx.listener(Self::on_action_paste))
+            .on_action(cx.listener(Self::on_action_copy_terminal_selection))
             .capture_key_down(cx.listener(Self::handle_key_down))
             .on_click(cx.listener(|this, _, window, cx| {
                 window.focus(&this.focus_handle, cx);
@@ -1133,6 +1258,37 @@ impl Render for TerminalPanel {
                                                 }
                                             }
 
+                                            if let Some((start, end)) = state.selection {
+                                                for (row, start_col, end_col) in
+                                                    selected_cell_ranges(
+                                                        state.lines.len(),
+                                                        state.columns(),
+                                                        start,
+                                                        end,
+                                                    )
+                                                {
+                                                    let x = snap_px(
+                                                        origin.x
+                                                            + start_col as f32 * state.cell_width,
+                                                    );
+                                                    let y = snap_px(
+                                                        origin.y + row as f32 * state.line_height,
+                                                    );
+                                                    window.paint_quad(fill(
+                                                        gpui::Bounds::new(
+                                                            point(x, y),
+                                                            size(
+                                                                (state.cell_width
+                                                                    * (end_col - start_col) as f32)
+                                                                    .ceil(),
+                                                                state.line_height,
+                                                            ),
+                                                        ),
+                                                        cx.theme().selection,
+                                                    ));
+                                                }
+                                            }
+
                                             if let Some(ref handle) = sh {
                                                 let handle = handle.clone();
                                                 let line_height = state.line_height;
@@ -1160,10 +1316,80 @@ impl Render for TerminalPanel {
                                                     },
                                                 );
                                             }
+
+                                            let terminal_geometry = TerminalGeometry {
+                                                bounds,
+                                                cell_width: state.cell_width,
+                                                line_height: state.line_height,
+                                                columns: state.columns(),
+                                                rows: state.lines.len(),
+                                            };
+
+                                            let selection_entity = entity.clone();
+                                            window.on_mouse_event(
+                                                move |event: &MouseDownEvent, phase, window, cx| {
+                                                    if !(phase.bubble()
+                                                        && event.button == MouseButton::Left
+                                                        && terminal_geometry
+                                                            .bounds
+                                                            .contains(&event.position))
+                                                    {
+                                                        return;
+                                                    }
+
+                                                    let point = terminal_geometry
+                                                        .point_for_position(event.position);
+                                                    selection_entity.update(cx, |this, cx| {
+                                                        this.begin_selection(point, window, cx);
+                                                    });
+                                                    cx.stop_propagation();
+                                                },
+                                            );
+
+                                            let selection_entity = entity.clone();
+                                            window.on_mouse_event(
+                                                move |event: &MouseMoveEvent, _, _, cx| {
+                                                    if event.pressed_button
+                                                        != Some(MouseButton::Left)
+                                                    {
+                                                        return;
+                                                    }
+
+                                                    let point = terminal_geometry
+                                                        .point_for_position(event.position);
+                                                    selection_entity.update(cx, |this, cx| {
+                                                        if this.selecting {
+                                                            this.update_selection(point, cx);
+                                                            cx.stop_propagation();
+                                                        }
+                                                    });
+                                                },
+                                            );
+
+                                            let selection_entity = entity.clone();
+                                            window.on_mouse_event(
+                                                move |event: &MouseUpEvent, phase, _, cx| {
+                                                    if !(phase.bubble()
+                                                        && event.button == MouseButton::Left)
+                                                    {
+                                                        return;
+                                                    }
+
+                                                    let point = terminal_geometry
+                                                        .point_for_position(event.position);
+                                                    selection_entity.update(cx, |this, cx| {
+                                                        if this.selecting {
+                                                            this.finish_selection(point, cx);
+                                                            cx.stop_propagation();
+                                                        }
+                                                    });
+                                                },
+                                            );
                                         }
                                     },
                                 )
-                                .size_full(),
+                                .size_full()
+                                .cursor_text(),
                             )
                             .when_some(scroll_handle, |parent, handle| {
                                 parent.child(
@@ -1200,6 +1426,128 @@ struct TerminalPaintState {
     text_style: TextStyle,
     lines: Vec<Vec<StyledSpan>>,
     background: Hsla,
+    selection: Option<(TerminalPoint, TerminalPoint)>,
+}
+
+impl TerminalPaintState {
+    fn columns(&self) -> usize {
+        self.lines
+            .iter()
+            .flat_map(|line| {
+                line.iter()
+                    .map(|span| span.start_col.saturating_add(span.cell_count))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TerminalGeometry {
+    bounds: gpui::Bounds<gpui::Pixels>,
+    cell_width: gpui::Pixels,
+    line_height: gpui::Pixels,
+    columns: usize,
+    rows: usize,
+}
+
+impl TerminalGeometry {
+    fn point_for_position(&self, position: gpui::Point<gpui::Pixels>) -> TerminalPoint {
+        let rows = self.rows.max(1);
+        let columns = self.columns.max(1);
+        let relative_x = f32::from(position.x - self.bounds.origin.x);
+        let relative_y = f32::from(position.y - self.bounds.origin.y);
+
+        let row = (relative_y / f32::from(self.line_height)).floor() as isize;
+        let col = (relative_x / f32::from(self.cell_width)).round() as isize;
+
+        TerminalPoint {
+            row: row.clamp(0, rows.saturating_sub(1) as isize) as usize,
+            col: col.clamp(0, columns as isize) as usize,
+        }
+    }
+}
+
+fn selected_cell_ranges(
+    rows: usize,
+    columns: usize,
+    start: TerminalPoint,
+    end: TerminalPoint,
+) -> Vec<(usize, usize, usize)> {
+    if rows == 0 || columns == 0 {
+        return Vec::new();
+    }
+
+    let start_row = start.row.min(rows.saturating_sub(1));
+    let end_row = end.row.min(rows.saturating_sub(1));
+    if start_row > end_row {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    for row in start_row..=end_row {
+        let start_col = if row == start_row {
+            start.col.min(columns)
+        } else {
+            0
+        };
+        let end_col = if row == end_row {
+            end.col.min(columns)
+        } else {
+            columns
+        };
+
+        if start_col < end_col {
+            ranges.push((row, start_col, end_col));
+        }
+    }
+    ranges
+}
+
+fn selected_text_from_lines(
+    lines: &[String],
+    (start, end): (TerminalPoint, TerminalPoint),
+) -> Option<String> {
+    if lines.is_empty() || start.row >= lines.len() {
+        return None;
+    }
+
+    let end_row = end.row.min(lines.len().saturating_sub(1));
+    if start.row > end_row {
+        return None;
+    }
+
+    let mut selected_lines = Vec::new();
+    for row in start.row..=end_row {
+        let line = lines.get(row)?;
+        let start_col = if row == start.row {
+            start.col.min(line.chars().count())
+        } else {
+            0
+        };
+        let end_col = if row == end_row {
+            end.col.min(line.chars().count())
+        } else {
+            line.chars().count()
+        };
+
+        if start_col > end_col {
+            selected_lines.push(String::new());
+            continue;
+        }
+
+        let text = line
+            .chars()
+            .skip(start_col)
+            .take(end_col - start_col)
+            .collect::<String>()
+            .trim_end_matches(' ')
+            .to_string();
+        selected_lines.push(text);
+    }
+
+    let text = selected_lines.join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 fn group_cells_by_style(cells: Vec<StyledCell>) -> Vec<StyledSpan> {
@@ -1268,6 +1616,60 @@ fn terminal_cell_width(text_style: &TextStyle, window: &mut Window, cx: &App) ->
         .advance(font_id, font_pixels, 'w')
         .map(|advance| advance.width)
         .unwrap_or(px(CELL_WIDTH))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TerminalPoint, TerminalSelection, selected_cell_ranges, selected_text_from_lines};
+
+    #[test]
+    fn normalizes_reversed_selection() {
+        let selection = TerminalSelection {
+            anchor: TerminalPoint { row: 2, col: 4 },
+            cursor: TerminalPoint { row: 1, col: 3 },
+        };
+
+        assert_eq!(
+            selection.normalized(),
+            Some((
+                TerminalPoint { row: 1, col: 3 },
+                TerminalPoint { row: 2, col: 4 },
+            ))
+        );
+    }
+
+    #[test]
+    fn selected_text_spans_lines_and_trims_terminal_padding() {
+        let lines = vec![
+            "prompt select *    ".to_string(),
+            "from users         ".to_string(),
+            "where id = 1       ".to_string(),
+        ];
+
+        assert_eq!(
+            selected_text_from_lines(
+                &lines,
+                (
+                    TerminalPoint { row: 0, col: 7 },
+                    TerminalPoint { row: 2, col: 12 },
+                ),
+            ),
+            Some("select *\nfrom users\nwhere id = 1".to_string())
+        );
+    }
+
+    #[test]
+    fn selected_cell_ranges_skip_empty_edges() {
+        assert_eq!(
+            selected_cell_ranges(
+                3,
+                10,
+                TerminalPoint { row: 0, col: 10 },
+                TerminalPoint { row: 2, col: 3 },
+            ),
+            vec![(1, 0, 10), (2, 0, 3)]
+        );
+    }
 }
 
 impl Focusable for TerminalPanel {
