@@ -41,7 +41,11 @@ actions!(
         ExtendResultSelectionDown,
         ExtendResultSelectionLeft,
         ExtendResultSelectionRight,
-        EditResultCell
+        EditResultCell,
+        SelectResultCellLeft,
+        SelectResultCellRight,
+        SelectResultCellUp,
+        SelectResultCellDown,
     ]
 );
 
@@ -1271,6 +1275,110 @@ impl ResultPanel {
         });
     }
 
+    fn select_result_cell_horizontally(
+        &mut self,
+        col_delta: isize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_state.update(cx, |table, cx| {
+            let columns_count = table.delegate().columns_count(cx);
+            let rows_count = table.delegate().rows_count(cx);
+            if columns_count == 0 || rows_count == 0 {
+                return;
+            }
+
+            if let Some((row_ix, col_ix)) = table.selected_cell() {
+                let Some(next_col) = bounded_column_move(col_ix, col_delta, columns_count) else {
+                    return;
+                };
+                let row_ix = row_ix.min(rows_count.saturating_sub(1));
+                table
+                    .delegate_mut()
+                    .select_cell(row_ix, next_col, Modifiers::none());
+                table.set_selected_cell(row_ix, next_col, cx);
+            } else if let Some(col_ix) = table.selected_col() {
+                let Some(next_col) = bounded_column_move(col_ix, col_delta, columns_count) else {
+                    return;
+                };
+                table.set_selected_col(next_col, cx);
+            } else {
+                table.delegate_mut().select_cell(0, 0, Modifiers::none());
+                table.set_selected_cell(0, 0, cx);
+            }
+        });
+    }
+
+    fn select_result_cell_vertically(
+        &mut self,
+        row_delta: isize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_state.update(cx, |table, cx| {
+            let columns_count = table.delegate().columns_count(cx);
+            let rows_count = table.delegate().rows_count(cx);
+            if columns_count == 0 || rows_count == 0 {
+                return;
+            }
+
+            if let Some((row_ix, col_ix)) = table.selected_cell() {
+                let Some(next_row) = bounded_row_move(row_ix, row_delta, rows_count) else {
+                    return;
+                };
+                let col_ix = col_ix.min(columns_count.saturating_sub(1));
+                table
+                    .delegate_mut()
+                    .select_cell(next_row, col_ix, Modifiers::none());
+                table.set_selected_cell(next_row, col_ix, cx);
+            } else if let Some(row_ix) = table.selected_row() {
+                let Some(next_row) = bounded_row_move(row_ix, row_delta, rows_count) else {
+                    return;
+                };
+                table.set_selected_row(next_row, cx);
+            } else {
+                table.delegate_mut().select_cell(0, 0, Modifiers::none());
+                table.set_selected_cell(0, 0, cx);
+            }
+        });
+    }
+
+    fn on_select_result_cell_left(
+        &mut self,
+        _: &SelectResultCellLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_result_cell_horizontally(-1, window, cx);
+    }
+
+    fn on_select_result_cell_right(
+        &mut self,
+        _: &SelectResultCellRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_result_cell_horizontally(1, window, cx);
+    }
+
+    fn on_select_result_cell_up(
+        &mut self,
+        _: &SelectResultCellUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_result_cell_vertically(-1, window, cx);
+    }
+
+    fn on_select_result_cell_down(
+        &mut self,
+        _: &SelectResultCellDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_result_cell_vertically(1, window, cx);
+    }
+
     fn on_extend_selection_up(
         &mut self,
         _: &ExtendResultSelectionUp,
@@ -1480,6 +1588,10 @@ impl Render for ResultPanel {
             .on_action(cx.listener(Self::on_extend_selection_down))
             .on_action(cx.listener(Self::on_extend_selection_left))
             .on_action(cx.listener(Self::on_extend_selection_right))
+            .on_action(cx.listener(Self::on_select_result_cell_left))
+            .on_action(cx.listener(Self::on_select_result_cell_right))
+            .on_action(cx.listener(Self::on_select_result_cell_up))
+            .on_action(cx.listener(Self::on_select_result_cell_down))
             .on_action(cx.listener(Self::on_cycle_tab_forward))
             .on_action(cx.listener(Self::on_cycle_tab_backward))
             .on_action(cx.listener(Self::start_edit_selected_cell))
@@ -1715,6 +1827,16 @@ fn truncate_query(query: &str, max_chars: usize) -> String {
         truncated.push_str("...");
         truncated
     }
+}
+
+fn bounded_column_move(col_ix: usize, col_delta: isize, columns_count: usize) -> Option<usize> {
+    let next_col = col_ix.checked_add_signed(col_delta)?;
+    (next_col < columns_count).then_some(next_col)
+}
+
+fn bounded_row_move(row_ix: usize, row_delta: isize, rows_count: usize) -> Option<usize> {
+    let next_row = row_ix.checked_add_signed(row_delta)?;
+    (next_row < rows_count).then_some(next_row)
 }
 
 fn enrich_column_metadata(
@@ -2478,6 +2600,22 @@ mod tests {
     fn writes_xlsx_zip_payload() {
         let bytes = render_xlsx(&sample_data()).expect("xlsx should render");
         assert!(bytes.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn bounded_column_move_stops_at_horizontal_edges() {
+        assert_eq!(bounded_column_move(0, -1, 3), None);
+        assert_eq!(bounded_column_move(0, 1, 3), Some(1));
+        assert_eq!(bounded_column_move(2, 1, 3), None);
+        assert_eq!(bounded_column_move(2, -1, 3), Some(1));
+    }
+
+    #[test]
+    fn bounded_row_move_stops_at_vertical_edges() {
+        assert_eq!(bounded_row_move(0, -1, 3), None);
+        assert_eq!(bounded_row_move(0, 1, 3), Some(1));
+        assert_eq!(bounded_row_move(2, 1, 3), None);
+        assert_eq!(bounded_row_move(2, -1, 3), Some(1));
     }
 
     #[test]

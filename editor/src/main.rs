@@ -1,10 +1,10 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{
-    AppContext, Bounds, KeyBinding, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions, px, size,
+    px, size, AppContext, Bounds, KeyBinding, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions,
 };
-use gpui_component::Root;
 use gpui_component::dock::ClosePanel;
+use gpui_component::Root;
 
 mod app_theme;
 mod assets;
@@ -25,6 +25,7 @@ use ui::panels::result::{
     CopyResultSelection, CycleTabBackward as ResultCycleTabBackward,
     CycleTabForward as ResultCycleTabForward, EditResultCell, ExtendResultSelectionDown,
     ExtendResultSelectionLeft, ExtendResultSelectionRight, ExtendResultSelectionUp,
+    SelectResultCellDown, SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp,
 };
 use ui::panels::terminal::{
     CopyTerminalSelection, CycleTabBackward as TerminalCycleTabBackward,
@@ -134,6 +135,10 @@ fn main() {
             KeyBinding::new("shift-down", ExtendResultSelectionDown, Some("DataTable")),
             KeyBinding::new("shift-left", ExtendResultSelectionLeft, Some("DataTable")),
             KeyBinding::new("shift-right", ExtendResultSelectionRight, Some("DataTable")),
+            KeyBinding::new("left", SelectResultCellLeft, Some("DataTable")),
+            KeyBinding::new("right", SelectResultCellRight, Some("DataTable")),
+            KeyBinding::new("up", SelectResultCellUp, Some("DataTable")),
+            KeyBinding::new("down", SelectResultCellDown, Some("DataTable")),
             KeyBinding::new("enter", EditResultCell, Some("DataTable")),
             KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),
             KeyBinding::new("cmd-t", NewTerminalTab, Some("terminal_panel")),
