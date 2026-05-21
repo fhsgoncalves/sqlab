@@ -548,15 +548,14 @@ impl Workspace {
             panel
         });
 
-        // Set up bottom dock: wrapper panel
+        // Set up bottom dock state. The dock itself starts hidden and is opened
+        // once a query runs or the user explicitly toggles it from the bottom bar.
         let bottom_panel_size = px(200.);
-        let bottom_panels = DockItem::panel(Arc::new(bottom_panel.clone()));
 
         dock_area.update(cx, |dock_area, cx| {
             dock_area.set_center(center_panels, window, cx);
             dock_area.set_left_dock(left_panels, Some(px(240.)), true, window, cx);
             dock_area.set_right_dock(right_panels, Some(px(260.)), true, window, cx);
-            dock_area.set_bottom_dock(bottom_panels, Some(bottom_panel_size), true, window, cx);
             dock_area.set_dock_collapsible(
                 gpui::Edges {
                     left: true,
@@ -819,7 +818,7 @@ impl Workspace {
             return;
         };
 
-        self.execute_query_with_config(query, config, search_path, cx);
+        self.execute_query_with_config(query, config, search_path, window, cx);
     }
 
     fn show_connection_selector(
@@ -852,6 +851,7 @@ impl Workspace {
                         query.clone(),
                         config,
                         selector_search_path.clone(),
+                        window,
                         cx,
                     );
                 }
@@ -922,6 +922,7 @@ impl Workspace {
         query: String,
         config: DataSourceConfig,
         search_path: Option<String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let results_panel = self.bottom_panel.read(cx).results_panel().clone();
@@ -937,6 +938,7 @@ impl Workspace {
         let activity_id = self
             .activity_tracker
             .update(cx, |tracker, cx| tracker.begin("Running query", cx));
+        self.show_bottom_panel(BottomPanelMode::Results, false, window, cx);
 
         cx.spawn(async move |_this, cx| {
             let query_for_task = query.clone();
@@ -1073,6 +1075,21 @@ impl Workspace {
             return;
         }
 
+        self.show_bottom_panel(mode, true, window, cx);
+    }
+
+    fn show_bottom_panel(
+        &mut self,
+        mode: BottomPanelMode,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_open = self
+            .dock_area
+            .read(cx)
+            .is_dock_open(DockPlacement::Bottom, cx);
+
         self.bottom_panel.update(cx, |panel, cx| {
             panel.set_mode(mode, cx);
         });
@@ -1097,9 +1114,11 @@ impl Workspace {
             });
         }
 
-        self.bottom_panel.update(cx, |panel, cx| {
-            window.focus(&panel.focus_handle(cx), cx);
-        });
+        if focus {
+            self.bottom_panel.update(cx, |panel, cx| {
+                window.focus(&panel.focus_handle(cx), cx);
+            });
+        }
     }
 
     fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
