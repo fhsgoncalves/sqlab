@@ -8,7 +8,7 @@ use chrono::Local;
 use gpui::{
     App, AppContext, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Modifiers, ParentElement, Render, StatefulInteractiveElement,
-    Styled, WeakEntity, Window, actions, div, prelude::FluentBuilder, rgb,
+    Styled, WeakEntity, Window, actions, div, hsla, prelude::FluentBuilder, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
@@ -294,14 +294,7 @@ impl TableDelegate for ResultsTableDelegate {
                 )
             })
             .when(is_selected, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .bg(_cx.theme().table_active.opacity(0.35))
-                        .border_1()
-                        .border_color(_cx.theme().table_active_border),
-                )
+                this.child(div().absolute().inset_0().bg(hsla(0.72, 0.82, 0.58, 0.25)))
             })
             .on_mouse_down(
                 gpui::MouseButton::Left,
