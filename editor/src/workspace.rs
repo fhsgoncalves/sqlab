@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, Window, actions, div, hsla, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Window, actions, div,
+    hsla, prelude::FluentBuilder, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::{
@@ -11,10 +12,13 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockItem, DockPlacement},
     h_flex,
+    input::{Input, InputEvent, InputState},
+    scroll::ScrollableElement as _,
     spinner::Spinner,
     v_flex,
 };
 
+use crate::credentials;
 use crate::drivers::create_configured_data_source;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
@@ -30,10 +34,288 @@ use crate::ui::panels::project_search::{ProjectSearch, ProjectSearchEvent, Toggl
 use crate::ui::panels::result::ResultPanel;
 use crate::ui::panels::terminal::TerminalPanel;
 use sqlab_drivers_core::{
-    ColumnMetadata, ConnectionStatus, DataSourceError, QueryResult, manager::DataSourceManager,
+    ColumnMetadata, ConnectionStatus, DataSourceConfig, DataSourceError, QueryResult,
+    manager::DataSourceManager,
 };
 
-actions!(workspace, [OpenFolder, ToggleSearchReplace]);
+actions!(
+    workspace,
+    [
+        OpenFolder,
+        ToggleSearchReplace,
+        SelectPreviousConnection,
+        SelectNextConnection,
+        ConfirmSelectedConnection
+    ]
+);
+
+const CONNECTION_SELECTOR_CONTEXT: &str = "ConnectionSelector";
+
+#[derive(Clone, Debug)]
+pub struct ConnectionSelected {
+    pub name: String,
+}
+
+struct ConnectionSelector {
+    input: Entity<InputState>,
+    connections: Vec<DataSourceConfig>,
+    filtered_indices: Vec<usize>,
+    selected_ix: usize,
+    focus_handle: FocusHandle,
+    _input_subscription: gpui::Subscription,
+}
+
+impl EventEmitter<ConnectionSelected> for ConnectionSelector {}
+
+impl ConnectionSelector {
+    fn new(
+        connections: Vec<DataSourceConfig>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus_handle = cx.focus_handle();
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search connections..."));
+        let input_subscription = cx.subscribe_in(&input, window, {
+            move |this: &mut ConnectionSelector, _input, event: &InputEvent, _window, cx| {
+                match event {
+                    InputEvent::Change => this.filter_connections(cx),
+                    InputEvent::PressEnter { .. } => this.confirm_selected(cx),
+                    _ => {}
+                }
+            }
+        });
+        let filtered_indices = (0..connections.len()).collect();
+
+        Self {
+            input,
+            connections,
+            filtered_indices,
+            selected_ix: 0,
+            focus_handle,
+            _input_subscription: input_subscription,
+        }
+    }
+
+    fn filter_connections(&mut self, cx: &mut Context<Self>) {
+        let query = self.input.read(cx).value().trim().to_ascii_lowercase();
+        if query.is_empty() {
+            self.filtered_indices = (0..self.connections.len()).collect();
+        } else {
+            self.filtered_indices = self
+                .connections
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, config)| {
+                    config
+                        .name
+                        .to_ascii_lowercase()
+                        .contains(&query)
+                        .then_some(ix)
+                })
+                .collect();
+        }
+        self.selected_ix = 0;
+        cx.notify();
+    }
+
+    fn select_previous(&mut self, cx: &mut Context<Self>) {
+        if self.filtered_indices.is_empty() {
+            return;
+        }
+        self.selected_ix = if self.selected_ix == 0 {
+            self.filtered_indices.len() - 1
+        } else {
+            self.selected_ix - 1
+        };
+        cx.notify();
+    }
+
+    fn select_next(&mut self, cx: &mut Context<Self>) {
+        if self.filtered_indices.is_empty() {
+            return;
+        }
+        self.selected_ix = (self.selected_ix + 1) % self.filtered_indices.len();
+        cx.notify();
+    }
+
+    fn confirm_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(&connection_ix) = self.filtered_indices.get(self.selected_ix) else {
+            return;
+        };
+        let Some(config) = self.connections.get(connection_ix) else {
+            return;
+        };
+        cx.emit(ConnectionSelected {
+            name: config.name.clone(),
+        });
+    }
+
+    fn input_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input.read(cx).focus_handle(cx)
+    }
+
+    fn on_action_select_previous(
+        &mut self,
+        _: &SelectPreviousConnection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_previous(cx);
+    }
+
+    fn on_action_select_next(
+        &mut self,
+        _: &SelectNextConnection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_next(cx);
+    }
+
+    fn on_action_confirm(
+        &mut self,
+        _: &ConfirmSelectedConnection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_selected(cx);
+    }
+
+    fn render_connection_row(
+        &self,
+        ix: usize,
+        config: &DataSourceConfig,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let name = config.name.clone();
+        let database = if config.database.is_empty() {
+            config.host.clone()
+        } else {
+            config.database.clone()
+        };
+        let db_type = config.db_type.to_string();
+
+        h_flex()
+            .id(format!("connection-selector-row-{}", ix))
+            .w_full()
+            .gap_2()
+            .items_center()
+            .px_3()
+            .py_2()
+            .cursor_pointer()
+            .when(selected, |this| {
+                this.bg(cx.theme().accent)
+                    .text_color(cx.theme().accent_foreground)
+            })
+            .when(!selected, |this| {
+                this.text_color(cx.theme().foreground)
+                    .hover(|style| style.bg(cx.theme().accent.opacity(0.12)))
+            })
+            .child(
+                Icon::new(IconName::HardDrive)
+                    .size_4()
+                    .text_color(if selected {
+                        cx.theme().accent_foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    }),
+            )
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .flex_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .truncate()
+                            .font_weight(if selected {
+                                gpui::FontWeight::MEDIUM
+                            } else {
+                                gpui::FontWeight::NORMAL
+                            })
+                            .child(name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .truncate()
+                            .text_color(if selected {
+                                cx.theme().accent_foreground.opacity(0.7)
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(format!("{} / {}", db_type, database)),
+                    ),
+            )
+            .on_click(
+                cx.listener(move |this: &mut ConnectionSelector, _, _window, cx| {
+                    this.selected_ix = ix;
+                    this.confirm_selected(cx);
+                }),
+            )
+            .into_any_element()
+    }
+}
+
+impl Render for ConnectionSelector {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let filtered = self.filtered_indices.clone();
+
+        v_flex()
+            .id("connection-selector")
+            .key_context(CONNECTION_SELECTOR_CONTEXT)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_action_select_previous))
+            .on_action(cx.listener(Self::on_action_select_next))
+            .on_action(cx.listener(Self::on_action_confirm))
+            .w(px(460.))
+            .max_h(px(360.))
+            .overflow_hidden()
+            .gap_2()
+            .child(Input::new(&self.input))
+            .child(
+                div()
+                    .w_full()
+                    .max_h(px(280.))
+                    .overflow_y_scrollbar()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .when(filtered.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .px_3()
+                                .py_6()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No matching connections"),
+                        )
+                    })
+                    .children(
+                        filtered
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(ix, &connection_ix)| {
+                                self.connections.get(connection_ix).map(|config| {
+                                    self.render_connection_row(
+                                        ix,
+                                        config,
+                                        ix == self.selected_ix,
+                                        cx,
+                                    )
+                                })
+                            }),
+                    ),
+            )
+    }
+}
+
+impl Focusable for ConnectionSelector {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
 
 pub struct Workspace {
     file_tree_panel: Entity<FileTreePanel>,
@@ -476,14 +758,107 @@ impl Workspace {
 
     fn execute_single_query(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(config) = self.data_source_manager.read(cx).active_config().cloned() else {
-            window.open_alert_dialog(cx, |alert, _, _| {
-                alert
-                    .title("No Active Connection")
-                    .child("Activate a database connection before running queries.")
-            });
+            self.show_connection_selector(query, window, cx);
             return;
         };
 
+        self.execute_query_with_config(query, config, cx);
+    }
+
+    fn show_connection_selector(
+        &mut self,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connections = self.data_source_manager.read(cx).configs().to_vec();
+        if connections.is_empty() {
+            window.open_alert_dialog(cx, |alert, _, _| {
+                alert
+                    .title("No Connections")
+                    .child("Create a database connection before running queries.")
+            });
+            return;
+        }
+
+        let selector = cx.new(|cx| ConnectionSelector::new(connections, window, cx));
+        cx.subscribe_in(
+            &selector,
+            window,
+            move |this, _selector, event: &ConnectionSelected, window, cx| {
+                let name = event.name.clone();
+                window.close_dialog(cx);
+                if let Some(config) = this.prepare_query_connection(name.clone(), window, cx) {
+                    this.execute_query_with_config(query.clone(), config, cx);
+                }
+            },
+        )
+        .detach();
+
+        window.open_alert_dialog(cx, {
+            let selector = selector.clone();
+            move |alert, _window, _cx| {
+                alert
+                    .title("Choose Connection")
+                    .child(selector.clone())
+                    .footer(div())
+                    .close_button(true)
+            }
+        });
+        window.focus(&selector.read(cx).input_focus_handle(cx), cx);
+    }
+
+    fn prepare_query_connection(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<DataSourceConfig> {
+        let result = self.data_source_manager.update(cx, |manager, cx| {
+            manager.set_active(Some(name.clone()));
+            if manager.status(&name) != ConnectionStatus::Connected {
+                manager.set_status(&name, ConnectionStatus::Idle);
+            }
+            manager.clear_last_error(&name);
+
+            if let Err(error) = manager.ensure_password_loaded(&name, |n| {
+                credentials::load_password(n).map_err(|e| credentials::recovery_error_message(&e))
+            }) {
+                manager.set_status(&name, ConnectionStatus::Failed);
+                manager.set_last_error(&name, error.clone());
+                cx.notify();
+                return Err(error);
+            }
+
+            let config = manager
+                .configs()
+                .iter()
+                .find(|config| config.name == name)
+                .cloned()
+                .ok_or_else(|| "The selected connection no longer exists.".to_string());
+            cx.notify();
+            config
+        });
+
+        match result {
+            Ok(config) => Some(config),
+            Err(error) => {
+                window.open_alert_dialog(cx, move |alert, _, _| {
+                    alert
+                        .title("Connection Setup Failed")
+                        .description(error.clone())
+                });
+                None
+            }
+        }
+    }
+
+    fn execute_query_with_config(
+        &mut self,
+        query: String,
+        config: DataSourceConfig,
+        cx: &mut Context<Self>,
+    ) {
         let results_panel = self.bottom_panel.read(cx).results_panel().clone();
         let bottom_panel = self.bottom_panel.clone();
         let data_source_manager = self.data_source_manager.clone();

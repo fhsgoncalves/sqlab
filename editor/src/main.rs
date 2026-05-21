@@ -30,7 +30,10 @@ use ui::panels::terminal::{
     CopyTerminalSelection, CycleTabBackward as TerminalCycleTabBackward,
     CycleTabForward as TerminalCycleTabForward, NewTerminalTab, Paste,
 };
-use workspace::{OpenFolder, ToggleSearchReplace, Workspace};
+use workspace::{
+    ConfirmSelectedConnection, OpenFolder, SelectNextConnection, SelectPreviousConnection,
+    ToggleSearchReplace, Workspace,
+};
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
     let bytes = include_bytes!("../assets/app-icon.png");
@@ -154,6 +157,13 @@ fn main() {
             KeyBinding::new("up", SelectPreviousQuery, None),
             KeyBinding::new("down", SelectNextQuery, None),
             KeyBinding::new("enter", ConfirmSelectedQuery, None),
+            KeyBinding::new("up", SelectPreviousConnection, Some("ConnectionSelector")),
+            KeyBinding::new("down", SelectNextConnection, Some("ConnectionSelector")),
+            KeyBinding::new(
+                "enter",
+                ConfirmSelectedConnection,
+                Some("ConnectionSelector"),
+            ),
         ]);
         set_app_menus(cx);
         cx.activate(true);
