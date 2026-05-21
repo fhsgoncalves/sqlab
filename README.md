@@ -45,7 +45,7 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | DDL generation from schema item | ✅ |
 | Generate and export diagrams | ✅ |
 | In-place data editor | ✅ |
-| Table data editor | ⏳ |
+| Table data editor | ✅ |
 | Connection and schema selector | ✅ |
 | MySQL driver | ✅ |
 | SQLite driver | ✅ |

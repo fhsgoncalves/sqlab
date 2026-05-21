@@ -149,7 +149,7 @@ struct EditingCell {
 }
 
 #[derive(Clone, Debug)]
-struct EditableTable {
+pub struct EditableTable {
     schema: String,
     table: String,
     columns: Vec<EditableColumn>,
@@ -161,6 +161,71 @@ struct EditableColumn {
     name: String,
     data_type: String,
     editable: bool,
+}
+
+impl EditableTable {
+    pub fn from_table_result_columns(table: &TableInfo, result_columns: &[String]) -> Option<Self> {
+        if !matches!(table.kind, TableKind::Table) {
+            return None;
+        }
+
+        let column_counts =
+            result_columns
+                .iter()
+                .fold(HashMap::<String, usize>::new(), |mut counts, column| {
+                    *counts.entry(column.clone()).or_default() += 1;
+                    counts
+                });
+        let table_columns = table
+            .columns
+            .iter()
+            .map(|column| (column.name.clone(), column))
+            .collect::<HashMap<_, _>>();
+
+        let mut columns = Vec::with_capacity(result_columns.len());
+        for column_name in result_columns {
+            let unique = column_counts.get(column_name).copied().unwrap_or(0) == 1;
+            let Some(column) = table_columns.get(column_name) else {
+                columns.push(EditableColumn {
+                    name: column_name.clone(),
+                    data_type: String::new(),
+                    editable: false,
+                });
+                continue;
+            };
+            columns.push(EditableColumn {
+                name: column.name.clone(),
+                data_type: column.data_type.clone(),
+                editable: unique && !column.is_pk && !column.is_generated,
+            });
+        }
+
+        let pk_names = table
+            .columns
+            .iter()
+            .filter(|column| column.is_pk)
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        if pk_names.is_empty() {
+            return None;
+        }
+        let pk_col_indices = pk_names
+            .iter()
+            .map(|pk_name| {
+                result_columns.iter().enumerate().find_map(|(ix, column)| {
+                    (column == pk_name && column_counts.get(column).copied() == Some(1))
+                        .then_some(ix)
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        Some(Self {
+            schema: table.schema.clone(),
+            table: table.name.clone(),
+            columns,
+            pk_col_indices,
+        })
+    }
 }
 
 impl TableDelegate for ResultsTableDelegate {
@@ -337,11 +402,11 @@ impl TableDelegate for ResultsTableDelegate {
 }
 
 impl ResultsTableDelegate {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self::from_parts(Vec::new(), Vec::new(), Vec::new())
     }
 
-    fn from_parts(
+    pub fn from_parts(
         columns: Vec<String>,
         column_metadata: Vec<ColumnMetadata>,
         rows: Vec<Vec<String>>,
@@ -353,7 +418,7 @@ impl ResultsTableDelegate {
         Self::from_query(columns, column_metadata, rows, nulls, None)
     }
 
-    fn from_query(
+    pub fn from_query(
         columns: Vec<String>,
         column_metadata: Vec<ColumnMetadata>,
         rows: Vec<Vec<String>>,
@@ -416,11 +481,11 @@ impl ResultsTableDelegate {
                 .unwrap_or(false)
     }
 
-    fn has_dirty_cells(&self) -> bool {
+    pub fn has_dirty_cells(&self) -> bool {
         !self.dirty_cells.is_empty()
     }
 
-    fn start_editing(
+    pub fn start_editing(
         &mut self,
         row_ix: usize,
         col_ix: usize,
@@ -437,7 +502,7 @@ impl ResultsTableDelegate {
         true
     }
 
-    fn commit_editing(&mut self, cx: &App) -> bool {
+    pub fn commit_editing(&mut self, cx: &App) -> bool {
         let Some(editing) = self.editing_cell.take() else {
             return false;
         };
@@ -489,7 +554,7 @@ impl ResultsTableDelegate {
         }
     }
 
-    fn edit_batch(&self) -> Option<TableEditBatch> {
+    pub fn edit_batch(&self) -> Option<TableEditBatch> {
         let editable_table = self.editable_table.as_ref()?;
         if self.dirty_cells.is_empty() {
             return None;
@@ -567,7 +632,7 @@ impl ResultsTableDelegate {
         }
     }
 
-    fn mark_submitted(&mut self) {
+    pub fn mark_submitted(&mut self) {
         self.original_rows = self.rows.clone();
         self.original_nulls = self.nulls.clone();
         self.row_ids = (0..self.rows.len()).collect();
@@ -575,7 +640,7 @@ impl ResultsTableDelegate {
         self.editing_cell = None;
     }
 
-    fn select_cell(&mut self, row_ix: usize, col_ix: usize, modifiers: Modifiers) {
+    pub fn select_cell(&mut self, row_ix: usize, col_ix: usize, modifiers: Modifiers) {
         let cell = (row_ix, col_ix);
         if modifiers.shift {
             let anchor = self.selection_anchor.unwrap_or(cell);
@@ -596,7 +661,11 @@ impl ResultsTableDelegate {
         }
     }
 
-    fn extend_selection(&mut self, row_delta: isize, col_delta: isize) -> Option<(usize, usize)> {
+    pub fn extend_selection(
+        &mut self,
+        row_delta: isize,
+        col_delta: isize,
+    ) -> Option<(usize, usize)> {
         if self.rows.is_empty() || self.columns.is_empty() {
             return None;
         }
@@ -622,7 +691,7 @@ impl ResultsTableDelegate {
         Some(next)
     }
 
-    fn select_row(&mut self, row_ix: usize) {
+    pub fn select_row(&mut self, row_ix: usize) {
         self.selected_cells.clear();
         if row_ix < self.rows.len() {
             for col_ix in 0..self.columns.len() {
@@ -633,7 +702,7 @@ impl ResultsTableDelegate {
         }
     }
 
-    fn select_col(&mut self, col_ix: usize) {
+    pub fn select_col(&mut self, col_ix: usize) {
         self.selected_cells.clear();
         if col_ix < self.columns.len() {
             for row_ix in 0..self.rows.len() {
@@ -644,7 +713,7 @@ impl ResultsTableDelegate {
         }
     }
 
-    fn select_emitted_cell(&mut self, row_ix: usize, col_ix: usize) {
+    pub fn select_emitted_cell(&mut self, row_ix: usize, col_ix: usize) {
         let cell = (row_ix, col_ix);
         if !self.selected_cells.contains(&cell) {
             self.selected_cells.clear();
@@ -1905,65 +1974,7 @@ fn editable_table_for_execution(
     let cache_key = schema_cache::cache_key(config);
     let schema = schema_cache::load(&cache_key).ok().flatten()?;
     let table = find_schema_table(&schema.tables, config, &table_ref)?;
-    if !matches!(table.kind, TableKind::Table) {
-        return None;
-    }
-
-    let column_counts =
-        result_columns
-            .iter()
-            .fold(HashMap::<String, usize>::new(), |mut counts, column| {
-                *counts.entry(column.clone()).or_default() += 1;
-                counts
-            });
-    let table_columns = table
-        .columns
-        .iter()
-        .map(|column| (column.name.clone(), column))
-        .collect::<HashMap<_, _>>();
-
-    let mut columns = Vec::with_capacity(result_columns.len());
-    for column_name in result_columns {
-        let unique = column_counts.get(column_name).copied().unwrap_or(0) == 1;
-        let Some(column) = table_columns.get(column_name) else {
-            columns.push(EditableColumn {
-                name: column_name.clone(),
-                data_type: String::new(),
-                editable: false,
-            });
-            continue;
-        };
-        columns.push(EditableColumn {
-            name: column.name.clone(),
-            data_type: column.data_type.clone(),
-            editable: unique && !column.is_pk && !column.is_generated,
-        });
-    }
-
-    let pk_names = table
-        .columns
-        .iter()
-        .filter(|column| column.is_pk)
-        .map(|column| column.name.clone())
-        .collect::<Vec<_>>();
-    if pk_names.is_empty() {
-        return None;
-    }
-    let pk_col_indices = pk_names
-        .iter()
-        .map(|pk_name| {
-            result_columns.iter().enumerate().find_map(|(ix, column)| {
-                (column == pk_name && column_counts.get(column).copied() == Some(1)).then_some(ix)
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-
-    Some(EditableTable {
-        schema: table.schema.clone(),
-        table: table.name.clone(),
-        columns,
-        pk_col_indices,
-    })
+    EditableTable::from_table_result_columns(table, result_columns)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

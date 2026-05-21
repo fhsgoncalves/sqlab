@@ -14,6 +14,7 @@ use gpui_component::{
     v_flex,
 };
 
+use super::data_editor::DataEditorPanel;
 use super::editor::{EditorPanel, ExecuteQuery};
 use crate::credentials;
 use crate::drivers::create_configured_data_source;
@@ -22,7 +23,7 @@ use crate::ui::components::tab::{Tab, TabBar};
 use crate::ui::panels::connection::ConnectionPanel;
 use crate::ui::panels::diagram::{DiagramModel, DiagramPanel};
 use sqlab_drivers_core::{
-    ConnectionStatus, DataSourceConfig, DataSourceError, manager::DataSourceManager,
+    ConnectionStatus, DataSourceConfig, DataSourceError, TableInfo, manager::DataSourceManager,
 };
 
 actions!(editor_tabs, [CycleTabForward, CycleTabBackward]);
@@ -40,6 +41,7 @@ pub struct EditorTabs {
 enum EditorTab {
     Sql(Entity<EditorPanel>),
     Diagram(Entity<DiagramPanel>),
+    Data(Entity<DataEditorPanel>),
 }
 
 impl EditorTab {
@@ -53,13 +55,22 @@ impl EditorTab {
                 .unwrap_or("Untitled")
                 .to_string(),
             EditorTab::Diagram(diagram) => diagram.read(cx).title().to_string(),
+            EditorTab::Data(data_editor) => data_editor.read(cx).title(),
+        }
+    }
+
+    fn icon(&self) -> Option<Icon> {
+        match self {
+            EditorTab::Sql(_) => None,
+            EditorTab::Diagram(_) => None,
+            EditorTab::Data(_) => Some(Icon::new(IconName::File).path("icons/table.svg")),
         }
     }
 
     fn as_sql(&self) -> Option<&Entity<EditorPanel>> {
         match self {
             EditorTab::Sql(editor) => Some(editor),
-            EditorTab::Diagram(_) => None,
+            EditorTab::Diagram(_) | EditorTab::Data(_) => None,
         }
     }
 
@@ -67,6 +78,7 @@ impl EditorTab {
         match self {
             EditorTab::Sql(editor) => editor.clone().into_any_element(),
             EditorTab::Diagram(diagram) => diagram.clone().into_any_element(),
+            EditorTab::Data(data_editor) => data_editor.clone().into_any_element(),
         }
     }
 }
@@ -119,7 +131,7 @@ impl EditorTabs {
     ) {
         if let Some(ix) = self.tabs.iter().position(|tab| match tab {
             EditorTab::Diagram(diagram) => diagram.read(cx).title() == model.title,
-            EditorTab::Sql(_) => false,
+            EditorTab::Sql(_) | EditorTab::Data(_) => false,
         }) {
             self.active_ix = ix;
             cx.notify();
@@ -129,6 +141,30 @@ impl EditorTabs {
         let diagram =
             cx.new(|cx| DiagramPanel::new(model, self.activity_tracker.clone(), window, cx));
         self.tabs.push(EditorTab::Diagram(diagram));
+        self.active_ix = self.tabs.len() - 1;
+        cx.notify();
+    }
+
+    pub fn open_data_editor(
+        &mut self,
+        config: DataSourceConfig,
+        table: TableInfo,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self.tabs.iter().position(|tab| match tab {
+            EditorTab::Data(data_editor) => data_editor.read(cx).matches_table(&config, &table),
+            EditorTab::Sql(_) | EditorTab::Diagram(_) => false,
+        }) {
+            self.active_ix = ix;
+            cx.notify();
+            return;
+        }
+
+        let data_editor = cx.new(|cx| {
+            DataEditorPanel::new(config, table, self.activity_tracker.clone(), window, cx)
+        });
+        self.tabs.push(EditorTab::Data(data_editor));
         self.active_ix = self.tabs.len() - 1;
         cx.notify();
     }
@@ -419,6 +455,7 @@ impl Render for EditorTabs {
                 tab_bar.child(
                     Tab::new()
                         .label(tab.label(cx))
+                        .when_some(tab.icon(), |tab, icon| tab.icon(icon))
                         .selected(is_active)
                         .closable(true)
                         .on_close(move |_window, cx| {

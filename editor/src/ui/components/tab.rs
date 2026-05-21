@@ -67,6 +67,11 @@ impl Tab {
         self
     }
 
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
@@ -177,17 +182,13 @@ impl RenderOnce for Tab {
             .child(
                 h_flex()
                     .flex_1()
+                    .gap_1()
                     .items_center()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .map(|this| match self.icon {
-                        Some(icon) => this.child(icon.size_4()),
-                        None => this.map(|this| match self.label {
-                            Some(label) => this.child(label),
-                            None => this,
-                        }),
-                    }),
+                    .when_some(self.icon, |this, icon| this.child(icon.size_4()))
+                    .when_some(self.label, |this, label| this.child(label)),
             )
             .when_some(self.suffix, |this, suffix| this.child(suffix))
             .when(self.closable, |this| {

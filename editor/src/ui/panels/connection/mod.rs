@@ -21,6 +21,7 @@ use crate::drivers::create_configured_data_source;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::diagram::{DiagramScope, ShowDiagramEvent};
+use crate::ui::panels::file_editor::data_editor::ShowDataEditorEvent;
 use sqlab_drivers_core::ddl::create_ddl_generator;
 use sqlab_drivers_core::{
     ConnectionStatus, DataSourceConfig, DataSourceError, Database, TableKind,
@@ -42,6 +43,7 @@ pub struct ConnectionPanel {
 
 impl EventEmitter<PanelEvent> for ConnectionPanel {}
 impl EventEmitter<ShowDiagramEvent> for ConnectionPanel {}
+impl EventEmitter<ShowDataEditorEvent> for ConnectionPanel {}
 
 const DATABASE_OPTIONS: [Database; 3] = [Database::Postgres, Database::MySql, Database::SQLite];
 
@@ -525,6 +527,23 @@ impl ConnectionPanel {
         cx.emit(ShowDiagramEvent { config, scope });
     }
 
+    fn show_data_editor(
+        &mut self,
+        connection_name: String,
+        schema: String,
+        table: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(config) = self.prepare_connection_operation(connection_name, cx) else {
+            return;
+        };
+        cx.emit(ShowDataEditorEvent {
+            config,
+            schema,
+            table,
+        });
+    }
+
     fn toggle_connection_expanded(&mut self, name: &str) {
         if self.expanded_connections.contains(name) {
             self.expanded_connections.remove(name);
@@ -910,6 +929,42 @@ impl ConnectionPanel {
         cx.notify();
     }
 
+    fn open_selected_data_editor(
+        &mut self,
+        configs: &[DataSourceConfig],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(selected_node) = self.selected_node.clone() else {
+            return false;
+        };
+        let segments = selected_node.split(':').collect::<Vec<_>>();
+        let Some(connection_name) = segments
+            .first()
+            .filter(|segment| **segment == "conn")
+            .and_then(|_| segments.get(1))
+        else {
+            return false;
+        };
+        let Some(config) = configs
+            .iter()
+            .find(|config| config.name == *connection_name)
+        else {
+            return false;
+        };
+        let cache_key = schema_cache::cache_key(config);
+        let Some(schema) = schema_cache::load(&cache_key).ok().flatten() else {
+            return false;
+        };
+        let Some((schema_name, table_name)) =
+            Self::data_editor_target_for_node(&selected_node, &schema)
+        else {
+            return false;
+        };
+
+        self.show_data_editor(connection_name.to_string(), schema_name, table_name, cx);
+        true
+    }
+
     pub(crate) fn database_icon_path(database: Database) -> &'static str {
         match database {
             Database::Postgres => "icons/postgresql.svg",
@@ -1136,6 +1191,9 @@ impl ConnectionPanel {
             let diagram_scope = Self::diagram_scope_for_node(&node_id);
             let diagram_config = config.clone();
             let diagram_view = view.clone();
+            let data_editor_target = Self::data_editor_target_for_node(&node_id, &schema);
+            let data_editor_view = view.clone();
+            let data_editor_connection = config.name.clone();
 
             let is_folder_node = node_id.ends_with(":tables")
                 || node_id.ends_with(":columns")
@@ -1164,6 +1222,23 @@ impl ConnectionPanel {
                             let config = diagram_config.clone();
                             move |this, _, _window, cx| {
                                 this.show_diagram(config.clone(), scope.clone(), cx);
+                            }
+                        })),
+                )
+            })
+            .when_some(data_editor_target, |menu, (schema_name, table_name)| {
+                menu.item(
+                    PopupMenuItem::new("Edit data")
+                        .icon(IconName::File)
+                        .on_click(window.listener_for(&data_editor_view, {
+                            let connection_name = data_editor_connection.clone();
+                            move |this, _, _window, cx| {
+                                this.show_data_editor(
+                                    connection_name.clone(),
+                                    schema_name.clone(),
+                                    table_name.clone(),
+                                    cx,
+                                );
                             }
                         })),
                 )
@@ -1210,6 +1285,27 @@ impl ConnectionPanel {
         }
 
         None
+    }
+
+    fn data_editor_target_for_node(
+        node_id: &str,
+        schema: &sqlab_drivers_core::DatabaseSchema,
+    ) -> Option<(String, String)> {
+        let segments = node_id.split(':').collect::<Vec<_>>();
+        let schema_name_idx = segments.iter().position(|&segment| segment == "schema")?;
+        let schema_name = segments.get(schema_name_idx + 1)?;
+        let table_idx = segments.iter().position(|&segment| segment == "table")?;
+        let table_name = segments.get(table_idx + 1)?;
+
+        schema
+            .tables
+            .iter()
+            .any(|table| {
+                table.schema == *schema_name
+                    && table.name == *table_name
+                    && matches!(table.kind, TableKind::Table)
+            })
+            .then(|| ((*schema_name).to_string(), (*table_name).to_string()))
     }
 }
 
@@ -1431,6 +1527,8 @@ impl Render for ConnectionPanel {
                         let id_click = id.clone();
                         let id_toggle = id.clone();
                         let label_for_menu = label.clone();
+                        let data_editor_target = Self::data_editor_target_for_node(&id, &schema);
+                        let data_editor_connection = config.name.clone();
 
                         let (name, data_type) = if id.contains(":col:") {
                             if let Some(pos) = label.find(" : ") {
@@ -1527,16 +1625,32 @@ impl Render for ConnectionPanel {
                                                 }),
                                         ),
                                 )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.selected_node = Some(id_click.clone());
-                                    this.selected_connection = None;
-                                    if let Some(name) = Self::copyable_name(&id_click, &label) {
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                            name,
-                                        ));
-                                    }
-                                    cx.notify();
-                                }))
+                                .on_click(cx.listener(
+                                    move |this, event: &gpui::ClickEvent, _, cx| {
+                                        this.selected_node = Some(id_click.clone());
+                                        this.selected_connection = None;
+                                        if event.click_count() == 2 {
+                                            if let Some((schema_name, table_name)) =
+                                                data_editor_target.as_ref()
+                                            {
+                                                this.show_data_editor(
+                                                    data_editor_connection.clone(),
+                                                    schema_name.clone(),
+                                                    table_name.clone(),
+                                                    cx,
+                                                );
+                                                cx.notify();
+                                                return;
+                                            }
+                                        }
+                                        if let Some(name) = Self::copyable_name(&id_click, &label) {
+                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                                name,
+                                            ));
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
                                 .context_menu(Self::schema_node_context_menu(
                                     id.clone(),
                                     label_for_menu,
@@ -1676,6 +1790,13 @@ impl Render for ConnectionPanel {
                                     this.expanded_connections.remove(id);
                                     cx.notify();
                                 }
+                            }
+                        }
+                        "enter" => {
+                            let configs = this.manager.read(cx).configs().to_vec();
+                            if this.open_selected_data_editor(&configs, cx) {
+                                cx.stop_propagation();
+                                cx.notify();
                             }
                         }
                         _ => {}

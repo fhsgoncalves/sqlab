@@ -1,3 +1,4 @@
+pub mod data_editor;
 pub mod editor;
 pub mod query_detector;
 pub mod query_selector;
