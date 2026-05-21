@@ -1,9 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyBinding, ParentElement, Render, ScrollHandle, StatefulInteractiveElement,
-    Styled, Window, actions, div, point, prelude::FluentBuilder, px,
+    Styled, Task, Window, actions, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::IconName;
 use gpui_component::button::{Button, ButtonVariants};
@@ -34,6 +37,9 @@ actions!(
 const CONTEXT: &str = "ProjectSearch";
 const RESULT_LIST_HEIGHT: f32 = 430.0;
 const RESULT_ROW_HEIGHT: f32 = 58.0;
+const SEARCH_DEBOUNCE: Duration = Duration::from_secs(1);
+const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_SEARCH_RESULTS: usize = 2_000;
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
@@ -92,11 +98,13 @@ pub struct ProjectSearch {
     include_ignored: bool,
     searching: bool,
     search_generation: u64,
+    results_truncated: bool,
     preview_generation: u64,
     preview_key: Option<PreviewKey>,
     preview_language: Option<String>,
     focus_handle: FocusHandle,
     results_scroll_handle: ScrollHandle,
+    pending_search_task: Option<Task<()>>,
     _search_subscription: gpui::Subscription,
     _replace_subscription: gpui::Subscription,
 }
@@ -161,11 +169,13 @@ impl ProjectSearch {
             include_ignored: false,
             searching: false,
             search_generation: 0,
+            results_truncated: false,
             preview_generation: 0,
             preview_key: None,
             preview_language: None,
             focus_handle,
             results_scroll_handle: ScrollHandle::default(),
+            pending_search_task: None,
             _search_subscription: search_subscription,
             _replace_subscription: replace_subscription,
         }
@@ -199,14 +209,23 @@ impl ProjectSearch {
         });
         self.results.clear();
         self.filtered_results.clear();
+        self.results_truncated = false;
         self.searching = false;
         self.search_generation = self.search_generation.wrapping_add(1);
+        self.pending_search_task = None;
         cx.emit(ProjectSearchEvent::Closed);
         cx.notify();
     }
 
     pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = root;
+        self.results.clear();
+        self.filtered_results.clear();
+        self.results_truncated = false;
+        if self.visible && !self.search_input.read(cx).value().is_empty() {
+            self.perform_search(cx);
+            return;
+        }
         cx.notify();
     }
 
@@ -228,8 +247,10 @@ impl ProjectSearch {
         if query.is_empty() {
             self.results.clear();
             self.filtered_results.clear();
+            self.results_truncated = false;
             self.selected_ix = 0;
             self.searching = false;
+            self.pending_search_task = None;
             cx.notify();
             return;
         }
@@ -245,33 +266,49 @@ impl ProjectSearch {
         let use_fuzzy = self.use_fuzzy;
         let include_ignored = self.include_ignored;
 
-        let entity = cx.entity();
-        cx.spawn(async move |_, cx| {
-            let results = search_in_directory(
-                &root,
-                &query_clone,
-                case_sensitive,
-                use_regex,
-                whole_word,
-                use_fuzzy,
-                include_ignored,
-            );
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_DEBOUNCE).await;
 
-            cx.update(|cx| {
-                entity.update(cx, |this, cx| {
-                    if this.search_generation != generation {
-                        return;
-                    }
-                    this.results = results;
-                    this.filtered_results = (0..this.results.len()).collect();
-                    this.selected_ix = 0;
-                    this.results_scroll_handle.set_offset(point(px(0.), px(0.)));
-                    this.searching = false;
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+            let should_search = this
+                .update(cx, |this, _| {
+                    this.visible && this.search_generation == generation
+                })
+                .unwrap_or(false);
+            if !should_search {
+                return;
+            }
+
+            let search_result = cx
+                .background_executor()
+                .spawn(async move {
+                    search_in_directory(
+                        &root,
+                        &query_clone,
+                        case_sensitive,
+                        use_regex,
+                        whole_word,
+                        use_fuzzy,
+                        include_ignored,
+                    )
+                })
+                .await;
+
+            this.update(cx, |this, cx| {
+                if this.search_generation != generation {
+                    return;
+                }
+                this.results = search_result.results;
+                this.results_truncated = search_result.truncated;
+                this.filtered_results = (0..this.results.len()).collect();
+                this.selected_ix = 0;
+                this.results_scroll_handle.set_offset(point(px(0.), px(0.)));
+                this.searching = false;
+                cx.notify();
+            })
+            .ok();
+        });
+
+        self.pending_search_task = Some(task);
     }
 
     fn select_previous(&mut self, cx: &mut Context<Self>) {
@@ -400,6 +437,11 @@ impl ProjectSearch {
     }
 }
 
+struct DirectorySearchResult {
+    results: Vec<SearchResult>,
+    truncated: bool,
+}
+
 fn search_in_directory(
     root: &Path,
     query: &str,
@@ -408,7 +450,7 @@ fn search_in_directory(
     whole_word: bool,
     use_fuzzy: bool,
     include_ignored: bool,
-) -> Vec<SearchResult> {
+) -> DirectorySearchResult {
     let mut builder = ignore::WalkBuilder::new(root);
     builder.git_ignore(!include_ignored);
     builder.git_global(!include_ignored);
@@ -417,8 +459,10 @@ fn search_in_directory(
     builder.hidden(false);
     builder.require_git(false);
     builder.follow_links(false);
+    builder.filter_entry(|entry| entry.file_name().to_str() != Some(".git"));
 
     let mut results = Vec::new();
+    let mut truncated = false;
     let options = SearchOptions {
         case_sensitive,
         use_regex,
@@ -426,12 +470,16 @@ fn search_in_directory(
         use_fuzzy: use_fuzzy && !use_regex,
     };
 
-    for entry in builder.build().flatten() {
+    'entries: for entry in builder.build().flatten() {
         if !entry.file_type().map_or(false, |ft| ft.is_file()) {
             continue;
         }
 
         let path = entry.path();
+        if std::fs::metadata(path).map_or(true, |metadata| metadata.len() > MAX_SEARCH_FILE_BYTES) {
+            continue;
+        }
+
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -464,6 +512,11 @@ fn search_in_directory(
                 context_before,
                 context_after,
             });
+
+            if results.len() >= MAX_SEARCH_RESULTS {
+                truncated = true;
+                break 'entries;
+            }
         }
     }
 
@@ -474,7 +527,7 @@ fn search_in_directory(
             .then_with(|| left.file.cmp(&right.file))
             .then_with(|| left.line_number.cmp(&right.line_number))
     });
-    results
+    DirectorySearchResult { results, truncated }
 }
 
 fn replace_case_insensitive(content: &str, query: &str, replacement: &str) -> String {
@@ -583,7 +636,8 @@ impl Render for ProjectSearch {
                 "No results found".to_string()
             }
         } else {
-            format!("{} results", total_results)
+            let suffix = if self.results_truncated { "+" } else { "" };
+            format!("{}{} results", total_results, suffix)
         };
 
         v_flex()
@@ -1166,9 +1220,9 @@ impl ProjectSearch {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
-    use super::{PreviewData, SearchResult, byte_offset_to_character_offset};
+    use super::{PreviewData, SearchResult, byte_offset_to_character_offset, search_in_directory};
 
     #[test]
     fn converts_match_byte_offset_to_character_offset() {
@@ -1205,5 +1259,49 @@ mod tests {
             preview.text,
             "with orders as (\n  select 1\nselect * from orders;\n)"
         );
+    }
+
+    #[test]
+    fn search_respects_gitignore_and_prunes_git_directory() {
+        let root =
+            std::env::temp_dir().join(format!("sqlab-project-search-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("ignored-dir")).unwrap();
+        fs::write(root.join(".gitignore"), "ignored.sql\nignored-dir/\n").unwrap();
+        fs::write(root.join("visible.sql"), "select from visible;").unwrap();
+        fs::write(root.join("ignored.sql"), "select from ignored;").unwrap();
+        fs::write(
+            root.join("ignored-dir").join("nested.sql"),
+            "select from nested;",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".git").join("config"),
+            "select from git metadata;",
+        )
+        .unwrap();
+
+        let default_result =
+            search_in_directory(&root, "select", false, false, false, false, false);
+        let default_files = default_result
+            .results
+            .iter()
+            .map(|result| result.file.strip_prefix(&root).unwrap().to_path_buf())
+            .collect::<Vec<_>>();
+        assert_eq!(default_files, vec![PathBuf::from("visible.sql")]);
+
+        let include_ignored_result =
+            search_in_directory(&root, "select", false, false, false, false, true);
+        let include_ignored_files = include_ignored_result
+            .results
+            .iter()
+            .map(|result| result.file.strip_prefix(&root).unwrap().to_path_buf())
+            .collect::<Vec<_>>();
+        assert!(include_ignored_files.contains(&PathBuf::from("visible.sql")));
+        assert!(include_ignored_files.contains(&PathBuf::from("ignored.sql")));
+        assert!(include_ignored_files.contains(&PathBuf::from("ignored-dir/nested.sql")));
+        assert!(!include_ignored_files.contains(&PathBuf::from(".git/config")));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
