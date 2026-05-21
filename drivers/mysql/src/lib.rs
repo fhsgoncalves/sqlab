@@ -6,8 +6,8 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, OptsBuilder, Row, Value};
 use sqlab_drivers_core::{
     ColumnInfo, ColumnMetadata, DataSource, DataSourceConfig, DataSourceError, Database,
-    DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
-    TableEditBatch, TableEditValue, TableInfo, TableKind, TriggerInfo,
+    DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryExecutionOptions, QueryResult,
+    SchemaInfo, SequenceInfo, TableEditBatch, TableEditValue, TableInfo, TableKind, TriggerInfo,
 };
 use sqlparser::ast::Statement;
 use sqlparser::dialect::MySqlDialect;
@@ -143,6 +143,28 @@ impl MySqlDataSource {
             row_count,
             execution_time_ms: start.elapsed().as_millis(),
         })
+    }
+
+    async fn execute_query_async_with_options(
+        &self,
+        query: &str,
+        apply_limit: bool,
+        options: &QueryExecutionOptions,
+    ) -> Result<QueryResult, DataSourceError> {
+        if let Some(schema) = options
+            .search_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|schema| !schema.is_empty())
+        {
+            let conn = self.connection()?;
+            let mut conn = conn.lock().await;
+            conn.query_drop(format!("USE {}", quote_mysql_identifier(schema)))
+                .await
+                .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
+        }
+
+        self.execute_query_async(query, apply_limit).await
     }
 
     async fn introspect_schema_async(&self) -> Result<DatabaseSchema, DataSourceError> {
@@ -343,6 +365,16 @@ impl MySqlDataSource {
             .block_on(self.execute_query_async(query, apply_limit))
     }
 
+    pub fn execute_query_blocking_with_options(
+        &self,
+        query: &str,
+        apply_limit: bool,
+        options: &QueryExecutionOptions,
+    ) -> Result<QueryResult, DataSourceError> {
+        self.runtime
+            .block_on(self.execute_query_async_with_options(query, apply_limit, options))
+    }
+
     pub fn introspect_schema_blocking(&self) -> Result<DatabaseSchema, DataSourceError> {
         self.runtime.block_on(self.introspect_schema_async())
     }
@@ -380,6 +412,14 @@ impl DataSource for MySqlDataSource {
 
     async fn execute_query(&self, query: &str) -> Result<QueryResult, DataSourceError> {
         self.execute_query_blocking(query, true)
+    }
+
+    async fn execute_query_with_options(
+        &self,
+        query: &str,
+        options: &QueryExecutionOptions,
+    ) -> Result<QueryResult, DataSourceError> {
+        self.execute_query_blocking_with_options(query, true, options)
     }
 
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError> {

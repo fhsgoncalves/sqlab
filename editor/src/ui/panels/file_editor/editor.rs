@@ -76,6 +76,7 @@ pub struct EditorPanel {
     diagnostics_epoch: u64,
     pending_diagnostics_task: Option<Task<()>>,
     last_observed_snapshot: Option<EditorSnapshot>,
+    selected_search_path: Option<String>,
 }
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
@@ -296,6 +297,7 @@ impl EditorPanel {
             diagnostics_epoch: 0,
             pending_diagnostics_task: None,
             last_observed_snapshot: None,
+            selected_search_path: None,
         };
         panel.refresh_active_query(cx);
         panel.refresh_schema_cache(cx);
@@ -313,6 +315,50 @@ impl EditorPanel {
 
         let queries = query_ranges_for_execution(&text, cursor);
         (String::new(), queries)
+    }
+
+    pub fn selected_search_path(&self) -> Option<String> {
+        self.selected_search_path.clone()
+    }
+
+    pub fn search_path_label(&self) -> String {
+        self.selected_search_path
+            .as_deref()
+            .unwrap_or("Default")
+            .to_string()
+    }
+
+    pub fn available_search_paths(&self, cx: &App) -> Vec<String> {
+        let mut schemas = self
+            .schema_cache
+            .as_ref()
+            .map(|(_, schema)| {
+                schema
+                    .schemas
+                    .iter()
+                    .map(|schema| schema.name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if let Some(config_schema) = self
+            .data_source_manager
+            .read(cx)
+            .active_config()
+            .map(|config| config.schema.trim())
+            .filter(|schema| !schema.is_empty())
+        {
+            schemas.push(config_schema.to_string());
+        }
+
+        schemas.sort_by_key(|schema| schema.to_ascii_lowercase());
+        schemas.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        schemas
+    }
+
+    pub fn set_search_path(&mut self, search_path: Option<String>, cx: &mut Context<Self>) {
+        self.selected_search_path = search_path.filter(|schema| !schema.trim().is_empty());
+        cx.notify();
     }
 
     fn refresh_active_query(&mut self, cx: &mut Context<Self>) {
@@ -366,8 +412,29 @@ impl EditorPanel {
                     .map(|schema| (key, Arc::new(schema)))
             });
 
-        if let Some((key, schema)) = schema_cache {
-            self.schema_cache = Some((key, schema));
+        let changed = match (&self.schema_cache, &schema_cache) {
+            (Some((old_key, _)), Some((new_key, _))) => old_key != new_key,
+            (None, None) => false,
+            _ => true,
+        };
+
+        self.schema_cache = schema_cache;
+
+        if self
+            .selected_search_path
+            .as_deref()
+            .is_some_and(|selected| {
+                !self
+                    .available_search_paths(cx)
+                    .iter()
+                    .any(|schema| schema.eq_ignore_ascii_case(selected))
+            })
+        {
+            self.selected_search_path = None;
+        }
+
+        if changed {
+            cx.notify();
         }
     }
 

@@ -460,8 +460,53 @@ impl Render for EditorTabs {
             .tabs
             .get(self.active_ix)
             .map_or(false, |tab| tab.as_sql().is_some());
+        let active_sql_editor = self
+            .tabs
+            .get(self.active_ix)
+            .and_then(|tab| tab.as_sql())
+            .cloned();
 
         let editor_toolbar = is_sql_active.then(|| {
+            let search_path_selector = active_sql_editor.as_ref().and_then(|editor| {
+                let schemas = editor.read(cx).available_search_paths(cx);
+                if schemas.is_empty() {
+                    return None;
+                }
+
+                let selected_label = editor.read(cx).search_path_label();
+                let editor_for_default = editor.clone();
+                let editor_for_menu = editor.clone();
+                Some(
+                    Button::new("editor-search-path-selector")
+                        .label(selected_label)
+                        .xsmall()
+                        .ghost()
+                        .tooltip("Select search path")
+                        .dropdown_menu(move |menu, window, _cx| {
+                            let mut menu = menu.item(PopupMenuItem::new("Default").on_click(
+                                window.listener_for(&editor_for_default, |this, _, _window, cx| {
+                                    this.set_search_path(None, cx);
+                                }),
+                            ));
+
+                            for schema in &schemas {
+                                let editor_for_schema = editor_for_menu.clone();
+                                let schema = schema.clone();
+                                menu = menu.item(PopupMenuItem::new(schema.clone()).on_click(
+                                    window.listener_for(
+                                        &editor_for_schema,
+                                        move |this, _, _window, cx| {
+                                            this.set_search_path(Some(schema.clone()), cx);
+                                        },
+                                    ),
+                                ));
+                            }
+
+                            menu
+                        }),
+                )
+            });
+
             h_flex()
                 .id("editor-toolbar")
                 .h(px(32.))
@@ -483,6 +528,9 @@ impl Render for EditorTabs {
                         }),
                 )
                 .child(div().flex_1())
+                .when_some(search_path_selector, |toolbar, selector| {
+                    toolbar.child(selector)
+                })
                 .when(!connections.is_empty(), |toolbar| {
                     let selected_name = active_name.clone();
                     let connection_label =

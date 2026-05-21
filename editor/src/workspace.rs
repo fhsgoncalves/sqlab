@@ -34,8 +34,8 @@ use crate::ui::panels::project_search::{ProjectSearch, ProjectSearchEvent, Toggl
 use crate::ui::panels::result::ResultPanel;
 use crate::ui::panels::terminal::TerminalPanel;
 use sqlab_drivers_core::{
-    ColumnMetadata, ConnectionStatus, DataSourceConfig, DataSourceError, QueryResult,
-    manager::DataSourceManager,
+    ColumnMetadata, ConnectionStatus, DataSourceConfig, DataSourceError, QueryExecutionOptions,
+    QueryResult, manager::DataSourceManager,
 };
 
 actions!(
@@ -678,11 +678,12 @@ impl Workspace {
     }
 
     fn on_execute_query(&mut self, _: &ExecuteQuery, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((selected, active_queries)) = self
-            .editor_tabs
-            .read(cx)
-            .active_editor()
-            .map(|editor| editor.read(cx).query_context(cx))
+        let Some((selected, active_queries, search_path)) =
+            self.editor_tabs.read(cx).active_editor().map(|editor| {
+                let editor = editor.read(cx);
+                let (selected, active_queries) = editor.query_context(cx);
+                (selected, active_queries, editor.selected_search_path())
+            })
         else {
             window.open_alert_dialog(cx, |alert, _, _| {
                 alert
@@ -717,15 +718,16 @@ impl Workspace {
         }
 
         if queries.len() == 1 {
-            self.execute_single_query(queries[0].query.clone(), window, cx);
+            self.execute_single_query(queries[0].query.clone(), search_path, window, cx);
             return;
         }
 
         let selector = cx.new(|cx| QuerySelector::new(queries, cx));
+        let selector_search_path = search_path.clone();
         cx.subscribe_in(
             &selector,
             window,
-            |this, _selector, event: &QuerySelected, window, cx| {
+            move |this, _selector, event: &QuerySelected, window, cx| {
                 let active_editor = this
                     .editor_tabs
                     .update(cx, |tabs, _cx| tabs.active_editor().cloned());
@@ -737,7 +739,12 @@ impl Workspace {
 
                 if event.confirmed {
                     window.close_dialog(cx);
-                    this.execute_single_query(event.choice.query.clone(), window, cx);
+                    this.execute_single_query(
+                        event.choice.query.clone(),
+                        selector_search_path.clone(),
+                        window,
+                        cx,
+                    );
                 }
             },
         )
@@ -756,18 +763,25 @@ impl Workspace {
         window.focus(&selector.read(cx).focus_handle(cx), cx);
     }
 
-    fn execute_single_query(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn execute_single_query(
+        &mut self,
+        query: String,
+        search_path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(config) = self.data_source_manager.read(cx).active_config().cloned() else {
-            self.show_connection_selector(query, window, cx);
+            self.show_connection_selector(query, search_path, window, cx);
             return;
         };
 
-        self.execute_query_with_config(query, config, cx);
+        self.execute_query_with_config(query, config, search_path, cx);
     }
 
     fn show_connection_selector(
         &mut self,
         query: String,
+        search_path: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -782,6 +796,7 @@ impl Workspace {
         }
 
         let selector = cx.new(|cx| ConnectionSelector::new(connections, window, cx));
+        let selector_search_path = search_path.clone();
         cx.subscribe_in(
             &selector,
             window,
@@ -789,7 +804,12 @@ impl Workspace {
                 let name = event.name.clone();
                 window.close_dialog(cx);
                 if let Some(config) = this.prepare_query_connection(name.clone(), window, cx) {
-                    this.execute_query_with_config(query.clone(), config, cx);
+                    this.execute_query_with_config(
+                        query.clone(),
+                        config,
+                        selector_search_path.clone(),
+                        cx,
+                    );
                 }
             },
         )
@@ -857,14 +877,19 @@ impl Workspace {
         &mut self,
         query: String,
         config: DataSourceConfig,
+        search_path: Option<String>,
         cx: &mut Context<Self>,
     ) {
         let results_panel = self.bottom_panel.read(cx).results_panel().clone();
         let bottom_panel = self.bottom_panel.clone();
         let data_source_manager = self.data_source_manager.clone();
         let activity_tracker = self.activity_tracker.clone();
-        let config_for_result = config.clone();
+        let mut config_for_result = config.clone();
+        if let Some(search_path) = search_path.as_deref() {
+            config_for_result.schema = search_path.to_string();
+        }
         let config_name = config.name.clone();
+        let execution_options = QueryExecutionOptions { search_path };
         let activity_id = self
             .activity_tracker
             .update(cx, |tracker, cx| tracker.begin("Running query", cx));
@@ -876,7 +901,9 @@ impl Workspace {
                 .spawn(async move {
                     let mut source = create_configured_data_source(&config)?;
                     source.connect().await?;
-                    let result = source.execute_query(&query_for_task).await;
+                    let result = source
+                        .execute_query_with_options(&query_for_task, &execution_options)
+                        .await;
                     source.disconnect().await?;
                     result
                 })

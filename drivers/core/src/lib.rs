@@ -190,6 +190,11 @@ pub struct QueryResult {
     pub execution_time_ms: u128,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct QueryExecutionOptions {
+    pub search_path: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TableEditBatch {
     pub schema: String,
@@ -343,6 +348,13 @@ pub trait DataSource: Send + Sync {
     async fn connect(&mut self) -> Result<(), DataSourceError>;
     async fn disconnect(&mut self) -> Result<(), DataSourceError>;
     async fn execute_query(&self, query: &str) -> Result<QueryResult, DataSourceError>;
+    async fn execute_query_with_options(
+        &self,
+        query: &str,
+        _options: &QueryExecutionOptions,
+    ) -> Result<QueryResult, DataSourceError> {
+        self.execute_query(query).await
+    }
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError>;
     async fn apply_table_edits(&self, batch: TableEditBatch) -> Result<(), DataSourceError>;
 }

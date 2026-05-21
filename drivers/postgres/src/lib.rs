@@ -12,8 +12,9 @@ use postgres_rustls::MakeTlsConnector;
 use rustls::ClientConfig;
 use sqlab_drivers_core::{
     ColumnInfo, ColumnMetadata, DataSource, DataSourceConfig, DataSourceError, Database,
-    DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryResult, SchemaInfo, SequenceInfo,
-    TableEditBatch, TableEditValue, TableInfo, TableKind, TriggerInfo, display_data_type,
+    DatabaseSchema, ForeignKeyInfo, FunctionInfo, IndexInfo, QueryExecutionOptions, QueryResult,
+    SchemaInfo, SequenceInfo, TableEditBatch, TableEditValue, TableInfo, TableKind, TriggerInfo,
+    display_data_type,
 };
 use sqlparser::ast::Statement;
 use sqlparser::dialect::PostgreSqlDialect;
@@ -100,7 +101,26 @@ impl PostgresDataSource {
         query: &str,
         apply_limit: bool,
     ) -> Result<QueryResult, DataSourceError> {
+        self.execute_query_blocking_with_options(
+            query,
+            apply_limit,
+            &QueryExecutionOptions::default(),
+        )
+    }
+
+    pub fn execute_query_blocking_with_options(
+        &self,
+        query: &str,
+        apply_limit: bool,
+        options: &QueryExecutionOptions,
+    ) -> Result<QueryResult, DataSourceError> {
         let client = self.client.as_ref().ok_or(DataSourceError::NotConnected)?;
+        let search_path = options
+            .search_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|schema| !schema.is_empty())
+            .map(postgres_search_path_value);
         let query = if apply_limit {
             apply_limit_if_missing(query, DEFAULT_ROW_LIMIT)
         } else {
@@ -110,6 +130,14 @@ impl PostgresDataSource {
         let (columns, column_metadata, rows) = self
             .runtime
             .block_on(async {
+                if let Some(search_path) = search_path.as_deref() {
+                    client
+                        .execute(
+                            "select pg_catalog.set_config('search_path', $1, false)",
+                            &[&search_path],
+                        )
+                        .await?;
+                }
                 let statement = client.prepare(&query).await?;
                 let column_metadata: Vec<ColumnMetadata> = statement
                     .columns()
@@ -640,6 +668,14 @@ impl DataSource for PostgresDataSource {
 
     async fn execute_query(&self, query: &str) -> Result<QueryResult, DataSourceError> {
         self.execute_query_blocking(query, true)
+    }
+
+    async fn execute_query_with_options(
+        &self,
+        query: &str,
+        options: &QueryExecutionOptions,
+    ) -> Result<QueryResult, DataSourceError> {
+        self.execute_query_blocking_with_options(query, true, options)
     }
 
     async fn introspect_schema(&self) -> Result<DatabaseSchema, DataSourceError> {
@@ -1439,6 +1475,10 @@ fn postgres_update_statement(
 
 fn quote_postgres_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn postgres_search_path_value(schema: &str) -> String {
+    quote_postgres_identifier(schema)
 }
 
 fn postgres_literal(value: &TableEditValue) -> String {
