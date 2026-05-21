@@ -515,6 +515,20 @@ fn apply_limit_if_missing(query: &str, limit: usize) -> String {
     if query_ast.limit_clause.is_some() {
         query.to_string()
     } else {
+        append_limit(query, limit)
+    }
+}
+
+fn append_limit(query: &str, limit: usize) -> String {
+    let query_without_trailing_whitespace = query.trim_end();
+    let trailing_whitespace = &query[query_without_trailing_whitespace.len()..];
+
+    if let Some(query_without_semicolon) = query_without_trailing_whitespace.strip_suffix(';') {
+        format!(
+            "{} LIMIT {limit};{trailing_whitespace}",
+            query_without_semicolon.trim_end()
+        )
+    } else {
         format!("{query} LIMIT {limit}")
     }
 }
@@ -622,6 +636,14 @@ mod tests {
         assert_eq!(
             apply_limit_if_missing("SELECT * FROM users", 1000),
             "SELECT * FROM users LIMIT 1000"
+        );
+    }
+
+    #[test]
+    fn adds_limit_before_trailing_semicolon() {
+        assert_eq!(
+            apply_limit_if_missing("SELECT * FROM users;", 1000),
+            "SELECT * FROM users LIMIT 1000;"
         );
     }
 
