@@ -8,12 +8,12 @@ use chrono::Local;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Div, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Modifiers, ParentElement, Render, Stateful,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, actions, div, hsla,
+    StatefulInteractiveElement, Styled, TextAlign, WeakEntity, Window, actions, div, hsla,
     prelude::FluentBuilder, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, WindowExt,
+    ActiveTheme, Disableable, IconName, Sizable, StyledExt, WindowExt,
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockPlacement, Panel, PanelControl, PanelEvent, PanelState},
     h_flex,
@@ -248,9 +248,14 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
-        Column::new(&self.columns[col_ix], &self.columns[col_ix])
-            .width(gpui::px(140.))
-            .sortable()
+        let column = Column::new(&self.columns[col_ix], &self.columns[col_ix])
+            .width(self.column_width(col_ix))
+            .sortable();
+        if self.is_numeric_column(col_ix) {
+            column.text_right()
+        } else {
+            column
+        }
     }
 
     fn render_th(
@@ -352,6 +357,7 @@ impl TableDelegate for ResultsTableDelegate {
         } else {
             display.clone()
         };
+        let align_right = self.is_numeric_column(col_ix);
 
         div()
             .id(format!("result-cell-content:{row_ix}:{col_ix}"))
@@ -360,7 +366,13 @@ impl TableDelegate for ResultsTableDelegate {
             .when(is_editing, |this| {
                 if enum_values.is_empty() {
                     if let Some(input) = self.editing_cell.as_ref().map(|cell| cell.input.clone()) {
-                        this.child(Input::new(&input).xsmall().bordered(false).p_0())
+                        this.child(
+                            Input::new(&input)
+                                .xsmall()
+                                .bordered(false)
+                                .p_0()
+                                .when(align_right, |this| this.text_align(TextAlign::Right)),
+                        )
                     } else {
                         this
                     }
@@ -425,6 +437,7 @@ impl TableDelegate for ResultsTableDelegate {
                 this.child(
                     div()
                         .size_full()
+                        .when(align_right, |this| this.h_flex().justify_end())
                         .when(is_editable, |this| this.cursor_text())
                         .child(display),
                 )
@@ -591,6 +604,45 @@ impl ResultsTableDelegate {
             .get(row_ix)
             .and_then(|row| row.get(col_ix))
             .copied()
+            .unwrap_or(false)
+    }
+
+    fn column_width(&self, col_ix: usize) -> gpui::Pixels {
+        let name = self
+            .columns
+            .get(col_ix)
+            .map(String::as_str)
+            .unwrap_or_default();
+        let metadata = self.column_metadata.get(col_ix);
+        let data_type = metadata.map(|m| m.data_type.as_str()).unwrap_or_default();
+
+        let header_width = column_header_width(name, data_type, metadata);
+        let value_chars = fixed_value_chars_for_type(data_type)
+            .unwrap_or_else(|| self.max_display_chars_for_column(col_ix));
+        let value_width = value_chars as f32 * 7.6 + 32.;
+
+        gpui::px(header_width.max(value_width).max(96.))
+    }
+
+    fn max_display_chars_for_column(&self, col_ix: usize) -> usize {
+        let max_chars = if self.is_numeric_column(col_ix) {
+            32
+        } else {
+            48
+        };
+        self.rows
+            .iter()
+            .filter_map(|row| row.get(col_ix))
+            .map(|value| value.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(max_chars)
+    }
+
+    fn is_numeric_column(&self, col_ix: usize) -> bool {
+        self.column_metadata
+            .get(col_ix)
+            .map(|metadata| is_numeric_data_type(&metadata.data_type))
             .unwrap_or(false)
     }
 
@@ -1029,7 +1081,50 @@ impl ResultPanel {
                     "rows".into(),
                     "time_ms".into(),
                 ],
-                vec![],
+                vec![
+                    ColumnMetadata {
+                        name: "id".into(),
+                        data_type: "integer".into(),
+                        is_pk: false,
+                        is_fk: false,
+                    },
+                    ColumnMetadata {
+                        name: "status".into(),
+                        data_type: "text".into(),
+                        is_pk: false,
+                        is_fk: false,
+                    },
+                    ColumnMetadata {
+                        name: "data_source".into(),
+                        data_type: "text".into(),
+                        is_pk: false,
+                        is_fk: false,
+                    },
+                    ColumnMetadata {
+                        name: "created_at".into(),
+                        data_type: "timestamp".into(),
+                        is_pk: false,
+                        is_fk: false,
+                    },
+                    ColumnMetadata {
+                        name: "query".into(),
+                        data_type: "text".into(),
+                        is_pk: false,
+                        is_fk: false,
+                    },
+                    ColumnMetadata {
+                        name: "rows".into(),
+                        data_type: "integer".into(),
+                        is_pk: false,
+                        is_fk: false,
+                    },
+                    ColumnMetadata {
+                        name: "time_ms".into(),
+                        data_type: "bigint".into(),
+                        is_pk: false,
+                        is_fk: false,
+                    },
+                ],
                 self.executions
                     .iter()
                     .rev()
@@ -2045,6 +2140,133 @@ fn truncate_query(query: &str, max_chars: usize) -> String {
     }
 }
 
+fn column_header_width(name: &str, data_type: &str, metadata: Option<&ColumnMetadata>) -> f32 {
+    let name_width = name.chars().count() as f32 * 7.8;
+    let type_width = data_type.chars().count() as f32 * 6.6;
+    let type_gap = if data_type.is_empty() { 0. } else { 12. };
+    let key_icon_width = metadata
+        .filter(|metadata| metadata.is_pk || metadata.is_fk)
+        .map(|_| 16.)
+        .unwrap_or(0.);
+
+    name_width + type_gap + type_width + key_icon_width + 36.
+}
+
+fn is_numeric_data_type(data_type: &str) -> bool {
+    let normalized = normalized_data_type(data_type);
+    if normalized.is_empty() || normalized.contains("[]") {
+        return false;
+    }
+
+    let base = data_type_base(&normalized);
+    let numeric_types = [
+        "bigint",
+        "bigserial",
+        "bit",
+        "dec",
+        "decimal",
+        "double",
+        "double precision",
+        "fixed",
+        "float",
+        "float4",
+        "float8",
+        "int",
+        "int1",
+        "int2",
+        "int3",
+        "int4",
+        "int8",
+        "integer",
+        "mediumint",
+        "money",
+        "mysql_type_decimal",
+        "mysql_type_double",
+        "mysql_type_float",
+        "mysql_type_int24",
+        "mysql_type_long",
+        "mysql_type_longlong",
+        "mysql_type_newdecimal",
+        "mysql_type_short",
+        "mysql_type_tiny",
+        "number",
+        "numeric",
+        "oid",
+        "real",
+        "serial",
+        "serial2",
+        "serial4",
+        "serial8",
+        "smallint",
+        "smallserial",
+        "tinyint",
+        "ubigint",
+        "uint",
+        "uint1",
+        "uint2",
+        "uint3",
+        "uint4",
+        "uint8",
+        "uinteger",
+        "unsigned bigint",
+        "unsigned int",
+        "unsigned integer",
+        "unsigned mediumint",
+        "unsigned smallint",
+        "unsigned tinyint",
+        "usmallint",
+    ];
+
+    numeric_types.contains(&base.as_str())
+        || base.ends_with(" unsigned") && is_numeric_data_type(base.trim_end_matches(" unsigned"))
+}
+
+fn fixed_value_chars_for_type(data_type: &str) -> Option<usize> {
+    let normalized = normalized_data_type(data_type);
+    if normalized.is_empty() || normalized.contains("[]") {
+        return None;
+    }
+    if normalized.starts_with("timestamp") && normalized.contains("with time zone") {
+        return Some(32);
+    }
+    if normalized.starts_with("timestamp") && normalized.contains("without time zone") {
+        return Some(26);
+    }
+
+    let base = data_type_base(&normalized);
+    match base.as_str() {
+        "uuid" | "mysql_type_guid" => Some(36),
+        "date" | "mysql_type_date" | "mysql_type_newdate" => Some(10),
+        "time" | "timetz" | "mysql_type_time" => Some(15),
+        "timestamp" | "datetime" | "datetime2" | "mysql_type_datetime" | "mysql_type_timestamp" => {
+            Some(26)
+        }
+        "timestamptz" | "timestamp with time zone" | "datetimeoffset" => Some(32),
+        _ => None,
+    }
+}
+
+fn normalized_data_type(data_type: &str) -> String {
+    data_type
+        .trim()
+        .trim_matches('"')
+        .trim_matches('`')
+        .to_ascii_lowercase()
+}
+
+fn data_type_base(data_type: &str) -> String {
+    let without_schema = data_type.rsplit('.').next().unwrap_or(data_type).trim();
+    let without_precision = without_schema
+        .split_once('(')
+        .map(|(base, _)| base)
+        .unwrap_or(without_schema)
+        .trim();
+    without_precision
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn is_user_defined_postgres_type(data_type: &str) -> bool {
     let data_type = data_type.trim().trim_end_matches("[]").trim();
     if data_type.is_empty() || data_type.contains(' ') || data_type.contains('(') {
@@ -2810,6 +3032,44 @@ mod tests {
     fn writes_xlsx_zip_payload() {
         let bytes = render_xlsx(&sample_data()).expect("xlsx should render");
         assert!(bytes.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn detects_common_numeric_data_types() {
+        for data_type in [
+            "numeric",
+            "numeric(10,2)",
+            "decimal",
+            "bigint",
+            "int4",
+            "double precision",
+            "MYSQL_TYPE_LONGLONG",
+            "MYSQL_TYPE_NEWDECIMAL",
+            "unsigned bigint",
+            "tinyint unsigned",
+        ] {
+            assert!(is_numeric_data_type(data_type), "{data_type}");
+        }
+
+        for data_type in ["text", "uuid", "timestamp", "timestamptz", "integer[]"] {
+            assert!(!is_numeric_data_type(data_type), "{data_type}");
+        }
+    }
+
+    #[test]
+    fn reserves_fixed_width_for_uuid_and_temporal_types() {
+        assert_eq!(fixed_value_chars_for_type("uuid"), Some(36));
+        assert_eq!(fixed_value_chars_for_type("timestamp"), Some(26));
+        assert_eq!(fixed_value_chars_for_type("timestamptz"), Some(32));
+        assert_eq!(
+            fixed_value_chars_for_type("timestamp with time zone"),
+            Some(32)
+        );
+        assert_eq!(
+            fixed_value_chars_for_type("timestamp without time zone"),
+            Some(26)
+        );
+        assert_eq!(fixed_value_chars_for_type("text"), None);
     }
 
     #[test]
