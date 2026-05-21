@@ -32,7 +32,7 @@ use crate::ui::components::tab::{Tab, TabBar};
 
 actions!(
     terminal_panel,
-    [NewTerminalTab, CycleTabForward, CycleTabBackward]
+    [NewTerminalTab, CycleTabForward, CycleTabBackward, Paste]
 );
 
 const CELL_WIDTH: f32 = 9.0;
@@ -338,6 +338,23 @@ impl TerminalPanel {
             self.active_ix = (self.active_ix + self.sessions.len() - 1) % self.sessions.len();
             cx.notify();
             window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn on_action_paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
+        let clipboard = cx.read_from_clipboard();
+        if let Some(item) = clipboard {
+            if let Some(text) = item.text() {
+                let Some(session) = self.active_session_mut() else {
+                    return;
+                };
+                if let Some(backend) = &session.backend {
+                    let _ = backend
+                        .sender
+                        .send(Msg::Input(Cow::Owned(text.into_bytes())));
+                    cx.notify();
+                }
+            }
         }
     }
 
@@ -995,6 +1012,7 @@ impl Render for TerminalPanel {
             .on_action(cx.listener(Self::on_new_terminal_tab))
             .on_action(cx.listener(Self::on_cycle_tab_forward))
             .on_action(cx.listener(Self::on_cycle_tab_backward))
+            .on_action(cx.listener(Self::on_action_paste))
             .capture_key_down(cx.listener(Self::handle_key_down))
             .on_click(cx.listener(|this, _, window, cx| {
                 window.focus(&this.focus_handle, cx);

@@ -28,7 +28,7 @@ use ui::panels::result::{
 };
 use ui::panels::terminal::{
     CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward,
-    NewTerminalTab,
+    NewTerminalTab, Paste,
 };
 use workspace::{OpenFolder, ToggleSearchReplace, Workspace};
 
@@ -134,6 +134,7 @@ fn main() {
             KeyBinding::new("enter", EditResultCell, Some("DataTable")),
             KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),
             KeyBinding::new("cmd-t", NewTerminalTab, Some("terminal_panel")),
+            KeyBinding::new("cmd-v", Paste, Some("terminal_panel")),
             KeyBinding::new("ctrl-tab", CycleTabForward, None),
             KeyBinding::new("ctrl-shift-tab", CycleTabBackward, None),
             KeyBinding::new("ctrl-tab", TerminalCycleTabForward, Some("terminal_panel")),
