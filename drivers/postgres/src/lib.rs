@@ -250,6 +250,7 @@ impl PostgresDataSource {
                         join pg_catalog.pg_language l on l.oid = p.prolang
                         where n.nspname !~ '^pg_'
                           and n.nspname <> 'information_schema'
+                          and p.prokind = 'f'
                           and ($1 = '' or n.nspname = $1)
                         order by n.nspname, p.proname
                         ",
