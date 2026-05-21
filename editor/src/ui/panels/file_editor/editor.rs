@@ -27,6 +27,7 @@ actions!(
         ExecuteQuery,
         SaveFile,
         FormatQuery,
+        ToggleCommentLines,
         ToggleEditorSearch,
         ToggleEditorReplace,
         CloseEditorSearch,
@@ -38,6 +39,7 @@ actions!(
 );
 
 const SEARCH_CONTEXT: &str = "EditorSearch";
+const SQL_LINE_COMMENT: &str = "-- ";
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
@@ -146,6 +148,95 @@ fn replace_case_insensitive(text: &str, query: &str, replacement: &str) -> Strin
 
     result.push_str(&text[last_end..]);
     result
+}
+
+fn selected_line_range(text: &str, selected_range: Range<usize>, cursor: usize) -> Range<usize> {
+    let start_offset = selected_range.start.min(text.len());
+    let end_offset = if selected_range.is_empty() {
+        cursor.min(text.len())
+    } else {
+        selected_range.end.saturating_sub(1).min(text.len())
+    };
+
+    let start = text[..start_offset]
+        .rfind('\n')
+        .map(|ix| ix + 1)
+        .unwrap_or(0);
+    let end = text[end_offset..]
+        .find('\n')
+        .map(|ix| end_offset + ix)
+        .unwrap_or(text.len());
+
+    start..end
+}
+
+fn map_preserving_line_endings(text: &str, mut map_line: impl FnMut(&str) -> String) -> String {
+    if text.is_empty() {
+        return map_line("");
+    }
+
+    let mut output = String::with_capacity(text.len());
+    let mut start = 0;
+
+    for (ix, ch) in text.char_indices() {
+        if ch == '\n' {
+            let line_end = if ix > start && text.as_bytes()[ix - 1] == b'\r' {
+                ix - 1
+            } else {
+                ix
+            };
+            output.push_str(&map_line(&text[start..line_end]));
+            output.push_str(&text[line_end..=ix]);
+            start = ix + 1;
+        }
+    }
+
+    if start < text.len() {
+        output.push_str(&map_line(&text[start..]));
+    }
+
+    output
+}
+
+fn comment_lines(text: &str, line_range: Range<usize>) -> String {
+    let mut output = text.to_string();
+    let replacement = map_preserving_line_endings(&text[line_range.clone()], |line| {
+        format!("{SQL_LINE_COMMENT}{line}")
+    });
+    output.replace_range(line_range, &replacement);
+    output
+}
+
+fn uncomment_lines(text: &str, line_range: Range<usize>) -> String {
+    let mut output = text.to_string();
+    let replacement = map_preserving_line_endings(&text[line_range.clone()], |line| {
+        let trim_start = line.trim_start_matches(char::is_whitespace);
+        let leading_len = line.len() - trim_start.len();
+
+        if let Some(rest) = trim_start.strip_prefix(SQL_LINE_COMMENT) {
+            format!("{}{}", &line[..leading_len], rest)
+        } else if let Some(rest) = trim_start.strip_prefix("--") {
+            format!("{}{}", &line[..leading_len], rest)
+        } else {
+            line.to_string()
+        }
+    });
+    output.replace_range(line_range, &replacement);
+    output
+}
+
+fn toggle_comment_lines(text: &str, line_range: Range<usize>) -> String {
+    let lines_text = &text[line_range.clone()];
+    let all_commented = lines_text.lines().all(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with(SQL_LINE_COMMENT) || trimmed.starts_with("--")
+    });
+
+    if all_commented {
+        uncomment_lines(text, line_range)
+    } else {
+        comment_lines(text, line_range)
+    }
 }
 
 impl EditorPanel {
@@ -801,6 +892,42 @@ impl EditorPanel {
             editor.set_cursor_position(lsp_types::Position::new(end_line, end_col), window, cx);
         });
     }
+
+    fn edit_selected_lines(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&str, Range<usize>) -> String,
+    ) {
+        let (text, line_range) = {
+            let state = self.editor.read(cx);
+            let text = state.value().to_string();
+            let selected_range = state.selected_range();
+            let line_range = selected_line_range(&text, selected_range, state.cursor());
+            (text, line_range)
+        };
+
+        let new_text = edit(&text, line_range.clone());
+        if new_text == text {
+            return;
+        }
+
+        let replacement =
+            new_text[line_range.start..new_text.len() - (text.len() - line_range.end)].to_string();
+        self.editor.update(cx, |editor, cx| {
+            editor.set_selected_range(line_range, cx);
+            editor.replace(replacement, window, cx);
+        });
+    }
+
+    fn on_toggle_comment_lines(
+        &mut self,
+        _: &ToggleCommentLines,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_selected_lines(window, cx, toggle_comment_lines);
+    }
 }
 
 impl Panel for EditorPanel {
@@ -832,6 +959,7 @@ impl Render for EditorPanel {
             .size_full()
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_format_query))
+            .on_action(cx.listener(Self::on_toggle_comment_lines))
             .on_action(cx.listener(Self::toggle_search))
             .on_action(cx.listener(Self::toggle_replace))
             .on_action(cx.listener(Self::close_search))
@@ -1033,5 +1161,64 @@ impl EditorPanel {
 impl Focusable for EditorPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comments_selected_lines_at_column_zero() {
+        let text = "select 1;\n  select 2;\nselect 3;";
+        let range = selected_line_range(text, 0..22, 0);
+
+        assert_eq!(
+            comment_lines(text, range),
+            "-- select 1;\n--   select 2;\nselect 3;"
+        );
+    }
+
+    #[test]
+    fn comments_current_empty_line() {
+        let text = "select 1;\n\nselect 2;";
+        let range = selected_line_range(text, 10..10, 10);
+
+        assert_eq!(comment_lines(text, range), "select 1;\n-- \nselect 2;");
+    }
+
+    #[test]
+    fn selection_ending_at_next_line_start_does_not_include_next_line() {
+        let text = "select 1;\nselect 2;";
+        let range = selected_line_range(text, 0..10, 0);
+
+        assert_eq!(comment_lines(text, range), "-- select 1;\nselect 2;");
+    }
+
+    #[test]
+    fn uncomments_lines_with_optional_leading_whitespace() {
+        let text = "-- select 1; -- some doc here\n  -- select 2;";
+        let range = selected_line_range(text, 0..text.len(), 0);
+
+        assert_eq!(
+            uncomment_lines(text, range),
+            "select 1; -- some doc here\n  select 2;"
+        );
+    }
+
+    #[test]
+    fn uncomment_keeps_inline_comments() {
+        let text = "select 1; -- some doc here";
+        let range = selected_line_range(text, 0..text.len(), 0);
+
+        assert_eq!(uncomment_lines(text, range), text);
+    }
+
+    #[test]
+    fn uncomment_supports_marker_without_trailing_space() {
+        let text = "--select 1;\n\t-- select 2;";
+        let range = selected_line_range(text, 0..text.len(), 0);
+
+        assert_eq!(uncomment_lines(text, range), "select 1;\n\tselect 2;");
     }
 }

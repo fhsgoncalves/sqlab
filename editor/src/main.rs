@@ -17,7 +17,8 @@ mod workspace;
 use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
     ConfirmSelectedQuery, CycleTabBackward, CycleTabForward, ExecuteQuery, FormatQuery, SaveFile,
-    SelectNextQuery, SelectPreviousQuery, ToggleEditorReplace, ToggleEditorSearch,
+    SelectNextQuery, SelectPreviousQuery, ToggleCommentLines, ToggleEditorReplace,
+    ToggleEditorSearch,
 };
 use ui::panels::file_search::ToggleFileSearch;
 use ui::panels::project_search::ToggleProjectSearch;
@@ -56,6 +57,8 @@ fn set_app_menus(cx: &mut gpui::App) {
             MenuItem::action("Find in Files...", ToggleProjectSearch),
             MenuItem::separator(),
             MenuItem::action("Replace", ToggleEditorReplace),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Comment", ToggleCommentLines),
             MenuItem::separator(),
             MenuItem::action("Format Query", FormatQuery),
             MenuItem::separator(),
@@ -115,6 +118,7 @@ fn main() {
             KeyBinding::new("cmd-enter", ExecuteQuery, Some("Input")),
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-alt-l", FormatQuery, Some("Input")),
+            KeyBinding::new("cmd-/", ToggleCommentLines, Some("Input")),
             KeyBinding::new("shift-up", ExtendResultSelectionUp, Some("results_panel")),
             KeyBinding::new(
                 "shift-down",

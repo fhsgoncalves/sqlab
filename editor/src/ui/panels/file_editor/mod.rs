@@ -5,7 +5,10 @@ pub mod query_selector;
 pub mod sql_completion;
 pub mod tabs;
 
-pub use editor::{ExecuteQuery, FormatQuery, SaveFile, ToggleEditorReplace, ToggleEditorSearch};
+pub use editor::{
+    ExecuteQuery, FormatQuery, SaveFile, ToggleCommentLines, ToggleEditorReplace,
+    ToggleEditorSearch,
+};
 pub use query_selector::{
     ConfirmSelectedQuery, QueryChoice, QuerySelected, QuerySelector, SelectNextQuery,
     SelectPreviousQuery,
