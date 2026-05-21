@@ -77,6 +77,7 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
             table_name TEXT NOT NULL,
             name TEXT NOT NULL,
             data_type TEXT NOT NULL,
+            enum_values TEXT NOT NULL DEFAULT '[]',
             nullable INTEGER NOT NULL,
             ordinal INTEGER NOT NULL,
             is_pk INTEGER NOT NULL DEFAULT 0,
@@ -170,6 +171,11 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     .ok();
     conn.execute(
         "ALTER TABLE columns ADD COLUMN generation_expression TEXT",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE columns ADD COLUMN enum_values TEXT NOT NULL DEFAULT '[]'",
         [],
     )
     .ok();

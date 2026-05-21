@@ -2860,6 +2860,7 @@ mod tests {
         ColumnInfo {
             name: name.into(),
             data_type: "integer".into(),
+            enum_values: Vec::new(),
             nullable: false,
             ordinal: 1,
             is_pk,

@@ -503,6 +503,7 @@ fn build_tables(
             table.columns.push(ColumnInfo {
                 name: row.2,
                 data_type: row.3,
+                enum_values: Vec::new(),
                 nullable: row.4.eq_ignore_ascii_case("YES"),
                 ordinal: row.5 as i32,
                 is_pk: row.8 == "PRI",

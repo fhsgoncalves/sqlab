@@ -160,6 +160,8 @@ pub struct EditableTable {
 struct EditableColumn {
     name: String,
     data_type: String,
+    enum_values: Vec<String>,
+    nullable: bool,
     editable: bool,
 }
 
@@ -189,6 +191,8 @@ impl EditableTable {
                 columns.push(EditableColumn {
                     name: column_name.clone(),
                     data_type: String::new(),
+                    enum_values: Vec::new(),
+                    nullable: true,
                     editable: false,
                 });
                 continue;
@@ -196,7 +200,13 @@ impl EditableTable {
             columns.push(EditableColumn {
                 name: column.name.clone(),
                 data_type: column.data_type.clone(),
-                editable: unique && !column.is_pk && !column.is_generated,
+                enum_values: column.enum_values.clone(),
+                nullable: column.nullable,
+                editable: unique
+                    && !column.is_pk
+                    && (!column.is_generated
+                        || !column.enum_values.is_empty()
+                        || is_user_defined_postgres_type(&column.data_type)),
             });
         }
 
@@ -328,21 +338,87 @@ impl TableDelegate for ResultsTableDelegate {
         let row_id = self.row_id(row_ix);
         let is_dirty = self.dirty_cells.contains_key(&(row_id, col_ix));
         let is_editable = self.is_editable_cell(row_ix, col_ix);
+        let enum_values = self.enum_values_for_cell(row_ix, col_ix);
+        let enum_nullable = self.is_nullable_cell(row_ix, col_ix);
         let is_editing = self
             .editing_cell
             .as_ref()
             .is_some_and(|cell| cell.row_ix == row_ix && cell.col_ix == col_ix);
         let display = self.cell_text(row_ix, col_ix, _cx);
+        let is_null = self.cell_is_null(row_ix, col_ix);
+        let enum_current_value = display.clone();
+        let enum_label = if is_null {
+            "NULL".to_string()
+        } else {
+            display.clone()
+        };
 
         div()
             .id(format!("result-cell-content:{row_ix}:{col_ix}"))
             .relative()
             .size_full()
             .when(is_editing, |this| {
-                if let Some(input) = self.editing_cell.as_ref().map(|cell| cell.input.clone()) {
-                    this.child(Input::new(&input).xsmall().bordered(false).p_0())
+                if enum_values.is_empty() {
+                    if let Some(input) = self.editing_cell.as_ref().map(|cell| cell.input.clone()) {
+                        this.child(Input::new(&input).xsmall().bordered(false).p_0())
+                    } else {
+                        this
+                    }
                 } else {
-                    this
+                    let table = _cx.entity();
+                    this.child(
+                        Button::new(format!("enum-cell-menu:{row_ix}:{col_ix}"))
+                            .label(enum_label)
+                            .icon(IconName::ChevronDown)
+                            .xsmall()
+                            .ghost()
+                            .w_full()
+                            .tooltip("Select enum value")
+                            .dropdown_menu(move |menu, window, _cx| {
+                                let mut menu = menu;
+                                if enum_nullable {
+                                    let table = table.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new("NULL").checked(is_null).on_click(
+                                            window.listener_for(
+                                                &table,
+                                                move |table, _, _window, cx| {
+                                                    table.delegate_mut().finish_editing_with_value(
+                                                        row_ix, col_ix, None,
+                                                    );
+                                                    table.set_selected_cell(row_ix, col_ix, cx);
+                                                    cx.emit(TableEvent::SelectCell(row_ix, col_ix));
+                                                    cx.notify();
+                                                },
+                                            ),
+                                        ),
+                                    );
+                                }
+                                for enum_value in &enum_values {
+                                    let table = table.clone();
+                                    let enum_value = enum_value.clone();
+                                    let checked = !is_null && enum_value == enum_current_value;
+                                    menu = menu.item(
+                                        PopupMenuItem::new(enum_value.clone())
+                                            .checked(checked)
+                                            .on_click(window.listener_for(
+                                                &table,
+                                                move |table, _, _window, cx| {
+                                                    table.delegate_mut().finish_editing_with_value(
+                                                        row_ix,
+                                                        col_ix,
+                                                        Some(enum_value.clone()),
+                                                    );
+                                                    table.set_selected_cell(row_ix, col_ix, cx);
+                                                    cx.emit(TableEvent::SelectCell(row_ix, col_ix));
+                                                    cx.notify();
+                                                },
+                                            )),
+                                    );
+                                }
+                                menu
+                            }),
+                    )
                 }
             })
             .when(!is_editing, |this| {
@@ -481,6 +557,43 @@ impl ResultsTableDelegate {
                 .unwrap_or(false)
     }
 
+    fn enum_values_for_cell(&self, row_ix: usize, col_ix: usize) -> Vec<String> {
+        if !self.is_editable_cell(row_ix, col_ix) {
+            return Vec::new();
+        }
+
+        self.editable_table
+            .as_ref()
+            .and_then(|table| table.columns.get(col_ix))
+            .map(|column| column.enum_values.clone())
+            .unwrap_or_default()
+    }
+
+    fn is_nullable_cell(&self, row_ix: usize, col_ix: usize) -> bool {
+        if !self.is_editable_cell(row_ix, col_ix) {
+            return false;
+        }
+
+        self.editable_table
+            .as_ref()
+            .and_then(|table| table.columns.get(col_ix))
+            .map(|column| column.nullable)
+            .unwrap_or(false)
+    }
+
+    fn cell_is_null(&self, row_ix: usize, col_ix: usize) -> bool {
+        let row_id = self.row_id(row_ix);
+        if let Some(value) = self.dirty_cells.get(&(row_id, col_ix)) {
+            return value.is_none();
+        }
+
+        self.nulls
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .copied()
+            .unwrap_or(false)
+    }
+
     pub fn has_dirty_cells(&self) -> bool {
         !self.dirty_cells.is_empty()
     }
@@ -513,6 +626,21 @@ impl ResultsTableDelegate {
         let value = editing.input.read(cx).value().to_string();
         let new_value = if value.is_empty() { None } else { Some(value) };
         self.set_cell_value(editing.row_ix, editing.col_ix, new_value);
+        true
+    }
+
+    pub fn finish_editing_with_value(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        value: Option<String>,
+    ) -> bool {
+        if !self.is_editable_cell(row_ix, col_ix) {
+            return false;
+        }
+
+        self.editing_cell = None;
+        self.set_cell_value(row_ix, col_ix, value);
         true
     }
 
@@ -585,6 +713,7 @@ impl ResultsTableDelegate {
                         Some(TableEditValue {
                             column: column.name.clone(),
                             data_type: column.data_type.clone(),
+                            enum_values: column.enum_values.clone(),
                             value: self.original_cell_value(row_id, col_ix),
                         })
                     })
@@ -596,6 +725,7 @@ impl ResultsTableDelegate {
                         Some(TableEditValue {
                             column: column.name.clone(),
                             data_type: column.data_type.clone(),
+                            enum_values: column.enum_values.clone(),
                             value,
                         })
                     })
@@ -981,6 +1111,8 @@ impl ResultPanel {
                         table.delegate_mut().select_emitted_cell(*row_ix, *col_ix);
                         cx.notify();
                     });
+                    this.sync_active_execution_from_delegate(cx);
+                    cx.notify();
                 }
                 TableEvent::DoubleClickedCell(row_ix, col_ix) => {
                     this.start_edit_cell(*row_ix, *col_ix, window, cx);
@@ -1913,6 +2045,58 @@ fn truncate_query(query: &str, max_chars: usize) -> String {
     }
 }
 
+fn is_user_defined_postgres_type(data_type: &str) -> bool {
+    let data_type = data_type.trim().trim_end_matches("[]").trim();
+    if data_type.is_empty() || data_type.contains(' ') || data_type.contains('(') {
+        return false;
+    }
+
+    let base = data_type
+        .rsplit('.')
+        .next()
+        .unwrap_or(data_type)
+        .trim_matches('"')
+        .to_ascii_lowercase();
+    !matches!(
+        base.as_str(),
+        "bool"
+            | "boolean"
+            | "char"
+            | "name"
+            | "int2"
+            | "smallint"
+            | "int4"
+            | "integer"
+            | "int"
+            | "int8"
+            | "bigint"
+            | "oid"
+            | "float4"
+            | "real"
+            | "float8"
+            | "double"
+            | "numeric"
+            | "decimal"
+            | "text"
+            | "varchar"
+            | "bpchar"
+            | "date"
+            | "time"
+            | "timestamp"
+            | "timestamptz"
+            | "uuid"
+            | "json"
+            | "jsonb"
+            | "bytea"
+            | "inet"
+            | "cidr"
+            | "money"
+            | "serial"
+            | "bigserial"
+            | "smallserial"
+    )
+}
+
 fn bounded_column_move(col_ix: usize, col_delta: isize, columns_count: usize) -> Option<usize> {
     let next_col = col_ix.checked_add_signed(col_delta)?;
     (next_col < columns_count).then_some(next_col)
@@ -2786,11 +2970,15 @@ mod tests {
                 EditableColumn {
                     name: "id".into(),
                     data_type: "int4".into(),
+                    enum_values: Vec::new(),
+                    nullable: false,
                     editable: false,
                 },
                 EditableColumn {
                     name: "name".into(),
                     data_type: "text".into(),
+                    enum_values: Vec::new(),
+                    nullable: true,
                     editable: true,
                 },
             ],
@@ -2820,11 +3008,15 @@ mod tests {
                 EditableColumn {
                     name: "id".into(),
                     data_type: "int4".into(),
+                    enum_values: Vec::new(),
+                    nullable: false,
                     editable: false,
                 },
                 EditableColumn {
                     name: "name".into(),
                     data_type: "text".into(),
+                    enum_values: Vec::new(),
+                    nullable: true,
                     editable: true,
                 },
             ],
@@ -2850,5 +3042,164 @@ mod tests {
         assert_eq!(batch.rows[0].keys[0].value.as_deref(), Some("1"));
         assert_eq!(batch.rows[0].assignments[0].column, "name");
         assert_eq!(batch.rows[0].assignments[0].value.as_deref(), Some("Grace"));
+    }
+
+    #[test]
+    fn edit_batch_preserves_enum_values() {
+        let editable_table = EditableTable {
+            schema: "public".into(),
+            table: "tasks".into(),
+            columns: vec![
+                EditableColumn {
+                    name: "id".into(),
+                    data_type: "int4".into(),
+                    enum_values: Vec::new(),
+                    nullable: false,
+                    editable: false,
+                },
+                EditableColumn {
+                    name: "status".into(),
+                    data_type: "task_status".into(),
+                    enum_values: vec!["todo".into(), "done".into()],
+                    nullable: true,
+                    editable: true,
+                },
+            ],
+            pk_col_indices: vec![0],
+        };
+        let mut delegate = ResultsTableDelegate::from_query(
+            vec!["id".into(), "status".into()],
+            sample_data().column_metadata,
+            vec![vec!["1".into(), "todo".into()]],
+            vec![vec![false, false]],
+            Some(editable_table),
+        );
+
+        delegate.set_cell_value(0, 1, Some("done".into()));
+        let batch = delegate.edit_batch().expect("dirty enum edit");
+
+        assert_eq!(
+            batch.rows[0].assignments[0].enum_values,
+            vec!["todo", "done"]
+        );
+    }
+
+    #[test]
+    fn enum_columns_are_editable_even_when_generated_metadata_is_set() {
+        let table = TableInfo {
+            schema: "public".into(),
+            name: "tasks".into(),
+            kind: TableKind::Table,
+            columns: vec![
+                sqlab_drivers_core::ColumnInfo {
+                    name: "id".into(),
+                    data_type: "int4".into(),
+                    enum_values: Vec::new(),
+                    nullable: false,
+                    ordinal: 1,
+                    is_pk: true,
+                    is_fk: false,
+                    default_value: None,
+                    is_generated: false,
+                    generation_expression: None,
+                },
+                sqlab_drivers_core::ColumnInfo {
+                    name: "status".into(),
+                    data_type: "task_status".into(),
+                    enum_values: vec!["todo".into(), "done".into()],
+                    nullable: false,
+                    ordinal: 2,
+                    is_pk: false,
+                    is_fk: false,
+                    default_value: None,
+                    is_generated: true,
+                    generation_expression: None,
+                },
+            ],
+        };
+
+        let editable_table =
+            EditableTable::from_table_result_columns(&table, &["id".into(), "status".into()])
+                .expect("table has primary key");
+        let delegate = ResultsTableDelegate::from_query(
+            vec!["id".into(), "status".into()],
+            sample_data().column_metadata,
+            vec![vec!["1".into(), "todo".into()]],
+            vec![vec![false, false]],
+            Some(editable_table),
+        );
+
+        assert!(delegate.is_editable_cell(0, 1));
+    }
+
+    #[test]
+    fn postgres_enum_column_from_customers_table_is_editable() {
+        let table = TableInfo {
+            schema: "public".into(),
+            name: "customers".into(),
+            kind: TableKind::Table,
+            columns: vec![
+                sqlab_drivers_core::ColumnInfo {
+                    name: "city".into(),
+                    data_type: "text".into(),
+                    enum_values: Vec::new(),
+                    nullable: false,
+                    ordinal: 1,
+                    is_pk: false,
+                    is_fk: false,
+                    default_value: None,
+                    is_generated: false,
+                    generation_expression: None,
+                },
+                sqlab_drivers_core::ColumnInfo {
+                    name: "id".into(),
+                    data_type: "uuid".into(),
+                    enum_values: Vec::new(),
+                    nullable: false,
+                    ordinal: 4,
+                    is_pk: true,
+                    is_fk: false,
+                    default_value: Some("gen_random_uuid()".into()),
+                    is_generated: false,
+                    generation_expression: None,
+                },
+                sqlab_drivers_core::ColumnInfo {
+                    name: "mood".into(),
+                    data_type: "mood".into(),
+                    enum_values: vec!["sad".into(), "ok".into(), "happy".into()],
+                    nullable: true,
+                    ordinal: 5,
+                    is_pk: false,
+                    is_fk: false,
+                    default_value: None,
+                    is_generated: false,
+                    generation_expression: None,
+                },
+            ],
+        };
+
+        let editable_table = EditableTable::from_table_result_columns(
+            &table,
+            &["city".into(), "id".into(), "mood".into()],
+        )
+        .expect("table has primary key");
+        let delegate = ResultsTableDelegate::from_query(
+            vec!["city".into(), "id".into(), "mood".into()],
+            sample_data().column_metadata,
+            vec![vec![
+                "Porto".into(),
+                "00000000-0000-0000-0000-000000000000".into(),
+                "ok".into(),
+            ]],
+            vec![vec![false, false, false]],
+            Some(editable_table),
+        );
+
+        assert!(delegate.is_editable_cell(0, 2));
+        assert_eq!(
+            delegate.enum_values_for_cell(0, 2),
+            vec!["sad", "ok", "happy"]
+        );
+        assert!(delegate.is_nullable_cell(0, 2));
     }
 }

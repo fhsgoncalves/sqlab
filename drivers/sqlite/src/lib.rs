@@ -298,6 +298,7 @@ fn sqlite_columns(
             ordinal: row.get::<_, i32>(0)? + 1,
             name: row.get(1)?,
             data_type: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            enum_values: Vec::new(),
             nullable: row.get::<_, i32>(3)? == 0,
             is_pk: row.get::<_, i32>(5)? > 0,
             is_fk: false,

@@ -212,6 +212,7 @@ pub struct TableEditRow {
 pub struct TableEditValue {
     pub column: String,
     pub data_type: String,
+    pub enum_values: Vec<String>,
     pub value: Option<String>,
 }
 
@@ -253,6 +254,7 @@ pub enum TableKind {
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
+    pub enum_values: Vec<String>,
     pub nullable: bool,
     pub ordinal: i32,
     pub is_pk: bool,

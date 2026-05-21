@@ -1670,6 +1670,7 @@ mod tests {
                         ColumnInfo {
                             name: "id".to_string(),
                             data_type: "bigint".to_string(),
+                            enum_values: Vec::new(),
                             nullable: false,
                             ordinal: 1,
                             is_pk: true,
@@ -1681,6 +1682,7 @@ mod tests {
                         ColumnInfo {
                             name: "name".to_string(),
                             data_type: "text".to_string(),
+                            enum_values: Vec::new(),
                             nullable: false,
                             ordinal: 2,
                             is_pk: false,
@@ -1692,6 +1694,7 @@ mod tests {
                         ColumnInfo {
                             name: "city".to_string(),
                             data_type: "text".to_string(),
+                            enum_values: Vec::new(),
                             nullable: true,
                             ordinal: 3,
                             is_pk: false,
@@ -1710,6 +1713,7 @@ mod tests {
                         ColumnInfo {
                             name: "created_at".to_string(),
                             data_type: "timestamp with time zone".to_string(),
+                            enum_values: Vec::new(),
                             nullable: false,
                             ordinal: 3,
                             is_pk: false,
@@ -1721,6 +1725,7 @@ mod tests {
                         ColumnInfo {
                             name: "customer_id".to_string(),
                             data_type: "uuid".to_string(),
+                            enum_values: Vec::new(),
                             nullable: false,
                             ordinal: 2,
                             is_pk: false,
@@ -1732,6 +1737,7 @@ mod tests {
                         ColumnInfo {
                             name: "id".to_string(),
                             data_type: "bigint".to_string(),
+                            enum_values: Vec::new(),
                             nullable: false,
                             ordinal: 1,
                             is_pk: true,
@@ -1743,6 +1749,7 @@ mod tests {
                         ColumnInfo {
                             name: "status".to_string(),
                             data_type: "text".to_string(),
+                            enum_values: Vec::new(),
                             nullable: true,
                             ordinal: 4,
                             is_pk: false,

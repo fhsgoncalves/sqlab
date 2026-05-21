@@ -50,6 +50,7 @@ pub fn schema_to_rows(
                 table_name: t.name.clone(),
                 name: c.name.clone(),
                 data_type: c.data_type.clone(),
+                enum_values: serde_json::to_string(&c.enum_values).unwrap_or_default(),
                 nullable: if c.nullable { 1 } else { 0 },
                 ordinal: c.ordinal,
                 is_pk: if c.is_pk { 1 } else { 0 },
@@ -191,6 +192,7 @@ pub fn rows_to_schema(
             table.columns.push(ColumnInfo {
                 name: c.name,
                 data_type: display_data_type(db_type, c.data_type),
+                enum_values: serde_json::from_str(&c.enum_values).unwrap_or_default(),
                 nullable: c.nullable != 0,
                 ordinal: c.ordinal,
                 is_pk: c.is_pk != 0,
@@ -301,6 +303,7 @@ pub struct ColumnRow {
     pub table_name: String,
     pub name: String,
     pub data_type: String,
+    pub enum_values: String,
     pub nullable: i32,
     pub ordinal: i32,
     pub is_pk: i32,

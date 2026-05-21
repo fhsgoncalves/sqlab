@@ -243,7 +243,20 @@ impl PostgresDataSource {
                             a.attnotnull,
                             a.attnum,
                             pg_get_expr(d.adbin, d.adrelid) as column_default,
-                            a.attgenerated::text as attgenerated
+                            a.attgenerated::text as attgenerated,
+                            coalesce((
+                                select array_agg(e.enumlabel order by e.enumsortorder)
+                                from pg_catalog.pg_type t
+                                left join pg_catalog.pg_type elem on elem.oid = t.typelem
+                                left join pg_catalog.pg_type base on base.oid = t.typbasetype
+                                join pg_catalog.pg_enum e on e.enumtypid = case
+                                    when t.typtype = 'e' then t.oid
+                                    when elem.typtype = 'e' then elem.oid
+                                    when base.typtype = 'e' then base.oid
+                                    else null
+                                end
+                                where t.oid = a.atttypid
+                            ), '{}'::text[]) as enum_values
                         from pg_catalog.pg_class c
                         join pg_catalog.pg_namespace n on n.oid = c.relnamespace
                         join pg_catalog.pg_attribute a on a.attrelid = c.oid
@@ -490,6 +503,7 @@ impl PostgresDataSource {
             let column = ColumnInfo {
                 name: column_name,
                 data_type: display_data_type(Database::Postgres, row.get::<_, String>("data_type")),
+                enum_values: row.get("enum_values"),
                 nullable: !row.get::<_, bool>("attnotnull"),
                 ordinal: i32::from(row.get::<_, i16>("attnum")),
                 is_pk,
@@ -1567,7 +1581,31 @@ fn postgres_literal(value: &TableEditValue) -> String {
         return raw_value.to_ascii_uppercase();
     }
 
-    format!("'{}'", raw_value.replace('\'', "''"))
+    let quoted = format!("'{}'", raw_value.replace('\'', "''"));
+    if !value.enum_values.is_empty() {
+        return format!("{quoted}::{}", postgres_type_cast(&value.data_type));
+    }
+
+    quoted
+}
+
+fn postgres_type_cast(data_type: &str) -> String {
+    let mut base = data_type.trim();
+    let mut array_suffix = String::new();
+    while let Some(stripped) = base.strip_suffix("[]") {
+        base = stripped.trim_end();
+        array_suffix.push_str("[]");
+    }
+    let quoted_base = if base.contains('"') {
+        base.to_string()
+    } else {
+        base.split('.')
+            .map(quote_postgres_identifier)
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+
+    format!("{quoted_base}{array_suffix}")
 }
 
 fn format_postgres_error(e: tokio_postgres::Error) -> String {
@@ -1744,22 +1782,26 @@ mod tests {
                 keys: vec![TableEditValue {
                     column: "id".into(),
                     data_type: "int4".into(),
+                    enum_values: Vec::new(),
                     value: Some("1".into()),
                 }],
                 assignments: vec![
                     TableEditValue {
                         column: "name".into(),
                         data_type: "text".into(),
+                        enum_values: Vec::new(),
                         value: Some("Ada's".into()),
                     },
                     TableEditValue {
                         column: "enabled".into(),
                         data_type: "bool".into(),
+                        enum_values: Vec::new(),
                         value: Some("true".into()),
                     },
                     TableEditValue {
                         column: "deleted_at".into(),
                         data_type: "timestamp".into(),
+                        enum_values: Vec::new(),
                         value: None,
                     },
                 ],
@@ -1769,6 +1811,33 @@ mod tests {
         assert_eq!(
             postgres_update_statement(&batch, &batch.rows[0]).unwrap(),
             "UPDATE \"public\".\"users\" SET \"name\" = 'Ada''s', \"enabled\" = TRUE, \"deleted_at\" = NULL WHERE \"id\" = 1"
+        );
+    }
+
+    #[test]
+    fn casts_enum_literals_in_update_statement() {
+        let batch = TableEditBatch {
+            schema: "public".into(),
+            table: "tasks".into(),
+            rows: vec![sqlab_drivers_core::TableEditRow {
+                keys: vec![TableEditValue {
+                    column: "id".into(),
+                    data_type: "int4".into(),
+                    enum_values: Vec::new(),
+                    value: Some("1".into()),
+                }],
+                assignments: vec![TableEditValue {
+                    column: "status".into(),
+                    data_type: "workflow.task_status".into(),
+                    enum_values: vec!["todo".into(), "done".into()],
+                    value: Some("done".into()),
+                }],
+            }],
+        };
+
+        assert_eq!(
+            postgres_update_statement(&batch, &batch.rows[0]).unwrap(),
+            "UPDATE \"public\".\"tasks\" SET \"status\" = 'done'::\"workflow\".\"task_status\" WHERE \"id\" = 1"
         );
     }
 }

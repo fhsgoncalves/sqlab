@@ -151,6 +151,7 @@ impl DataEditorPanel {
                         table.delegate_mut().select_emitted_cell(*row_ix, *col_ix);
                         cx.notify();
                     });
+                    cx.notify();
                 }
                 TableEvent::DoubleClickedCell(row_ix, col_ix) => {
                     this.start_edit_cell(*row_ix, *col_ix, window, cx);

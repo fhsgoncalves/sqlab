@@ -71,8 +71,8 @@ pub fn save(
 
         for c in &columns {
             conn.execute(
-                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.nullable, c.ordinal, c.is_pk, c.is_fk, c.default_value, c.is_generated, c.generation_expression],
+                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, enum_values, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.enum_values, c.nullable, c.ordinal, c.is_pk, c.is_fk, c.default_value, c.is_generated, c.generation_expression],
             )?;
         }
 
@@ -198,7 +198,7 @@ fn load_tables(conn: &rusqlite::Connection, key: &str) -> Result<Vec<TableRow>, 
 
 fn load_columns(conn: &rusqlite::Connection, key: &str) -> Result<Vec<ColumnRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT connection_key, schema_name, table_name, name, data_type, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression FROM columns WHERE connection_key = ?1",
+        "SELECT connection_key, schema_name, table_name, name, data_type, enum_values, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression FROM columns WHERE connection_key = ?1",
     )?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(ColumnRow {
@@ -207,13 +207,14 @@ fn load_columns(conn: &rusqlite::Connection, key: &str) -> Result<Vec<ColumnRow>
             table_name: row.get(2)?,
             name: row.get(3)?,
             data_type: row.get(4)?,
-            nullable: row.get(5)?,
-            ordinal: row.get(6)?,
-            is_pk: row.get(7)?,
-            is_fk: row.get(8)?,
-            default_value: row.get(9)?,
-            is_generated: row.get(10)?,
-            generation_expression: row.get(11)?,
+            enum_values: row.get(5)?,
+            nullable: row.get(6)?,
+            ordinal: row.get(7)?,
+            is_pk: row.get(8)?,
+            is_fk: row.get(9)?,
+            default_value: row.get(10)?,
+            is_generated: row.get(11)?,
+            generation_expression: row.get(12)?,
         })
     })?;
     rows.collect()
