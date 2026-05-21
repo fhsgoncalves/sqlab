@@ -1,10 +1,10 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{
-    px, size, AppContext, Bounds, KeyBinding, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions,
+    AppContext, Bounds, KeyBinding, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions, px, size,
 };
-use gpui_component::dock::ClosePanel;
 use gpui_component::Root;
+use gpui_component::dock::ClosePanel;
 
 mod app_theme;
 mod assets;

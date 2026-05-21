@@ -6,9 +6,10 @@ use std::{
 
 use chrono::Local;
 use gpui::{
-    App, AppContext, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Modifiers, ParentElement, Render, StatefulInteractiveElement,
-    Styled, WeakEntity, Window, actions, div, hsla, prelude::FluentBuilder, rgb,
+    App, AppContext, ClipboardItem, Context, Div, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, Modifiers, ParentElement, Render, Stateful,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, actions, div, hsla,
+    prelude::FluentBuilder, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
@@ -320,6 +321,18 @@ impl TableDelegate for ResultsTableDelegate {
             .and_then(|row| row.get(col_ix))
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let is_stripe_row = row_ix % 2 != 0;
+        div()
+            .id(("row", row_ix))
+            .when(is_stripe_row, |this| this.bg(cx.theme().table_even))
     }
 }
 
@@ -1764,7 +1777,7 @@ impl Render for ResultPanel {
                         if self.active_tab == 0 {
                             DataTable::new(&self.table_state)
                                 .xsmall()
-                                .stripe(true)
+                                .stripe(false)
                                 .bordered(true)
                                 .scrollbar_visible(true, true)
                                 .into_any_element()
@@ -1773,7 +1786,7 @@ impl Render for ResultPanel {
                             if execution.succeeded {
                                 DataTable::new(&self.table_state)
                                     .xsmall()
-                                    .stripe(true)
+                                    .stripe(false)
                                     .bordered(true)
                                     .scrollbar_visible(true, true)
                                     .into_any_element()
