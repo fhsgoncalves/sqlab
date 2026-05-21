@@ -483,10 +483,12 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        let is_stripe_row = row_ix % 2 != 0;
+        let is_cursor_row = self
+            .selection_cursor
+            .is_some_and(|(cursor_row_ix, _)| cursor_row_ix == row_ix);
         div()
             .id(("row", row_ix))
-            .when(is_stripe_row, |this| this.bg(cx.theme().table_even))
+            .when(is_cursor_row, |this| this.bg(cx.theme().table_hover))
     }
 }
 
