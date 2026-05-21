@@ -6,17 +6,24 @@ use gpui::{
     div, hsla, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Sizable,
+    ActiveTheme, Icon, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelState},
-    h_flex, v_flex,
+    h_flex,
+    menu::{DropdownMenu as _, PopupMenuItem},
+    v_flex,
 };
 
 use super::editor::{EditorPanel, ExecuteQuery};
+use crate::credentials;
+use crate::drivers::create_configured_data_source;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
+use crate::ui::panels::connection::ConnectionPanel;
 use crate::ui::panels::diagram::{DiagramModel, DiagramPanel};
-use sqlab_drivers_core::{ConnectionStatus, manager::DataSourceManager};
+use sqlab_drivers_core::{
+    ConnectionStatus, DataSourceConfig, DataSourceError, manager::DataSourceManager,
+};
 
 actions!(editor_tabs, [CycleTabForward, CycleTabBackward]);
 
@@ -234,6 +241,92 @@ impl EditorTabs {
             }
         }
     }
+
+    fn select_connection(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let result = self.data_source_manager.update(cx, |manager, cx| {
+            let status = manager.status(&name);
+            manager.set_active(Some(name.clone()));
+
+            if status == ConnectionStatus::Connected {
+                cx.notify();
+                return Ok(None);
+            }
+
+            manager.set_status(&name, ConnectionStatus::Idle);
+            manager.clear_last_error(&name);
+
+            if let Err(error) = manager.ensure_password_loaded(&name, |n| {
+                credentials::load_password(n).map_err(|e| credentials::recovery_error_message(&e))
+            }) {
+                manager.set_status(&name, ConnectionStatus::Failed);
+                manager.set_last_error(&name, error.clone());
+                cx.notify();
+                return Err(error);
+            }
+
+            let config = manager
+                .configs()
+                .iter()
+                .find(|config| config.name == name)
+                .cloned()
+                .ok_or_else(|| "The selected connection no longer exists.".to_string())?;
+            cx.notify();
+            Ok(Some(config))
+        });
+
+        match result {
+            Ok(Some(config)) => self.test_selected_connection(config, cx),
+            Ok(None) => {}
+            Err(error) => {
+                window.open_alert_dialog(cx, move |alert, _, _| {
+                    alert
+                        .title("Connection Setup Failed")
+                        .description(error.clone())
+                });
+            }
+        }
+    }
+
+    fn test_selected_connection(&mut self, config: DataSourceConfig, cx: &mut Context<Self>) {
+        let manager = self.data_source_manager.clone();
+        let activity_tracker = self.activity_tracker.clone();
+        let config_name = config.name.clone();
+        let activity_label = format!("Connecting: {}", config_name);
+        let activity_id = self
+            .activity_tracker
+            .update(cx, |tracker, cx| tracker.begin(activity_label, cx));
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut source = create_configured_data_source(&config)?;
+                    source.connect().await?;
+                    source.disconnect().await?;
+                    Ok::<(), DataSourceError>(())
+                })
+                .await;
+
+            cx.update_entity(&manager, move |manager, cx| {
+                match result {
+                    Ok(_) => {
+                        manager.set_status(&config_name, ConnectionStatus::Connected);
+                        manager.clear_last_error(&config_name);
+                    }
+                    Err(error) => {
+                        manager.set_status(&config_name, ConnectionStatus::Failed);
+                        manager.set_last_error(&config_name, error.to_string());
+                    }
+                }
+                cx.notify();
+            });
+
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
+            });
+        })
+        .detach();
+    }
 }
 
 impl EventEmitter<PanelEvent> for EditorTabs {}
@@ -336,21 +429,27 @@ impl Render for EditorTabs {
                 )
             });
 
-        let active_connection = self.data_source_manager.read(cx).active_name().map(|name| {
+        let active_name = self
+            .data_source_manager
+            .read(cx)
+            .active_name()
+            .map(|name| name.to_string());
+        let active_connection = active_name.as_ref().map(|name| {
             let status = self.data_source_manager.read(cx).status(name);
-            let status_label = match status {
-                ConnectionStatus::Idle => "idle",
-                ConnectionStatus::Connected => "connected",
-                ConnectionStatus::Failed => "failed",
-            };
-            format!("{} ({})", name, status_label)
+            format!("{} ({})", name, connection_status_label(status))
         });
+        let connections = self
+            .data_source_manager
+            .read(cx)
+            .configs()
+            .iter()
+            .cloned()
+            .map(|config| {
+                let status = self.data_source_manager.read(cx).status(&config.name);
+                (config, status)
+            })
+            .collect::<Vec<_>>();
 
-        let active_connection_bg = if cx.theme().is_dark() {
-            hsla(0.72, 0.72, 0.68, 0.22)
-        } else {
-            hsla(0.74, 0.55, 0.74, 0.48)
-        };
         let active_connection_fg = if cx.theme().is_dark() {
             hsla(0.72, 0.90, 0.78, 1.0)
         } else {
@@ -384,18 +483,49 @@ impl Render for EditorTabs {
                         }),
                 )
                 .child(div().flex_1())
-                .when_some(active_connection, |toolbar, connection| {
+                .when(!connections.is_empty(), |toolbar| {
+                    let selected_name = active_name.clone();
+                    let connection_label =
+                        active_connection.unwrap_or_else(|| "No connection".to_string());
+                    let connections = connections.clone();
+                    let view = entity.clone();
                     toolbar.child(
-                        div()
-                            .px_2()
-                            .py_0p5()
-                            .rounded(cx.theme().radius)
-                            .bg(active_connection_bg)
+                        Button::new("active-connection-picker")
+                            .label(connection_label)
+                            .icon(IconName::HardDrive)
+                            .dropdown_caret(true)
+                            .xsmall()
                             .text_color(active_connection_fg)
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .truncate()
-                            .child(connection),
+                            .tooltip("Switch Active Connection")
+                            .dropdown_menu(move |menu, window, _cx| {
+                                let mut menu = menu;
+                                for (config, status) in &connections {
+                                    let name = config.name.clone();
+                                    let label =
+                                        format!("{} ({})", name, connection_status_label(*status));
+                                    let view_for_item = view.clone();
+                                    let is_selected =
+                                        selected_name.as_deref() == Some(name.as_str());
+                                    menu = menu.item(
+                                        PopupMenuItem::new(label)
+                                            .icon(Icon::new(IconName::File).path(
+                                                ConnectionPanel::database_icon_path(config.db_type),
+                                            ))
+                                            .checked(is_selected)
+                                            .on_click(window.listener_for(
+                                                &view_for_item,
+                                                move |this, _, window, cx| {
+                                                    this.select_connection(
+                                                        name.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            )),
+                                    );
+                                }
+                                menu
+                            }),
                     )
                 })
         });
@@ -421,6 +551,14 @@ impl Render for EditorTabs {
                         }
                     }),
             )
+    }
+}
+
+fn connection_status_label(status: ConnectionStatus) -> &'static str {
+    match status {
+        ConnectionStatus::Idle => "idle",
+        ConnectionStatus::Connected => "connected",
+        ConnectionStatus::Failed => "failed",
     }
 }
 

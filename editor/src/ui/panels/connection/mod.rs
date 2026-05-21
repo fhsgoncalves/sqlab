@@ -910,7 +910,7 @@ impl ConnectionPanel {
         cx.notify();
     }
 
-    fn database_icon_path(database: Database) -> &'static str {
+    pub(crate) fn database_icon_path(database: Database) -> &'static str {
         match database {
             Database::Postgres => "icons/postgresql.svg",
             Database::MySql => "icons/mysql.svg",
@@ -1386,7 +1386,10 @@ impl Render for ConnectionPanel {
                                             .read(cx)
                                             .active_name()
                                             .map(|n| n.to_string());
-                                        if current_active.as_deref() != Some(row_name.as_str()) {
+                                        let status = row_manager.read(cx).status(&row_name);
+                                        if current_active.as_deref() != Some(row_name.as_str())
+                                            || status != ConnectionStatus::Connected
+                                        {
                                             this.test_connection(row_name.clone(), cx);
                                         }
                                     }
