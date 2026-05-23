@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, WeakEntity, Window, actions,
-    div, hsla, prelude::FluentBuilder, px, rgb,
+    InteractiveElement, IntoElement, ParentElement, Render, Styled, Subscription, WeakEntity,
+    Window, actions, div, hsla, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelState},
     h_flex,
@@ -15,7 +15,7 @@ use gpui_component::{
 };
 
 use super::data_editor::DataEditorPanel;
-use super::editor::{EditorPanel, ExecuteQuery};
+use super::editor::{EditorCursorPosition, EditorPanel, EditorPanelEvent, ExecuteQuery};
 use crate::credentials;
 use crate::drivers::create_configured_data_source;
 use crate::ui::activity::ActivityTracker;
@@ -26,7 +26,18 @@ use sqlab_drivers_core::{
     ConnectionStatus, DataSourceConfig, DataSourceError, TableInfo, manager::DataSourceManager,
 };
 
-actions!(editor_tabs, [CycleTabForward, CycleTabBackward]);
+actions!(
+    editor_tabs,
+    [
+        CycleTabForward,
+        CycleTabBackward,
+        NavigateBack,
+        NavigateForward
+    ]
+);
+
+const NAVIGATION_HISTORY_LIMIT: usize = 100;
+const SIGNIFICANT_LINE_DELTA: usize = 20;
 
 pub struct EditorTabs {
     tabs: Vec<EditorTab>,
@@ -36,6 +47,9 @@ pub struct EditorTabs {
     data_source_manager: Entity<DataSourceManager>,
     is_zoomed: bool,
     activity_tracker: Entity<ActivityTracker>,
+    navigation_history: NavigationHistory,
+    navigation_subscriptions: Vec<Subscription>,
+    suppress_navigation_recording: bool,
 }
 
 enum EditorTab {
@@ -83,6 +97,131 @@ impl EditorTab {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditorNavigationPoint {
+    path: PathBuf,
+    row: usize,
+    column: usize,
+    cursor: usize,
+    visible_rows: Option<std::ops::Range<usize>>,
+}
+
+impl EditorNavigationPoint {
+    fn new(path: PathBuf, cursor: EditorCursorPosition) -> Self {
+        Self {
+            path,
+            row: cursor.row,
+            column: cursor.column,
+            cursor: cursor.cursor,
+            visible_rows: cursor.visible_rows,
+        }
+    }
+}
+
+#[derive(Default)]
+struct NavigationHistory {
+    back: Vec<EditorNavigationPoint>,
+    forward: Vec<EditorNavigationPoint>,
+    last_recorded: Option<EditorNavigationPoint>,
+}
+
+impl NavigationHistory {
+    fn can_go_back(&self) -> bool {
+        !self.back.is_empty()
+    }
+
+    fn can_go_forward(&self) -> bool {
+        !self.forward.is_empty()
+    }
+
+    fn sync_current(&mut self, current: Option<EditorNavigationPoint>) {
+        self.last_recorded = current;
+    }
+
+    fn record_navigation_away_from(&mut self, current: EditorNavigationPoint) {
+        push_limited(&mut self.back, current);
+        self.forward.clear();
+    }
+
+    fn record_movement_to(&mut self, current: EditorNavigationPoint) {
+        let Some(previous) = self.last_recorded.clone() else {
+            self.last_recorded = Some(current);
+            return;
+        };
+
+        if is_significant_movement(&previous, &current) {
+            push_limited(&mut self.back, previous);
+            self.forward.clear();
+            self.last_recorded = Some(current);
+        }
+    }
+
+    fn go_back(&mut self, current: Option<EditorNavigationPoint>) -> Option<EditorNavigationPoint> {
+        let current = current.or_else(|| self.last_recorded.clone());
+        while let Some(target) = self.back.pop() {
+            if current.as_ref() == Some(&target) {
+                continue;
+            }
+            if let Some(current) = current.clone() {
+                push_limited(&mut self.forward, current);
+            }
+            self.last_recorded = Some(target.clone());
+            return Some(target);
+        }
+        None
+    }
+
+    fn go_forward(
+        &mut self,
+        current: Option<EditorNavigationPoint>,
+    ) -> Option<EditorNavigationPoint> {
+        let current = current.or_else(|| self.last_recorded.clone());
+        while let Some(target) = self.forward.pop() {
+            if current.as_ref() == Some(&target) {
+                continue;
+            }
+            if let Some(current) = current.clone() {
+                push_limited(&mut self.back, current);
+            }
+            self.last_recorded = Some(target.clone());
+            return Some(target);
+        }
+        None
+    }
+}
+
+fn push_limited(stack: &mut Vec<EditorNavigationPoint>, point: EditorNavigationPoint) {
+    if stack.last() == Some(&point) {
+        return;
+    }
+
+    stack.push(point);
+    if stack.len() > NAVIGATION_HISTORY_LIMIT {
+        stack.remove(0);
+    }
+}
+
+fn is_significant_movement(
+    previous: &EditorNavigationPoint,
+    current: &EditorNavigationPoint,
+) -> bool {
+    if previous.path != current.path {
+        return true;
+    }
+
+    if previous.cursor == current.cursor {
+        return false;
+    }
+
+    if let Some(visible_rows) = &previous.visible_rows
+        && !visible_rows.contains(&current.row)
+    {
+        return true;
+    }
+
+    previous.row.abs_diff(current.row) >= SIGNIFICANT_LINE_DELTA
+}
+
 impl EditorTabs {
     pub fn new(
         data_source_manager: Entity<DataSourceManager>,
@@ -98,6 +237,9 @@ impl EditorTabs {
             data_source_manager,
             is_zoomed: false,
             activity_tracker,
+            navigation_history: NavigationHistory::default(),
+            navigation_subscriptions: Vec::new(),
+            suppress_navigation_recording: false,
         }
     }
 
@@ -106,6 +248,14 @@ impl EditorTabs {
     }
 
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_path(cx).as_ref() != Some(&path) {
+            self.record_current_before_navigation(cx);
+        }
+        self.open_file_internal(path, window, cx);
+        self.sync_current_navigation_point(cx);
+    }
+
+    fn open_file_internal(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.tabs.iter().position(|tab| {
             tab.as_sql()
                 .map(|editor| *editor.read(cx).path() == path)
@@ -118,6 +268,7 @@ impl EditorTabs {
 
         let data_source_manager = self.data_source_manager.clone();
         let editor = cx.new(|cx| EditorPanel::new(path, data_source_manager, window, cx));
+        self.subscribe_to_editor_navigation(&editor, cx);
         self.tabs.push(EditorTab::Sql(editor));
         self.active_ix = self.tabs.len() - 1;
         cx.notify();
@@ -177,12 +328,14 @@ impl EditorTabs {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_file(path, window, cx);
+        self.record_current_before_navigation(cx);
+        self.open_file_internal(path, window, cx);
         if let Some(editor) = self.active_editor() {
             editor.update(cx, |editor, cx| {
                 editor.go_to_position(line_number, column, window, cx);
             });
         }
+        self.sync_current_navigation_point(cx);
     }
 
     pub fn active_path(&self, cx: &App) -> Option<PathBuf> {
@@ -198,6 +351,7 @@ impl EditorTabs {
             if self.active_ix >= self.tabs.len() {
                 self.active_ix = self.tabs.len().saturating_sub(1);
             }
+            self.sync_current_navigation_point(cx);
             cx.notify();
         }
     }
@@ -205,6 +359,7 @@ impl EditorTabs {
     pub fn clear_tabs(&mut self, cx: &mut Context<Self>) {
         self.tabs.clear();
         self.active_ix = 0;
+        self.navigation_history = NavigationHistory::default();
         cx.notify();
     }
 
@@ -227,12 +382,11 @@ impl EditorTabs {
         cx: &mut Context<Self>,
     ) {
         if self.tabs.len() > 1 {
+            self.record_current_before_navigation(cx);
             self.active_ix = (self.active_ix + 1) % self.tabs.len();
+            self.sync_current_navigation_point(cx);
             cx.notify();
-            if let Some(editor) = self.active_editor() {
-                let focus_handle = editor.read(cx).editor_focus_handle(cx);
-                window.focus(&focus_handle, cx);
-            }
+            self.focus_active_editor(window, cx);
         }
     }
 
@@ -243,13 +397,23 @@ impl EditorTabs {
         cx: &mut Context<Self>,
     ) {
         if self.tabs.len() > 1 {
+            self.record_current_before_navigation(cx);
             self.active_ix = (self.active_ix + self.tabs.len() - 1) % self.tabs.len();
+            self.sync_current_navigation_point(cx);
             cx.notify();
-            if let Some(editor) = self.active_editor() {
-                let focus_handle = editor.read(cx).editor_focus_handle(cx);
-                window.focus(&focus_handle, cx);
-            }
+            self.focus_active_editor(window, cx);
         }
+    }
+
+    fn select_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.tabs.len() || ix == self.active_ix {
+            return;
+        }
+        self.record_current_before_navigation(cx);
+        self.active_ix = ix;
+        self.sync_current_navigation_point(cx);
+        cx.notify();
+        self.focus_active_editor(window, cx);
     }
 
     fn reorder_tab(&mut self, from_ix: usize, to_ix: usize, cx: &mut Context<Self>) {
@@ -266,6 +430,111 @@ impl EditorTabs {
             self.active_ix += 1;
         }
         cx.notify();
+    }
+
+    fn subscribe_to_editor_navigation(
+        &mut self,
+        editor: &Entity<EditorPanel>,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription =
+            cx.subscribe(
+                editor,
+                |this, editor, event: &EditorPanelEvent, cx| match event {
+                    EditorPanelEvent::CursorMoved => {
+                        this.record_editor_movement(&editor, cx);
+                    }
+                },
+            );
+        self.navigation_subscriptions.push(subscription);
+    }
+
+    fn active_navigation_point(&self, cx: &App) -> Option<EditorNavigationPoint> {
+        self.active_editor().map(|editor| {
+            EditorNavigationPoint::new(
+                editor.read(cx).path().clone(),
+                editor.read(cx).cursor_position(cx),
+            )
+        })
+    }
+
+    fn record_current_before_navigation(&mut self, cx: &App) {
+        if self.suppress_navigation_recording {
+            return;
+        }
+        if let Some(current) = self.active_navigation_point(cx) {
+            self.navigation_history.record_navigation_away_from(current);
+        }
+    }
+
+    fn sync_current_navigation_point(&mut self, cx: &App) {
+        self.navigation_history
+            .sync_current(self.active_navigation_point(cx));
+    }
+
+    fn record_editor_movement(&mut self, editor: &Entity<EditorPanel>, cx: &mut Context<Self>) {
+        if self.suppress_navigation_recording {
+            return;
+        }
+
+        let Some(active_editor) = self.active_editor() else {
+            return;
+        };
+        if active_editor != editor {
+            return;
+        }
+
+        let point = EditorNavigationPoint::new(
+            editor.read(cx).path().clone(),
+            editor.read(cx).cursor_position(cx),
+        );
+        self.navigation_history.record_movement_to(point);
+        cx.notify();
+    }
+
+    fn navigate_back(&mut self, _: &NavigateBack, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.active_navigation_point(cx);
+        if let Some(target) = self.navigation_history.go_back(current) {
+            self.navigate_to_point(target, window, cx);
+        }
+    }
+
+    fn navigate_forward(
+        &mut self,
+        _: &NavigateForward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.active_navigation_point(cx);
+        if let Some(target) = self.navigation_history.go_forward(current) {
+            self.navigate_to_point(target, window, cx);
+        }
+    }
+
+    fn navigate_to_point(
+        &mut self,
+        target: EditorNavigationPoint,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.suppress_navigation_recording = true;
+        self.open_file_internal(target.path.clone(), window, cx);
+        if let Some(editor) = self.active_editor() {
+            editor.update(cx, |editor, cx| {
+                editor.go_to_position(target.row + 1, target.column, window, cx);
+            });
+        }
+        self.suppress_navigation_recording = false;
+        self.navigation_history.sync_current(Some(target));
+        cx.notify();
+        self.focus_active_editor(window, cx);
+    }
+
+    fn focus_active_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.active_editor() {
+            let focus_handle = editor.read(cx).editor_focus_handle(cx);
+            window.focus(&focus_handle, cx);
+        }
     }
 
     pub fn save_all(&mut self, cx: &mut Context<Self>) {
@@ -433,12 +702,45 @@ impl Render for EditorTabs {
                 }))
         });
 
+        let can_go_back = self.navigation_history.can_go_back();
+        let can_go_forward = self.navigation_history.can_go_forward();
+        let navigation_controls = h_flex()
+            .id("editor-navigation-controls")
+            .h_full()
+            .items_center()
+            .gap_0p5()
+            .px_1()
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new("editor-navigate-back")
+                    .icon(IconName::ArrowLeft)
+                    .xsmall()
+                    .ghost()
+                    .disabled(!can_go_back)
+                    .tooltip_with_action("Go Back", &NavigateBack, None)
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(NavigateBack), cx);
+                    }),
+            )
+            .child(
+                Button::new("editor-navigate-forward")
+                    .icon(IconName::ArrowRight)
+                    .xsmall()
+                    .ghost()
+                    .disabled(!can_go_forward)
+                    .tooltip_with_action("Go Forward", &NavigateForward, None)
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(NavigateForward), cx);
+                    }),
+            );
+
         let tab_bar = TabBar::new("editor-tab-bar")
             .selected_index(self.active_ix)
+            .prefix(navigation_controls)
             .suffix(h_flex().gap_1().children(zoom_btn))
-            .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                this.active_ix = *ix;
-                cx.notify();
+            .on_click(cx.listener(|this, ix: &usize, window, cx| {
+                this.select_tab(*ix, window, cx);
             }))
             .on_reorder(cx.listener(|this, (from_ix, to_ix), _, cx| {
                 this.reorder_tab(*from_ix, *to_ix, cx);
@@ -621,6 +923,8 @@ impl Render for EditorTabs {
             .bg(cx.theme().background)
             .on_action(cx.listener(Self::cycle_tab_forward))
             .on_action(cx.listener(Self::cycle_tab_backward))
+            .on_action(cx.listener(Self::navigate_back))
+            .on_action(cx.listener(Self::navigate_forward))
             .child(tab_bar)
             .when_some(editor_toolbar, |this, toolbar| this.child(toolbar))
             .child(
@@ -650,5 +954,73 @@ fn connection_status_label(status: ConnectionStatus) -> &'static str {
 impl Focusable for EditorTabs {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(path: &str, row: usize) -> EditorNavigationPoint {
+        EditorNavigationPoint {
+            path: PathBuf::from(path),
+            row,
+            column: 0,
+            cursor: row * 10,
+            visible_rows: Some(row..row + 10),
+        }
+    }
+
+    #[test]
+    fn small_cursor_moves_do_not_create_history_entries() {
+        let mut history = NavigationHistory::default();
+        history.sync_current(Some(point("a.sql", 10)));
+
+        history.record_movement_to(point("a.sql", 14));
+
+        assert!(!history.can_go_back());
+    }
+
+    #[test]
+    fn large_cursor_moves_record_previous_location() {
+        let mut history = NavigationHistory::default();
+        let start = point("a.sql", 10);
+        let target = point("a.sql", 40);
+        history.sync_current(Some(start.clone()));
+
+        history.record_movement_to(target.clone());
+
+        assert_eq!(history.go_back(Some(target)), Some(start));
+        assert!(history.can_go_forward());
+    }
+
+    #[test]
+    fn recording_new_navigation_clears_forward_history() {
+        let mut history = NavigationHistory::default();
+        let first = point("a.sql", 0);
+        let second = point("b.sql", 0);
+        let third = point("c.sql", 0);
+
+        history.record_navigation_away_from(first.clone());
+        history.sync_current(Some(second.clone()));
+        assert_eq!(history.go_back(Some(second)), Some(first.clone()));
+        assert!(history.can_go_forward());
+
+        history.record_navigation_away_from(first);
+        history.sync_current(Some(third));
+
+        assert!(!history.can_go_forward());
+    }
+
+    #[test]
+    fn back_history_is_limited_to_latest_entries() {
+        let mut history = NavigationHistory::default();
+
+        for row in 0..(NAVIGATION_HISTORY_LIMIT + 5) {
+            history.record_navigation_away_from(point("a.sql", row));
+        }
+
+        assert_eq!(history.back.len(), NAVIGATION_HISTORY_LIMIT);
+        assert_eq!(history.back.first().map(|point| point.row), Some(5));
     }
 }

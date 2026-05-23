@@ -16,9 +16,9 @@ mod workspace;
 
 use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
-    ConfirmSelectedQuery, CycleTabBackward, CycleTabForward, ExecuteQuery, FormatQuery, SaveFile,
-    SelectNextQuery, SelectPreviousQuery, ToggleCommentLines, ToggleEditorReplace,
-    ToggleEditorSearch,
+    ConfirmSelectedQuery, CycleTabBackward, CycleTabForward, ExecuteQuery, FormatQuery,
+    NavigateBack, NavigateForward, SaveFile, SelectNextQuery, SelectPreviousQuery,
+    ToggleCommentLines, ToggleEditorReplace, ToggleEditorSearch,
 };
 use ui::panels::file_search::ToggleFileSearch;
 use ui::panels::project_search::ToggleProjectSearch;
@@ -33,8 +33,9 @@ use ui::panels::terminal::{
     CycleTabForward as TerminalCycleTabForward, NewTerminalTab, Paste,
 };
 use workspace::{
-    ConfirmSelectedConnection, OpenFolder, SelectNextConnection, SelectPreviousConnection,
-    ToggleSearchReplace, Workspace,
+    CloseRecentFolders, ConfirmRecentFolder, ConfirmSelectedConnection, OpenFolder,
+    OpenRecentFolders, SelectNextConnection, SelectNextRecentFolder, SelectPreviousConnection,
+    SelectPreviousRecentFolder, ToggleSearchReplace, Workspace,
 };
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
@@ -51,7 +52,14 @@ fn app_icon() -> Option<Arc<image::RgbaImage>> {
 fn set_app_menus(cx: &mut gpui::App) {
     cx.set_menus(vec![
         Menu::new("sq/lab").items(vec![app_theme::themes_menu_item(cx)]),
-        Menu::new("File").items(vec![MenuItem::action("Open Folder...", OpenFolder)]),
+        Menu::new("File").items(vec![
+            MenuItem::action("Open Recent Folder...", OpenRecentFolders),
+            MenuItem::action("Open Folder...", OpenFolder),
+        ]),
+        Menu::new("Navigate").items(vec![
+            MenuItem::action("Go Back", NavigateBack),
+            MenuItem::action("Go Forward", NavigateForward),
+        ]),
         Menu::new("Edit\u{200B}").items(vec![
             MenuItem::action("Find", ToggleEditorSearch),
             MenuItem::action("Find in Files...", ToggleProjectSearch),
@@ -111,6 +119,8 @@ fn main() {
 
         cx.bind_keys(vec![
             KeyBinding::new("cmd-w", ClosePanel, None),
+            KeyBinding::new("cmd-o", OpenRecentFolders, None),
+            KeyBinding::new("cmd-shift-o", OpenFolder, None),
             KeyBinding::new("cmd-e", ToggleFileSearch, None),
             KeyBinding::new("cmd-f", ToggleEditorSearch, Some("Input")),
             KeyBinding::new("cmd-shift-f", ToggleProjectSearch, None),
@@ -151,6 +161,8 @@ fn main() {
             KeyBinding::new("cmd-c", CopyResultSelection, None),
             KeyBinding::new("ctrl-tab", CycleTabForward, None),
             KeyBinding::new("ctrl-shift-tab", CycleTabBackward, None),
+            KeyBinding::new("cmd-[", NavigateBack, None),
+            KeyBinding::new("cmd-]", NavigateForward, None),
             KeyBinding::new("ctrl-tab", TerminalCycleTabForward, Some("terminal_panel")),
             KeyBinding::new(
                 "ctrl-shift-tab",
@@ -173,6 +185,10 @@ fn main() {
                 ConfirmSelectedConnection,
                 Some("ConnectionSelector"),
             ),
+            KeyBinding::new("up", SelectPreviousRecentFolder, Some("RecentFolders")),
+            KeyBinding::new("down", SelectNextRecentFolder, Some("RecentFolders")),
+            KeyBinding::new("enter", ConfirmRecentFolder, Some("RecentFolders")),
+            KeyBinding::new("escape", CloseRecentFolders, Some("RecentFolders")),
         ]);
         set_app_menus(cx);
         cx.activate(true);
@@ -195,6 +211,18 @@ fn main() {
             |window, cx| {
                 let workspace =
                     cx.new(|cx| Workspace::new(root_path, initial_file.clone(), window, cx));
+                let workspace_for_open_folder = workspace.downgrade();
+                cx.on_action(move |_: &OpenFolder, cx| {
+                    _ = workspace_for_open_folder.update_in(cx, |workspace, _window, cx| {
+                        workspace.open_folder_picker(cx);
+                    });
+                });
+                let workspace_for_recent_folders = workspace.downgrade();
+                cx.on_action(move |_: &OpenRecentFolders, cx| {
+                    _ = workspace_for_recent_folders.update_in(cx, |workspace, window, cx| {
+                        workspace.open_recent_folders(window, cx);
+                    });
+                });
                 cx.new(|cx| Root::new(workspace, window, cx))
             },
         )

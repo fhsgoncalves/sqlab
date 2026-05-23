@@ -41,6 +41,11 @@ actions!(
 const SEARCH_CONTEXT: &str = "EditorSearch";
 const SQL_LINE_COMMENT: &str = "-- ";
 
+#[derive(Clone, Debug)]
+pub enum EditorPanelEvent {
+    CursorMoved,
+}
+
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", CloseEditorSearch, Some(SEARCH_CONTEXT)),
@@ -82,6 +87,15 @@ pub struct EditorPanel {
 }
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
+impl EventEmitter<EditorPanelEvent> for EditorPanel {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EditorCursorPosition {
+    pub row: usize,
+    pub column: usize,
+    pub cursor: usize,
+    pub visible_rows: Option<Range<usize>>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct EditorSnapshot {
@@ -248,6 +262,17 @@ impl EditorPanel {
         self.editor.read(cx).focus_handle(cx)
     }
 
+    pub(crate) fn cursor_position(&self, cx: &App) -> EditorCursorPosition {
+        let state = self.editor.read(cx);
+        let position = state.cursor_position();
+        EditorCursorPosition {
+            row: position.line as usize,
+            column: position.character as usize,
+            cursor: state.cursor(),
+            visible_rows: state.visible_row_range(),
+        }
+    }
+
     pub fn go_to_line(&mut self, line_number: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.go_to_position(line_number, 0, window, cx);
     }
@@ -340,6 +365,7 @@ impl EditorPanel {
                     InputEvent::Focus | InputEvent::Blur => {}
                 }),
                 cx.observe(&editor, |this, _, cx| {
+                    let previous_snapshot = this.last_observed_snapshot.clone();
                     let snapshot = {
                         let state = this.editor.read(cx);
                         EditorSnapshot {
@@ -351,9 +377,16 @@ impl EditorPanel {
                     if this.last_observed_snapshot.as_ref() == Some(&snapshot) {
                         return;
                     }
+                    let cursor_moved_without_edit =
+                        previous_snapshot.as_ref().is_some_and(|previous| {
+                            previous.text == snapshot.text && previous.cursor != snapshot.cursor
+                        });
                     this.last_observed_snapshot = Some(snapshot);
                     this.refresh_active_query(cx);
                     this.schedule_diagnostics(cx);
+                    if cursor_moved_without_edit {
+                        cx.emit(EditorPanelEvent::CursorMoved);
+                    }
                 }),
                 cx.observe(&data_source_manager_for_obs, |this, _, cx| {
                     this.refresh_schema_cache(cx);

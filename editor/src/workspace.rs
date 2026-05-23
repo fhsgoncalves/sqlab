@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{
@@ -43,6 +43,11 @@ actions!(
     workspace,
     [
         OpenFolder,
+        OpenRecentFolders,
+        CloseRecentFolders,
+        ConfirmRecentFolder,
+        SelectPreviousRecentFolder,
+        SelectNextRecentFolder,
         ToggleSearchReplace,
         SelectPreviousConnection,
         SelectNextConnection,
@@ -51,6 +56,61 @@ actions!(
 );
 
 const CONNECTION_SELECTOR_CONTEXT: &str = "ConnectionSelector";
+const RECENT_FOLDERS_CONTEXT: &str = "RecentFolders";
+const RECENT_FOLDERS_LIMIT: usize = 20;
+
+fn app_data_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".sqlab")
+}
+
+fn recent_folders_path() -> PathBuf {
+    app_data_dir().join("recent_folders.json")
+}
+
+fn load_recent_folders() -> Vec<PathBuf> {
+    let Ok(content) = std::fs::read_to_string(recent_folders_path()) else {
+        return Vec::new();
+    };
+    let Ok(folders) = serde_json::from_str::<Vec<PathBuf>>(&content) else {
+        return Vec::new();
+    };
+    folders
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .take(RECENT_FOLDERS_LIMIT)
+        .collect()
+}
+
+fn save_recent_folders(folders: &[PathBuf]) {
+    let path = recent_folders_path();
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            eprintln!("failed to create recent folders directory: {}", error);
+            return;
+        }
+    }
+
+    match serde_json::to_string_pretty(folders) {
+        Ok(content) => {
+            if let Err(error) = std::fs::write(path, content) {
+                eprintln!("failed to save recent folders: {}", error);
+            }
+        }
+        Err(error) => eprintln!("failed to serialize recent folders: {}", error),
+    }
+}
+
+fn add_recent_folder(path: PathBuf) -> Vec<PathBuf> {
+    let mut folders = load_recent_folders();
+    folders.retain(|folder| folder != &path);
+    folders.insert(0, path);
+    folders.truncate(RECENT_FOLDERS_LIMIT);
+    save_recent_folders(&folders);
+    folders
+}
 
 #[derive(Clone, Debug)]
 pub struct ConnectionSelected {
@@ -318,9 +378,265 @@ impl Focusable for ConnectionSelector {
     }
 }
 
+#[derive(Clone, Debug)]
+struct RecentFolderSelected {
+    path: PathBuf,
+}
+
+struct RecentFolderSelector {
+    folders: Vec<PathBuf>,
+    selected_ix: usize,
+    visible: bool,
+    focus_handle: FocusHandle,
+}
+
+impl EventEmitter<RecentFolderSelected> for RecentFolderSelector {}
+
+impl RecentFolderSelector {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            folders: load_recent_folders(),
+            selected_ix: 0,
+            visible: false,
+            focus_handle: cx.focus_handle(),
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.folders = load_recent_folders();
+        self.selected_ix = self.selected_ix.min(self.folders.len().saturating_sub(1));
+        self.visible = true;
+        cx.notify();
+        window.focus(&self.focus_handle, cx);
+    }
+
+    fn close(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+        self.visible = false;
+        cx.notify();
+    }
+
+    fn set_folders(&mut self, folders: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.folders = folders;
+        self.selected_ix = self.selected_ix.min(self.folders.len().saturating_sub(1));
+        cx.notify();
+    }
+
+    fn select_previous(&mut self, cx: &mut Context<Self>) {
+        if self.folders.is_empty() {
+            return;
+        }
+        self.selected_ix = if self.selected_ix == 0 {
+            self.folders.len() - 1
+        } else {
+            self.selected_ix - 1
+        };
+        cx.notify();
+    }
+
+    fn select_next(&mut self, cx: &mut Context<Self>) {
+        if self.folders.is_empty() {
+            return;
+        }
+        self.selected_ix = (self.selected_ix + 1).min(self.folders.len().saturating_sub(1));
+        cx.notify();
+    }
+
+    fn confirm_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.folders.get(self.selected_ix).cloned() else {
+            return;
+        };
+        self.visible = false;
+        cx.emit(RecentFolderSelected { path });
+        cx.notify();
+    }
+
+    fn render_folder_row(
+        &self,
+        path: &Path,
+        ix: usize,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let parent = path
+            .parent()
+            .map(|parent| parent.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        div()
+            .id(format!("recent-folder-row-{}", ix))
+            .w_full()
+            .px_3()
+            .py_2()
+            .cursor_pointer()
+            .when(selected, |this| {
+                this.bg(cx.theme().accent)
+                    .text_color(cx.theme().accent_foreground)
+            })
+            .when(!selected, |this| {
+                this.text_color(cx.theme().foreground)
+                    .hover(|style| style.bg(cx.theme().accent.opacity(0.12)))
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(IconName::Folder).small().text_color(if selected {
+                        cx.theme().accent_foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    }))
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .truncate()
+                                    .font_weight(if selected {
+                                        gpui::FontWeight::MEDIUM
+                                    } else {
+                                        gpui::FontWeight::NORMAL
+                                    })
+                                    .child(name),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .truncate()
+                                    .text_color(if selected {
+                                        cx.theme().accent_foreground.opacity(0.7)
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(parent),
+                            ),
+                    ),
+            )
+            .on_click(
+                cx.listener(move |this: &mut RecentFolderSelector, _, _window, cx| {
+                    this.selected_ix = ix;
+                    this.confirm_selected(cx);
+                }),
+            )
+            .into_any_element()
+    }
+}
+
+impl Render for RecentFolderSelector {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.visible {
+            return div().into_any_element();
+        }
+
+        v_flex()
+            .id("recent-folders")
+            .key_context(RECENT_FOLDERS_CONTEXT)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_action_close))
+            .on_action(cx.listener(Self::on_action_confirm))
+            .on_action(cx.listener(Self::on_action_select_previous))
+            .on_action(cx.listener(Self::on_action_select_next))
+            .w(px(560.))
+            .max_h(px(420.))
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .shadow_md()
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Recent Folders"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .when(self.folders.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .px_3()
+                                .py_6()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No recent folders"),
+                        )
+                    })
+                    .children(self.folders.iter().enumerate().map(|(ix, path)| {
+                        self.render_folder_row(path, ix, ix == self.selected_ix, cx)
+                    })),
+            )
+            .into_any_element()
+    }
+}
+
+impl Focusable for RecentFolderSelector {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl RecentFolderSelector {
+    fn on_action_close(
+        &mut self,
+        _: &CloseRecentFolders,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close(cx);
+    }
+
+    fn on_action_confirm(
+        &mut self,
+        _: &ConfirmRecentFolder,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_selected(cx);
+    }
+
+    fn on_action_select_previous(
+        &mut self,
+        _: &SelectPreviousRecentFolder,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_previous(cx);
+    }
+
+    fn on_action_select_next(
+        &mut self,
+        _: &SelectNextRecentFolder,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_next(cx);
+    }
+}
+
 pub struct Workspace {
     file_tree_panel: Entity<FileTreePanel>,
     file_search: Entity<FileSearch>,
+    recent_folders: Entity<RecentFolderSelector>,
     project_search: Entity<ProjectSearch>,
     dock_area: Entity<DockArea>,
     editor_tabs: Entity<EditorTabs>,
@@ -343,6 +659,7 @@ impl Workspace {
 
         let file_tree_panel = cx.new(|cx| FileTreePanel::new(root_path.clone(), window, cx));
         let file_search = cx.new(|cx| FileSearch::new(root_path.clone(), window, cx));
+        let recent_folders = cx.new(|cx| RecentFolderSelector::new(cx));
         let project_search = cx.new(|cx| ProjectSearch::new(root_path.clone(), window, cx));
         let data_source_manager = cx.new(|_cx| {
             DataSourceManager::load().unwrap_or_else(|e| {
@@ -464,6 +781,15 @@ impl Workspace {
         })
         .detach();
 
+        cx.subscribe_in(
+            &recent_folders,
+            window,
+            |this, _recent_folders, event: &RecentFolderSelected, _window, cx| {
+                this.set_workspace_root(event.path.clone(), cx);
+            },
+        )
+        .detach();
+
         // Subscribe to project search results
         let editor_tabs_for_project = editor_tabs.clone();
         cx.subscribe_in(&project_search, window, {
@@ -571,6 +897,7 @@ impl Workspace {
         let mut this = Self {
             file_tree_panel,
             file_search,
+            recent_folders,
             project_search,
             dock_area,
             editor_tabs,
@@ -599,8 +926,22 @@ impl Workspace {
         if let Some(file) = initial_file {
             this.open_file(file, window, cx);
         }
+        let folders = add_recent_folder(root_path);
+        this.recent_folders.update(cx, |recent, cx| {
+            recent.set_folders(folders, cx);
+        });
 
         this
+    }
+
+    fn set_workspace_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        let folders = add_recent_folder(root.clone());
+        self.recent_folders.update(cx, |recent, cx| {
+            recent.set_folders(folders, cx);
+        });
+        self.file_tree_panel.update(cx, |tree, cx| {
+            tree.set_root(root, cx);
+        });
     }
 
     fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -679,7 +1020,7 @@ impl Workspace {
         });
     }
 
-    fn on_open_folder(&mut self, _: &OpenFolder, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_folder_picker(&mut self, cx: &mut Context<Self>) {
         let options = gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -688,9 +1029,14 @@ impl Workspace {
         };
         let rx = cx.prompt_for_paths(options);
         let file_tree = self.file_tree_panel.clone();
+        let recent_folders = self.recent_folders.clone();
         cx.spawn(async move |_this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 if let Some(path) = paths.first() {
+                    let folders = add_recent_folder(path.clone());
+                    cx.update_entity(&recent_folders, |recent, cx| {
+                        recent.set_folders(folders, cx);
+                    });
                     cx.update_entity(&file_tree, |tree, cx| {
                         tree.set_root(path.clone(), cx);
                     });
@@ -698,6 +1044,31 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn on_open_folder(&mut self, _: &OpenFolder, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_folder_picker(cx);
+    }
+
+    pub(crate) fn open_recent_folders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.file_search.update(cx, |search, cx| {
+            search.close(window, cx);
+        });
+        self.project_search.update(cx, |search, cx| {
+            search.close(window, cx);
+        });
+        self.recent_folders.update(cx, |recent, cx| {
+            recent.open(window, cx);
+        });
+    }
+
+    fn on_open_recent_folders(
+        &mut self,
+        _: &OpenRecentFolders,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_recent_folders(window, cx);
     }
 
     fn on_save_file(&mut self, _: &SaveFile, _window: &mut Window, cx: &mut Context<Self>) {
@@ -993,6 +1364,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.recent_folders.update(cx, |recent, cx| {
+            recent.close(cx);
+        });
         self.file_search.update(cx, |search, cx| {
             search.toggle(window, cx);
         });
@@ -1004,6 +1378,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.recent_folders.update(cx, |recent, cx| {
+            recent.close(cx);
+        });
         self.project_search.update(cx, |search, cx| {
             search.toggle(window, cx);
         });
@@ -1282,6 +1659,7 @@ impl Render for Workspace {
         };
 
         let is_file_search_visible = self.file_search.read(cx).is_visible();
+        let is_recent_folders_visible = self.recent_folders.read(cx).is_visible();
         let is_project_search_visible = self.project_search.read(cx).is_visible();
 
         v_flex()
@@ -1289,6 +1667,7 @@ impl Render for Workspace {
             .size_full()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_open_folder))
+            .on_action(cx.listener(Self::on_open_recent_folders))
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_execute_query))
             .on_action(cx.listener(Self::on_toggle_file_search))
@@ -1341,6 +1720,41 @@ impl Render for Workspace {
                     .overflow_hidden()
                     .relative()
                     .child(self.dock_area.clone())
+                    .when(is_recent_folders_visible, |overlay| {
+                        overlay
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .inset_0()
+                                    .occlude()
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.recent_folders.update(cx, |recent, cx| {
+                                                recent.close(cx);
+                                            });
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .top(px(80.))
+                                    .flex()
+                                    .justify_center()
+                                    .items_start()
+                                    .child(
+                                        div()
+                                            .occlude()
+                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation();
+                                            })
+                                            .child(self.recent_folders.clone()),
+                                    ),
+                            )
+                    })
                     .when(is_file_search_visible, |overlay| {
                         overlay
                             .child(
