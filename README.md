@@ -1,5 +1,10 @@
 # sq/lab
 
+![Language](https://img.shields.io/badge/lang-rust-orange)
+[![License](https://img.shields.io/github/license/fhsgoncalves/sqlab)](LICENSE)
+[![Downloads](https://img.shields.io/badge/download-releases-blue)](https://github.com/fhsgoncalves/sqlab/releases)
+
+
 A fast, native SQL editor built in Rust using [GPUI](https://www.gpui.rs) — the same GPU-accelerated UI framework that powers the Zed editor.
 
 Check out the [site](https://fhsgoncalves.github.io/sqlab).
@@ -50,8 +55,11 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | MySQL driver | ✅ |
 | SQLite driver | ✅ |
 | MSSQL Server driver | ⏳ |
+| Oracle DB driver | ⏳ |
 | DuckDB driver | ✅ |
 | Databend driver | ✅ |
+| Clickhouse driver | ⏳ |
+| Athena driver | ⏳ |
 
 ## Supported Databases
 
@@ -59,8 +67,11 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 - **MySQL** — fully supported via `mysql_async`.
 - **SQLite** — fully supported via `rusqlite`.
 - **MSSQL Server** — planned / coming soon.
-- **DuckDB** — planned / coming soon.
-- **Databend** — planned / coming soon.
+- **Oracle DB** — planned / coming soon.
+- **DuckDB** — fully supported via `duckdb`
+- **Databend** — fully supported via `databend-driver`.
+- **Clickhouse** — planned / coming soon.
+- **Athena** — planned / coming soon.
 
 ## Tech Stack
 
