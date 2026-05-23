@@ -470,15 +470,7 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
-        let row_id = self.row_id(row_ix);
-        if let Some(value) = self.dirty_cells.get(&(row_id, col_ix)) {
-            return value.clone().unwrap_or_default();
-        }
-        self.rows
-            .get(row_ix)
-            .and_then(|row| row.get(col_ix))
-            .cloned()
-            .unwrap_or_default()
+        self.raw_cell_value(row_ix, col_ix)
     }
 
     fn render_tr(
@@ -497,6 +489,17 @@ impl TableDelegate for ResultsTableDelegate {
 }
 
 impl ResultsTableDelegate {
+    fn raw_cell_value(&self, row_ix: usize, col_ix: usize) -> String {
+        let row_id = self.row_id(row_ix);
+        if let Some(value) = self.dirty_cells.get(&(row_id, col_ix)) {
+            return value.clone().unwrap_or_default();
+        }
+        self.rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .unwrap_or_default()
+    }
     pub fn empty() -> Self {
         Self::from_parts(Vec::new(), Vec::new(), Vec::new())
     }
@@ -826,6 +829,53 @@ impl ResultsTableDelegate {
         self.row_ids = (0..self.rows.len()).collect();
         self.dirty_cells.clear();
         self.editing_cell = None;
+    }
+
+    pub fn selected_copy_text(&self) -> Option<String> {
+        if self.selected_cells.is_empty() {
+            return None;
+        }
+
+        if self.selected_cells.len() == 1 {
+            let (row_ix, col_ix) = self.selected_cells.iter().next().copied()?;
+            return Some(self.raw_cell_value(row_ix, col_ix));
+        }
+
+        let mut col_indices = self
+            .selected_cells
+            .iter()
+            .map(|(_, col_ix)| *col_ix)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let row_indices = self
+            .selected_cells
+            .iter()
+            .map(|(row_ix, _)| *row_ix)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        col_indices.retain(|col_ix| *col_ix < self.columns.len());
+        let lines = row_indices
+            .into_iter()
+            .filter(|row_ix| *row_ix < self.rows.len())
+            .map(|row_ix| {
+                col_indices
+                    .iter()
+                    .map(|&col_ix| {
+                        if self.selected_cells.contains(&(row_ix, col_ix)) {
+                            escape_csv_field(&self.raw_cell_value(row_ix, col_ix))
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect::<Vec<_>>();
+
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     pub fn select_cell(&mut self, row_ix: usize, col_ix: usize, modifiers: Modifiers) {
@@ -3178,6 +3228,42 @@ mod tests {
                 vec!["1".to_string(), "Ada".to_string()],
                 vec!["2".to_string(), "Bob".to_string()]
             ]
+        );
+    }
+
+    #[test]
+    fn selected_copy_text_returns_raw_single_cell() {
+        let mut delegate = ResultsTableDelegate::from_parts(
+            vec!["id".into(), "name".into()],
+            Vec::new(),
+            vec![vec!["1".into(), "Ada, Lovelace".into()]],
+        );
+
+        delegate.select_cell(0, 1, Modifiers::none());
+
+        assert_eq!(
+            delegate.selected_copy_text(),
+            Some("Ada, Lovelace".to_string())
+        );
+    }
+
+    #[test]
+    fn selected_copy_text_returns_csv_without_headers_for_multiple_cells() {
+        let mut delegate = ResultsTableDelegate::from_parts(
+            vec!["id".into(), "name".into(), "city".into()],
+            Vec::new(),
+            vec![
+                vec!["1".into(), "Ada, A.".into(), "London".into()],
+                vec!["2".into(), "Bob".into(), "Paris".into()],
+            ],
+        );
+
+        delegate.select_cell(0, 0, Modifiers::none());
+        delegate.select_cell(1, 1, Modifiers::shift());
+
+        assert_eq!(
+            delegate.selected_copy_text(),
+            Some("1,\"Ada, A.\"\n2,Bob".to_string())
         );
     }
 

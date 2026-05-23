@@ -19,6 +19,8 @@ pub trait DdlGenerator {
 pub struct PostgresDdlGenerator;
 pub struct MySqlDdlGenerator;
 pub struct SQLiteDdlGenerator;
+pub struct DuckDbDdlGenerator;
+pub struct DatabendDdlGenerator;
 
 impl DdlGenerator for PostgresDdlGenerator {
     fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
@@ -575,6 +577,99 @@ impl DdlGenerator for SQLiteDdlGenerator {
     }
 }
 
+impl DdlGenerator for DuckDbDdlGenerator {
+    fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
+        format!("CREATE SCHEMA {};\n", quote_identifier(&schema.name))
+    }
+
+    fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
+        generic_table_ddl(schema, table, quote_identifier, duckdb_qualified_name)
+    }
+
+    fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
+        format!(
+            "-- View: {}\n-- View definition is not available in schema cache.\n",
+            duckdb_qualified_name(&table.schema, &table.name)
+        )
+    }
+
+    fn generate_function_ddl(&self, func: &FunctionInfo) -> String {
+        format!("-- DuckDB function definition unavailable: {}\n", func.name)
+    }
+
+    fn generate_index_ddl(&self, idx: &IndexInfo) -> String {
+        generic_index_ddl(idx, quote_identifier, duckdb_qualified_name)
+    }
+
+    fn generate_trigger_ddl(&self, trig: &TriggerInfo) -> String {
+        format!("-- DuckDB trigger definition unavailable: {}\n", trig.name)
+    }
+
+    fn generate_sequence_ddl(&self, seq: &SequenceInfo) -> String {
+        format!("-- DuckDB sequence definition unavailable: {}\n", seq.name)
+    }
+
+    fn generate_column_ddl(&self, table: &TableInfo, column: &ColumnInfo) -> String {
+        format!(
+            "ALTER TABLE {} ADD COLUMN {} {};\n",
+            duckdb_qualified_name(&table.schema, &table.name),
+            quote_identifier(&column.name),
+            format_column_type(column)
+        )
+    }
+}
+
+impl DdlGenerator for DatabendDdlGenerator {
+    fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
+        format!("CREATE DATABASE {};\n", quote_identifier(&schema.name))
+    }
+
+    fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
+        generic_table_ddl(schema, table, quote_identifier, databend_qualified_name)
+    }
+
+    fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
+        format!(
+            "-- View: {}\n-- View definition is not available in schema cache.\n",
+            databend_qualified_name(&table.schema, &table.name)
+        )
+    }
+
+    fn generate_function_ddl(&self, func: &FunctionInfo) -> String {
+        format!(
+            "-- Databend function definition unavailable: {}\n",
+            func.name
+        )
+    }
+
+    fn generate_index_ddl(&self, idx: &IndexInfo) -> String {
+        generic_index_ddl(idx, quote_identifier, databend_qualified_name)
+    }
+
+    fn generate_trigger_ddl(&self, trig: &TriggerInfo) -> String {
+        format!(
+            "-- Databend trigger definition unavailable: {}\n",
+            trig.name
+        )
+    }
+
+    fn generate_sequence_ddl(&self, seq: &SequenceInfo) -> String {
+        format!(
+            "-- Databend sequence definition unavailable: {}\n",
+            seq.name
+        )
+    }
+
+    fn generate_column_ddl(&self, table: &TableInfo, column: &ColumnInfo) -> String {
+        format!(
+            "ALTER TABLE {} ADD COLUMN {} {};\n",
+            databend_qualified_name(&table.schema, &table.name),
+            quote_identifier(&column.name),
+            format_column_type(column)
+        )
+    }
+}
+
 fn generic_table_ddl(
     schema: &DatabaseSchema,
     table: &TableInfo,
@@ -668,12 +763,26 @@ fn sqlite_qualified_name(schema: &str, name: &str) -> String {
     }
 }
 
+fn duckdb_qualified_name(schema: &str, name: &str) -> String {
+    sqlite_qualified_name(schema, name)
+}
+
+fn databend_qualified_name(schema: &str, name: &str) -> String {
+    if schema.is_empty() {
+        quote_identifier(name)
+    } else {
+        format!("{}.{}", quote_identifier(schema), quote_identifier(name))
+    }
+}
+
 /// DDL generator factory based on database type.
 pub fn create_ddl_generator(db_type: Database) -> Box<dyn DdlGenerator> {
     match db_type {
         Database::Postgres => Box::new(PostgresDdlGenerator),
         Database::MySql => Box::new(MySqlDdlGenerator),
         Database::SQLite => Box::new(SQLiteDdlGenerator),
+        Database::DuckDB => Box::new(DuckDbDdlGenerator),
+        Database::Databend => Box::new(DatabendDdlGenerator),
     }
 }
 

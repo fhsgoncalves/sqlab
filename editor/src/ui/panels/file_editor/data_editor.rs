@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    Modifiers, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div,
+    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, Modifiers, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
@@ -20,10 +20,10 @@ use sqlab_drivers_core::{
 use crate::drivers::create_configured_data_source;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::result::{
-    EditResultCell, EditableTable, ExtendResultSelectionDown, ExtendResultSelectionLeft,
-    ExtendResultSelectionRight, ExtendResultSelectionUp, ResultsTableDelegate,
-    SelectResultCellDown, SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp,
-    set_selected_result_cell,
+    CopyResultSelection, EditResultCell, EditableTable, ExtendResultSelectionDown,
+    ExtendResultSelectionLeft, ExtendResultSelectionRight, ExtendResultSelectionUp,
+    ResultsTableDelegate, SelectResultCellDown, SelectResultCellLeft, SelectResultCellRight,
+    SelectResultCellUp, set_selected_result_cell,
 };
 
 const DEFAULT_LIMIT: usize = 1000;
@@ -276,6 +276,17 @@ impl DataEditorPanel {
     ) {
         if let Some((row_ix, col_ix)) = self.table_state.read(cx).selected_cell() {
             self.start_edit_cell(row_ix, col_ix, window, cx);
+        }
+    }
+
+    fn copy_selection(
+        &mut self,
+        _: &CopyResultSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(value) = self.table_state.read(cx).delegate().selected_copy_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(value));
         }
     }
 
@@ -573,6 +584,7 @@ impl Render for DataEditorPanel {
             .on_action(cx.listener(Self::on_select_cell_right))
             .on_action(cx.listener(Self::on_select_cell_up))
             .on_action(cx.listener(Self::on_select_cell_down))
+            .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::start_edit_selected_cell))
             .child(
                 h_flex()
@@ -747,7 +759,9 @@ fn normalized_where_clause(where_clause: &str) -> String {
 fn qualified_table_name(database: Database, table: &TableInfo) -> String {
     let quote = match database {
         Database::MySql => quote_mysql_identifier,
-        Database::Postgres | Database::SQLite => quote_standard_identifier,
+        Database::Postgres | Database::SQLite | Database::DuckDB | Database::Databend => {
+            quote_standard_identifier
+        }
     };
 
     if table.schema.is_empty() {
@@ -865,6 +879,19 @@ mod tests {
         assert_eq!(
             data_editor_query(&config, &table, "status = 'open'", 50),
             "SELECT * FROM `app`.`order``items` WHERE status = 'open' LIMIT 50"
+        );
+    }
+
+    #[test]
+    fn quotes_duckdb_identifiers() {
+        let config = DataSourceConfig {
+            db_type: Database::DuckDB,
+            ..DataSourceConfig::default()
+        };
+
+        assert_eq!(
+            data_editor_query(&config, &table(), "", 1000),
+            "SELECT * FROM \"public\".\"transactions\" LIMIT 1000"
         );
     }
 }

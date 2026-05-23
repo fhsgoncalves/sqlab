@@ -50,8 +50,8 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | MySQL driver | ✅ |
 | SQLite driver | ✅ |
 | MSSQL Server driver | ⏳ |
-| DuckDB driver | ⏳ |
-| Databend driver | ⏳ |
+| DuckDB driver | ✅ |
+| Databend driver | ✅ |
 
 ## Supported Databases
 

@@ -10,6 +10,8 @@ pub enum Database {
     Postgres,
     MySql,
     SQLite,
+    DuckDB,
+    Databend,
 }
 
 impl Database {
@@ -18,6 +20,8 @@ impl Database {
             Database::Postgres => "postgres",
             Database::MySql => "mysql",
             Database::SQLite => "sqlite",
+            Database::DuckDB => "duckdb",
+            Database::Databend => "databend",
         }
     }
 
@@ -26,6 +30,8 @@ impl Database {
             Database::Postgres => 5432,
             Database::MySql => 3306,
             Database::SQLite => 0,
+            Database::DuckDB => 0,
+            Database::Databend => 8000,
         }
     }
 
@@ -34,6 +40,8 @@ impl Database {
             Database::Postgres => "",
             Database::MySql => "",
             Database::SQLite => "main",
+            Database::DuckDB => "main",
+            Database::Databend => "",
         }
     }
 }
@@ -52,6 +60,8 @@ impl TryFrom<&str> for Database {
             "postgres" => Ok(Database::Postgres),
             "mysql" => Ok(Database::MySql),
             "sqlite" => Ok(Database::SQLite),
+            "duckdb" => Ok(Database::DuckDB),
+            "databend" => Ok(Database::Databend),
             _ => Err("unsupported database type"),
         }
     }
@@ -74,7 +84,9 @@ impl std::fmt::Display for Database {
 pub fn display_data_type(db_type: Database, data_type: impl AsRef<str>) -> String {
     match db_type {
         Database::Postgres => display_postgres_data_type(data_type.as_ref()),
-        Database::MySql | Database::SQLite => data_type.as_ref().to_string(),
+        Database::MySql | Database::SQLite | Database::DuckDB | Database::Databend => {
+            data_type.as_ref().to_string()
+        }
     }
 }
 

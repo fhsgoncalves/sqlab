@@ -45,7 +45,13 @@ impl EventEmitter<PanelEvent> for ConnectionPanel {}
 impl EventEmitter<ShowDiagramEvent> for ConnectionPanel {}
 impl EventEmitter<ShowDataEditorEvent> for ConnectionPanel {}
 
-const DATABASE_OPTIONS: [Database; 3] = [Database::Postgres, Database::MySql, Database::SQLite];
+const DATABASE_OPTIONS: [Database; 5] = [
+    Database::Postgres,
+    Database::MySql,
+    Database::SQLite,
+    Database::DuckDB,
+    Database::Databend,
+];
 
 impl ConnectionPanel {
     pub fn new(
@@ -151,7 +157,7 @@ impl ConnectionPanel {
                         if name.is_empty() || config.database.is_empty() {
                             return false;
                         }
-                        if db_type != Database::SQLite
+                        if !matches!(db_type, Database::SQLite | Database::DuckDB)
                             && (config.host.is_empty() || config.user.is_empty())
                         {
                             return false;
@@ -970,6 +976,8 @@ impl ConnectionPanel {
             Database::Postgres => "icons/postgresql.svg",
             Database::MySql => "icons/mysql.svg",
             Database::SQLite => "icons/sqlite.svg",
+            Database::DuckDB => "icons/duckdb.svg",
+            Database::Databend => "icons/databend.svg",
         }
     }
 
@@ -1992,7 +2000,7 @@ impl Render for ConnectionConfigForm {
         let form = cx.entity();
         let advanced_open = self.advanced_open;
 
-        let file_database = selected == Database::SQLite;
+        let file_database = matches!(selected, Database::SQLite | Database::DuckDB);
 
         v_flex()
             .gap_2()
@@ -2101,19 +2109,25 @@ struct ParsedConnectionUrl {
 }
 
 fn connection_url_from_config(config: &DataSourceConfig) -> String {
-    if config.db_type == Database::SQLite {
+    if matches!(config.db_type, Database::SQLite | Database::DuckDB) {
         let database = if config.database.is_empty() {
             String::new()
         } else {
             percent_encode_path(&config.database)
         };
-        return format!("sqlite://{}", database);
+        let scheme = match config.db_type {
+            Database::SQLite => "sqlite",
+            Database::DuckDB => "duckdb",
+            _ => unreachable!(),
+        };
+        return format!("{scheme}://{}", database);
     }
 
     let scheme = match config.db_type {
         Database::Postgres => "postgresql",
         Database::MySql => "mysql",
-        Database::SQLite => unreachable!(),
+        Database::Databend => "databend",
+        Database::SQLite | Database::DuckDB => unreachable!(),
     };
     let auth = if config.user.is_empty() {
         String::new()
@@ -2154,10 +2168,12 @@ fn parse_connection_url(value: &str) -> Option<ParsedConnectionUrl> {
         "postgres" | "postgresql" => Database::Postgres,
         "mysql" => Database::MySql,
         "sqlite" | "sqlite3" => Database::SQLite,
+        "duckdb" => Database::DuckDB,
+        "databend" | "databend+http" | "databend+https" => Database::Databend,
         _ => return None,
     };
 
-    if db_type == Database::SQLite {
+    if matches!(db_type, Database::SQLite | Database::DuckDB) {
         let (path, query) = split_query(rest);
         let (schema, query_string) = parse_url_query(db_type, query);
         return Some(ParsedConnectionUrl {
@@ -2234,8 +2250,6 @@ fn parse_url_query(db_type: Database, query: &str) -> (String, String) {
         let decoded_value = percent_decode(value);
         if decoded_key.eq_ignore_ascii_case("schema") {
             schema = decoded_value;
-        } else if db_type == Database::Postgres {
-            options.push(format!("{}={}", decoded_key, decoded_value));
         } else {
             options.push(format!("{}={}", decoded_key, decoded_value));
         }
@@ -2398,6 +2412,8 @@ fn database_label(database: Database) -> &'static str {
         Database::Postgres => "PostgreSQL",
         Database::MySql => "MySQL",
         Database::SQLite => "SQLite",
+        Database::DuckDB => "DuckDB",
+        Database::Databend => "Databend",
     }
 }
 

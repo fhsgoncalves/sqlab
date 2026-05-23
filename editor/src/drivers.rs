@@ -2,6 +2,8 @@ use sqlab_drivers_core::{
     DataSource, DataSourceConfig, DataSourceError, Database,
     manager::{DataSourceFactory, create_data_source},
 };
+use sqlab_drivers_databend::create_databend_data_source;
+use sqlab_drivers_duckdb::create_duckdb_data_source;
 use sqlab_drivers_mysql::create_mysql_data_source;
 use sqlab_drivers_postgres::create_postgres_data_source;
 use sqlab_drivers_sqlite::create_sqlite_data_source;
@@ -17,5 +19,7 @@ fn factory_for(db_type: Database) -> DataSourceFactory {
         Database::Postgres => create_postgres_data_source,
         Database::MySql => create_mysql_data_source,
         Database::SQLite => create_sqlite_data_source,
+        Database::DuckDB => create_duckdb_data_source,
+        Database::Databend => create_databend_data_source,
     }
 }

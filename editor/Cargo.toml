@@ -24,6 +24,8 @@ sqlab-drivers-core = { path = "../drivers/core" }
 sqlab-drivers-postgres = { path = "../drivers/postgres" }
 sqlab-drivers-mysql = { path = "../drivers/mysql" }
 sqlab-drivers-sqlite = { path = "../drivers/sqlite" }
+sqlab-drivers-duckdb = { path = "../drivers/duckdb" }
+sqlab-drivers-databend = { path = "../drivers/databend" }
 image = "0.25.1"
 fontdue = "0.9"
 keyring-core = "1"

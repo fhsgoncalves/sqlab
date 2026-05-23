@@ -62,7 +62,7 @@ fn set_app_menus(cx: &mut gpui::App) {
             MenuItem::separator(),
             MenuItem::action("Format Query", FormatQuery),
             MenuItem::separator(),
-            MenuItem::action("Copy Result Selection", CopyResultSelection),
+            MenuItem::action("Copy Table Selection", CopyResultSelection),
             MenuItem::action("Copy Terminal Selection", CopyTerminalSelection),
             MenuItem::action("Edit Result Cell", EditResultCell),
             MenuItem::separator(),

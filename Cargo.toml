@@ -1,5 +1,13 @@
 [workspace]
-members = ["editor", "drivers/core", "drivers/postgres", "drivers/mysql", "drivers/sqlite"]
+members = [
+    "editor",
+    "drivers/core",
+    "drivers/postgres",
+    "drivers/mysql",
+    "drivers/sqlite",
+    "drivers/duckdb",
+    "drivers/databend",
+]
 resolver = "2"
 
 [workspace.dependencies]
@@ -18,8 +26,11 @@ rustls-native-certs = "0.7"
 rustls-pemfile = "2"
 rusqlite = { version = "0.34", features = ["bundled"] }
 mysql_async = { version = "0.36", default-features = false, features = ["default-rustls-ring"] }
+duckdb = { version = "1.10503.0", features = ["bundled"] }
+databend-driver = "0.34"
 sqlparser = "0.56"
 toml = "0.8"
+tokio-stream = "0.1"
 
 [profile.dist]
 inherits = "release"
