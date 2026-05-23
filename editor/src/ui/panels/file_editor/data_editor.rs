@@ -23,6 +23,7 @@ use crate::ui::panels::result::{
     EditResultCell, EditableTable, ExtendResultSelectionDown, ExtendResultSelectionLeft,
     ExtendResultSelectionRight, ExtendResultSelectionUp, ResultsTableDelegate,
     SelectResultCellDown, SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp,
+    set_selected_result_cell,
 };
 
 const DEFAULT_LIMIT: usize = 1000;
@@ -311,7 +312,7 @@ impl DataEditorPanel {
                 .delegate_mut()
                 .start_editing(row_ix, col_ix, input.clone());
             if started {
-                table.set_selected_cell(row_ix, col_ix, cx);
+                set_selected_result_cell(table, row_ix, col_ix, cx);
             }
             started
         });
@@ -410,7 +411,7 @@ impl DataEditorPanel {
         self.table_state.update(cx, |table, cx| {
             let next = { table.delegate_mut().extend_selection(row_delta, col_delta) };
             if let Some((row_ix, col_ix)) = next {
-                table.set_selected_cell(row_ix, col_ix, cx);
+                set_selected_result_cell(table, row_ix, col_ix, cx);
             }
         });
     }
@@ -436,10 +437,10 @@ impl DataEditorPanel {
                 table
                     .delegate_mut()
                     .select_cell(row_ix, next_col, Modifiers::none());
-                table.set_selected_cell(row_ix, next_col, cx);
+                set_selected_result_cell(table, row_ix, next_col, cx);
             } else {
                 table.delegate_mut().select_cell(0, 0, Modifiers::none());
-                table.set_selected_cell(0, 0, cx);
+                set_selected_result_cell(table, 0, 0, cx);
             }
         });
     }
@@ -465,10 +466,10 @@ impl DataEditorPanel {
                 table
                     .delegate_mut()
                     .select_cell(next_row, col_ix, Modifiers::none());
-                table.set_selected_cell(next_row, col_ix, cx);
+                set_selected_result_cell(table, next_row, col_ix, cx);
             } else {
                 table.delegate_mut().select_cell(0, 0, Modifiers::none());
-                table.set_selected_cell(0, 0, cx);
+                set_selected_result_cell(table, 0, 0, cx);
             }
         });
     }

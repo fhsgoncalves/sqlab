@@ -7,8 +7,8 @@ use std::{
 use chrono::Local;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Div, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Modifiers, ParentElement, Render, Stateful,
-    StatefulInteractiveElement, Styled, TextAlign, WeakEntity, Window, actions, div, hsla,
+    InteractiveElement, IntoElement, Modifiers, ParentElement, Pixels, Render, Stateful,
+    StatefulInteractiveElement, Styled, TextAlign, WeakEntity, Window, actions, div, hsla, point,
     prelude::FluentBuilder, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
@@ -398,7 +398,9 @@ impl TableDelegate for ResultsTableDelegate {
                                                     table.delegate_mut().finish_editing_with_value(
                                                         row_ix, col_ix, None,
                                                     );
-                                                    table.set_selected_cell(row_ix, col_ix, cx);
+                                                    set_selected_result_cell(
+                                                        table, row_ix, col_ix, cx,
+                                                    );
                                                     cx.emit(TableEvent::SelectCell(row_ix, col_ix));
                                                     cx.notify();
                                                 },
@@ -421,7 +423,9 @@ impl TableDelegate for ResultsTableDelegate {
                                                         col_ix,
                                                         Some(enum_value.clone()),
                                                     );
-                                                    table.set_selected_cell(row_ix, col_ix, cx);
+                                                    set_selected_result_cell(
+                                                        table, row_ix, col_ix, cx,
+                                                    );
                                                     cx.emit(TableEvent::SelectCell(row_ix, col_ix));
                                                     cx.notify();
                                                 },
@@ -460,7 +464,7 @@ impl TableDelegate for ResultsTableDelegate {
                 _cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
                     let modifiers = event.modifiers;
                     table.delegate_mut().select_cell(row_ix, col_ix, modifiers);
-                    table.set_selected_cell(row_ix, col_ix, cx);
+                    set_selected_result_cell(table, row_ix, col_ix, cx);
                 }),
             )
     }
@@ -1265,7 +1269,7 @@ impl ResultPanel {
                 .delegate_mut()
                 .start_editing(row_ix, col_ix, input.clone());
             if started {
-                table.set_selected_cell(row_ix, col_ix, cx);
+                set_selected_result_cell(table, row_ix, col_ix, cx);
             }
             started
         });
@@ -1581,7 +1585,7 @@ impl ResultPanel {
         self.table_state.update(cx, |table, cx| {
             let next = { table.delegate_mut().extend_selection(row_delta, col_delta) };
             if let Some((row_ix, col_ix)) = next {
-                table.set_selected_cell(row_ix, col_ix, cx);
+                set_selected_result_cell(table, row_ix, col_ix, cx);
             }
         });
     }
@@ -1607,7 +1611,7 @@ impl ResultPanel {
                 table
                     .delegate_mut()
                     .select_cell(row_ix, next_col, Modifiers::none());
-                table.set_selected_cell(row_ix, next_col, cx);
+                set_selected_result_cell(table, row_ix, next_col, cx);
             } else if let Some(col_ix) = table.selected_col() {
                 let Some(next_col) = bounded_column_move(col_ix, col_delta, columns_count) else {
                     return;
@@ -1615,7 +1619,7 @@ impl ResultPanel {
                 table.set_selected_col(next_col, cx);
             } else {
                 table.delegate_mut().select_cell(0, 0, Modifiers::none());
-                table.set_selected_cell(0, 0, cx);
+                set_selected_result_cell(table, 0, 0, cx);
             }
         });
     }
@@ -1641,7 +1645,7 @@ impl ResultPanel {
                 table
                     .delegate_mut()
                     .select_cell(next_row, col_ix, Modifiers::none());
-                table.set_selected_cell(next_row, col_ix, cx);
+                set_selected_result_cell(table, next_row, col_ix, cx);
             } else if let Some(row_ix) = table.selected_row() {
                 let Some(next_row) = bounded_row_move(row_ix, row_delta, rows_count) else {
                     return;
@@ -1649,7 +1653,7 @@ impl ResultPanel {
                 table.set_selected_row(next_row, cx);
             } else {
                 table.delegate_mut().select_cell(0, 0, Modifiers::none());
-                table.set_selected_cell(0, 0, cx);
+                set_selected_result_cell(table, 0, 0, cx);
             }
         });
     }
@@ -2329,6 +2333,66 @@ fn bounded_column_move(col_ix: usize, col_delta: isize, columns_count: usize) ->
 fn bounded_row_move(row_ix: usize, row_delta: isize, rows_count: usize) -> Option<usize> {
     let next_row = row_ix.checked_add_signed(row_delta)?;
     (next_row < rows_count).then_some(next_row)
+}
+
+pub fn set_selected_result_cell(
+    table: &mut TableState<ResultsTableDelegate>,
+    row_ix: usize,
+    col_ix: usize,
+    cx: &mut Context<TableState<ResultsTableDelegate>>,
+) {
+    sync_horizontal_scroll_to_col(table, col_ix, cx);
+    table.set_selected_cell(row_ix, col_ix, cx);
+}
+
+fn sync_horizontal_scroll_to_col(
+    table: &mut TableState<ResultsTableDelegate>,
+    col_ix: usize,
+    cx: &mut Context<TableState<ResultsTableDelegate>>,
+) {
+    let viewport_width = table.horizontal_scroll_handle.bounds().size.width;
+    if viewport_width <= Pixels::ZERO {
+        return;
+    }
+
+    let columns_count = table.delegate().columns_count(cx);
+    if col_ix >= columns_count {
+        return;
+    }
+
+    let mut col_left = Pixels::ZERO;
+    let mut col_width = Pixels::ZERO;
+    let mut content_width = Pixels::ZERO;
+    for ix in 0..columns_count {
+        let width = table.delegate().column(ix, cx).width;
+        if ix < col_ix {
+            col_left += width;
+        } else if ix == col_ix {
+            col_width = width;
+        }
+        content_width += width;
+    }
+
+    let col_right = col_left + col_width;
+    let current_offset = table.horizontal_scroll_handle.offset();
+    let current_scroll_x = (-current_offset.x).max(Pixels::ZERO);
+    let viewport_right = current_scroll_x + viewport_width;
+
+    let mut target_scroll_x = current_scroll_x;
+    if col_left < current_scroll_x {
+        target_scroll_x = col_left;
+    } else if col_right > viewport_right {
+        target_scroll_x = col_right - viewport_width;
+    }
+
+    let max_scroll_x = (content_width - viewport_width).max(Pixels::ZERO);
+    target_scroll_x = target_scroll_x.max(Pixels::ZERO).min(max_scroll_x);
+
+    if target_scroll_x != current_scroll_x {
+        table
+            .horizontal_scroll_handle
+            .set_offset(point(-target_scroll_x, current_offset.y));
+    }
 }
 
 fn enrich_column_metadata(
