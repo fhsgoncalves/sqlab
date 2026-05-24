@@ -1,4 +1,9 @@
-use std::{ops::Range, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    ops::Range,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
@@ -6,11 +11,13 @@ use gpui::{
     div, hsla, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Selectable, Sizable,
+    ActiveTheme, IconName, IconNamed, Selectable, Sizable,
     button::{Button, ButtonVariants},
     dock::{Panel, PanelEvent, PanelState},
     h_flex,
-    input::{Input, InputDecoration, InputEvent, InputState},
+    input::{
+        Input, InputDecoration, InputEvent, InputGutterAdornment, InputInlineAdornment, InputState,
+    },
     v_flex,
 };
 
@@ -69,6 +76,9 @@ pub struct EditorPanel {
     active_query: Option<QueryRange>,
     query_decoration_override: Option<QueryRange>,
     query_decoration_override_snapshot: Option<EditorSnapshot>,
+    query_executions: Vec<QueryExecutionMarker>,
+    next_query_execution_id: u64,
+    elapsed_timer_task: Option<Task<()>>,
     search_open: bool,
     search_replace_mode: bool,
     search_case_sensitive: bool,
@@ -85,6 +95,20 @@ pub struct EditorPanel {
     last_observed_snapshot: Option<EditorSnapshot>,
     selected_search_path: Option<String>,
     selected_connection_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum QueryExecutionStatus {
+    Running { started_at: Instant },
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct QueryExecutionMarker {
+    id: u64,
+    range: QueryRange,
+    status: QueryExecutionStatus,
 }
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
@@ -114,6 +138,50 @@ fn global_match_range(text: &str, text_match: &TextMatch) -> Option<Range<usize>
     let start = line_start + text_match.match_start;
     let end = line_start + text_match.match_end;
     (end <= text.len()).then_some(start..end)
+}
+
+fn selected_query_range(text: &str, selected_range: Range<usize>) -> Option<QueryRange> {
+    let start = selected_range.start.min(text.len());
+    let end = selected_range.end.min(text.len());
+    if start >= end {
+        return None;
+    }
+
+    let selected = text.get(start..end)?;
+    let leading = selected.len() - selected.trim_start().len();
+    let trailing = selected.len() - selected.trim_end().len();
+    let trimmed_start = start + leading;
+    let trimmed_end = end - trailing;
+    if trimmed_start >= trimmed_end {
+        return None;
+    }
+
+    Some(QueryRange {
+        range: selected_range,
+        trimmed_range: trimmed_start..trimmed_end,
+        text: text.get(trimmed_start..trimmed_end)?.to_string(),
+    })
+}
+
+fn line_number_for_offset(text: &str, offset: usize) -> usize {
+    text[..offset.min(text.len())]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let millis = duration.as_millis();
+    if millis < 1_000 {
+        return format!("{millis} ms");
+    }
+
+    let seconds = duration.as_secs_f64();
+    if seconds < 10.0 {
+        format!("{seconds:.1} s")
+    } else {
+        format!("{} s", duration.as_secs())
+    }
 }
 
 fn replace_all_text(text: &str, query: &str, replacement: &str, options: SearchOptions) -> String {
@@ -344,6 +412,9 @@ impl EditorPanel {
             active_query: None,
             query_decoration_override: None,
             query_decoration_override_snapshot: None,
+            query_executions: Vec::new(),
+            next_query_execution_id: 1,
+            elapsed_timer_task: None,
             search_open: false,
             search_replace_mode: false,
             search_case_sensitive: false,
@@ -429,18 +500,21 @@ impl EditorPanel {
         panel.refresh_schema_cache(cx);
         panel
     }
-    pub fn query_context(&self, cx: &App) -> (String, Vec<QueryRange>) {
+    pub fn query_context(&self, cx: &App) -> (Option<QueryRange>, Vec<QueryRange>) {
         let state = self.editor.read(cx);
         let text = state.value().to_string();
         let cursor = state.cursor();
         let selected = state.selected_value().to_string();
 
         if !selected.trim().is_empty() {
-            return (selected, Vec::new());
+            return (
+                selected_query_range(&text, state.selected_range()),
+                Vec::new(),
+            );
         }
 
         let queries = query_ranges_for_execution(&text, cursor);
-        (String::new(), queries)
+        (None, queries)
     }
 
     pub fn selected_search_path(&self) -> Option<String> {
@@ -653,6 +727,128 @@ impl EditorPanel {
         self.query_decoration_override = active_query.clone();
         self.query_decoration_override_snapshot = Some(self.editor_snapshot(cx));
         self.apply_query_decoration(active_query, cx);
+    }
+
+    pub(crate) fn begin_query_execution(
+        &mut self,
+        range: Option<QueryRange>,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        let range = range?;
+        let id = self.next_query_execution_id;
+        self.next_query_execution_id += 1;
+        self.query_executions
+            .retain(|marker| marker.range.trimmed_range != range.trimmed_range);
+        self.query_executions.push(QueryExecutionMarker {
+            id,
+            range,
+            status: QueryExecutionStatus::Running {
+                started_at: Instant::now(),
+            },
+        });
+        self.apply_query_execution_adornments(cx);
+        self.start_elapsed_timer(cx);
+        Some(id)
+    }
+
+    pub(crate) fn finish_query_execution(
+        &mut self,
+        execution_id: Option<u64>,
+        succeeded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(execution_id) = execution_id else {
+            return;
+        };
+
+        if let Some(marker) = self
+            .query_executions
+            .iter_mut()
+            .find(|marker| marker.id == execution_id)
+        {
+            marker.status = if succeeded {
+                QueryExecutionStatus::Succeeded
+            } else {
+                QueryExecutionStatus::Failed
+            };
+            self.apply_query_execution_adornments(cx);
+        }
+    }
+
+    fn start_elapsed_timer(&mut self, cx: &mut Context<Self>) {
+        if self.elapsed_timer_task.is_some() {
+            return;
+        }
+
+        self.elapsed_timer_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+
+                let keep_running = this
+                    .update(cx, |this, cx| {
+                        let has_running = this.query_executions.iter().any(|marker| {
+                            matches!(marker.status, QueryExecutionStatus::Running { .. })
+                        });
+                        if has_running {
+                            this.apply_query_execution_adornments(cx);
+                        } else {
+                            this.elapsed_timer_task = None;
+                        }
+                        has_running
+                    })
+                    .unwrap_or(false);
+
+                if !keep_running {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn apply_query_execution_adornments(&mut self, cx: &mut Context<Self>) {
+        let text = self.editor.read(cx).value().to_string();
+        let mut gutter_adornments = Vec::new();
+        let mut inline_adornments = Vec::new();
+
+        for marker in &self.query_executions {
+            if marker.range.trimmed_range.start > text.len() {
+                continue;
+            }
+
+            let line = line_number_for_offset(&text, marker.range.trimmed_range.start);
+            let (icon, color, spin) = match marker.status {
+                QueryExecutionStatus::Running { .. } => {
+                    (IconName::Loader, hsla(0.0, 0.0, 0.65, 0.9), true)
+                }
+                QueryExecutionStatus::Succeeded => {
+                    (IconName::CircleCheck, hsla(0.34, 0.55, 0.48, 1.0), false)
+                }
+                QueryExecutionStatus::Failed => {
+                    (IconName::CircleX, hsla(0.0, 0.72, 0.58, 1.0), false)
+                }
+            };
+
+            gutter_adornments.push(InputGutterAdornment {
+                line,
+                icon_path: icon.path(),
+                color,
+                spin,
+            });
+
+            if let QueryExecutionStatus::Running { started_at } = marker.status {
+                inline_adornments.push(InputInlineAdornment {
+                    offset: marker.range.trimmed_range.end.min(text.len()),
+                    text: format!(" {}", format_elapsed(started_at.elapsed())).into(),
+                    color: hsla(0.0, 0.0, 0.62, 0.78),
+                });
+            }
+        }
+
+        self.editor.update(cx, |state, cx| {
+            state.set_adornments(gutter_adornments, inline_adornments, cx);
+        });
     }
 
     fn editor_snapshot(&self, cx: &App) -> EditorSnapshot {
@@ -1272,5 +1468,23 @@ mod tests {
         let range = selected_line_range(text, 0..text.len(), 0);
 
         assert_eq!(uncomment_lines(text, range), "select 1;\n\tselect 2;");
+    }
+
+    #[test]
+    fn selected_query_range_trims_absolute_selection() {
+        let text = "select 1;\n\n  select 2;  \nselect 3;";
+        let range = 11..25;
+        let query = selected_query_range(text, range.clone()).unwrap();
+
+        assert_eq!(query.range, range);
+        assert_eq!(query.trimmed_range, 13..22);
+        assert_eq!(query.text, "select 2;");
+    }
+
+    #[test]
+    fn formats_running_query_elapsed_time() {
+        assert_eq!(format_elapsed(Duration::from_millis(850)), "850 ms");
+        assert_eq!(format_elapsed(Duration::from_millis(1_250)), "1.2 s");
+        assert_eq!(format_elapsed(Duration::from_secs(12)), "12 s");
     }
 }

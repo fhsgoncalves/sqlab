@@ -27,8 +27,9 @@ use crate::ui::panels::bottom_panel::{BottomPanel, BottomPanelMode, ToggleBottom
 use crate::ui::panels::connection::ConnectionPanel;
 use crate::ui::panels::diagram::{DiagramModel, ShowDiagramEvent};
 use crate::ui::panels::file_editor::data_editor::ShowDataEditorEvent;
+use crate::ui::panels::file_editor::query_detector::QueryRange;
 use crate::ui::panels::file_editor::{
-    EditorTabs, ExecuteQuery, QueryChoice, QuerySelected, QuerySelector, SaveFile,
+    EditorPanel, EditorTabs, ExecuteQuery, QueryChoice, QuerySelected, QuerySelector, SaveFile,
 };
 use crate::ui::panels::file_search::{FileSearch, FileSearchEvent, ToggleFileSearch};
 use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
@@ -1123,18 +1124,26 @@ impl Workspace {
     }
 
     fn on_execute_query(&mut self, _: &ExecuteQuery, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((path, selected_connection_name, selected, active_queries, search_path)) =
-            self.editor_tabs.read(cx).active_editor().map(|editor| {
-                let editor = editor.read(cx);
-                let (selected, active_queries) = editor.query_context(cx);
-                (
-                    editor.path().clone(),
-                    editor.selected_connection_name().map(str::to_string),
-                    selected,
-                    active_queries,
-                    editor.selected_search_path(),
-                )
-            })
+        let Some((
+            path,
+            selected_connection_name,
+            active_editor,
+            selected,
+            active_queries,
+            search_path,
+        )) = self.editor_tabs.read(cx).active_editor().map(|editor| {
+            let editor_entity = editor.clone();
+            let editor = editor.read(cx);
+            let (selected, active_queries) = editor.query_context(cx);
+            (
+                editor.path().clone(),
+                editor.selected_connection_name().map(str::to_string),
+                editor_entity,
+                selected,
+                active_queries,
+                editor.selected_search_path(),
+            )
+        })
         else {
             window.open_alert_dialog(cx, |alert, _, _| {
                 alert
@@ -1144,10 +1153,10 @@ impl Workspace {
             return;
         };
 
-        let queries: Vec<QueryChoice> = if !selected.trim().is_empty() {
+        let queries: Vec<QueryChoice> = if let Some(selected) = selected {
             vec![QueryChoice {
-                query: selected.clone(),
-                range: None,
+                query: selected.text.clone(),
+                range: Some(selected),
             }]
         } else {
             active_queries
@@ -1173,6 +1182,8 @@ impl Workspace {
                 path,
                 selected_connection_name,
                 queries[0].query.clone(),
+                queries[0].range.clone(),
+                Some(active_editor),
                 search_path,
                 window,
                 cx,
@@ -1188,10 +1199,10 @@ impl Workspace {
             &selector,
             window,
             move |this, _selector, event: &QuerySelected, window, cx| {
-                let active_editor = this
+                let highlighted_editor = this
                     .editor_tabs
                     .update(cx, |tabs, _cx| tabs.active_editor().cloned());
-                if let Some(editor) = active_editor {
+                if let Some(editor) = highlighted_editor {
                     editor.update(cx, |editor, cx| {
                         editor.override_query_decoration(event.choice.range.clone(), cx);
                     });
@@ -1203,6 +1214,8 @@ impl Workspace {
                         selector_path.clone(),
                         selector_connection_name.clone(),
                         event.choice.query.clone(),
+                        event.choice.range.clone(),
+                        Some(active_editor.clone()),
                         selector_search_path.clone(),
                         window,
                         cx,
@@ -1230,6 +1243,8 @@ impl Workspace {
         path: PathBuf,
         selected_connection_name: Option<String>,
         query: String,
+        range: Option<QueryRange>,
+        editor: Option<Entity<EditorPanel>>,
         search_path: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1244,17 +1259,19 @@ impl Workspace {
         });
 
         let Some(config) = config else {
-            self.show_connection_selector(path, query, search_path, window, cx);
+            self.show_connection_selector(path, query, range, editor, search_path, window, cx);
             return;
         };
 
-        self.execute_query_with_config(path, query, config, search_path, window, cx);
+        self.execute_query_with_config(path, query, range, editor, config, search_path, window, cx);
     }
 
     fn show_connection_selector(
         &mut self,
         path: PathBuf,
         query: String,
+        range: Option<QueryRange>,
+        editor: Option<Entity<EditorPanel>>,
         search_path: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1289,6 +1306,8 @@ impl Workspace {
                     this.execute_query_with_config(
                         selector_path.clone(),
                         query.clone(),
+                        range.clone(),
+                        editor.clone(),
                         config,
                         selector_search_path.clone(),
                         window,
@@ -1361,6 +1380,8 @@ impl Workspace {
         &mut self,
         path: PathBuf,
         query: String,
+        range: Option<QueryRange>,
+        editor: Option<Entity<EditorPanel>>,
         config: DataSourceConfig,
         search_path: Option<String>,
         window: &mut Window,
@@ -1380,6 +1401,11 @@ impl Workspace {
         let activity_id = self
             .activity_tracker
             .update(cx, |tracker, cx| tracker.begin("Running query", cx));
+        let execution_marker_id = editor.as_ref().and_then(|editor| {
+            editor.update(cx, |editor, cx| {
+                editor.begin_query_execution(range.clone(), cx)
+            })
+        });
         self.show_bottom_panel(BottomPanelMode::Results, false, window, cx);
 
         cx.spawn(async move |_this, cx| {
@@ -1404,6 +1430,12 @@ impl Workspace {
             cx.update_entity(&results_panel, |panel, cx| {
                 panel.set_result(query, result, succeeded, Some(config_for_result), cx);
             });
+
+            if let Some(editor) = editor {
+                cx.update_entity(&editor, |editor, cx| {
+                    editor.finish_query_execution(execution_marker_id, succeeded, cx);
+                });
+            }
 
             cx.update_entity(&bottom_panel, |panel, cx| {
                 panel.set_mode(BottomPanelMode::Results, cx);
