@@ -120,6 +120,13 @@ impl DatabendDataSource {
             conn.exec(&format!("USE {}", quote_databend_identifier(schema)))
                 .await
                 .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
+        } else if !self.config.database.trim().is_empty() {
+            conn.exec(&format!(
+                "USE {}",
+                quote_databend_identifier(self.config.database.trim())
+            ))
+            .await
+            .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
         }
 
         let query = if apply_limit {

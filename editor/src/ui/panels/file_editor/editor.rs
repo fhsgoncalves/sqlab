@@ -84,6 +84,7 @@ pub struct EditorPanel {
     pending_diagnostics_task: Option<Task<()>>,
     last_observed_snapshot: Option<EditorSnapshot>,
     selected_search_path: Option<String>,
+    selected_connection_name: Option<String>,
 }
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
@@ -422,6 +423,7 @@ impl EditorPanel {
             pending_diagnostics_task: None,
             last_observed_snapshot: None,
             selected_search_path: None,
+            selected_connection_name: None,
         };
         panel.refresh_active_query(cx);
         panel.refresh_schema_cache(cx);
@@ -443,6 +445,19 @@ impl EditorPanel {
 
     pub fn selected_search_path(&self) -> Option<String> {
         self.selected_search_path.clone()
+    }
+
+    pub fn selected_connection_name(&self) -> Option<&str> {
+        self.selected_connection_name.as_deref()
+    }
+
+    pub fn set_selected_connection_name(&mut self, name: Option<String>, cx: &mut Context<Self>) {
+        if self.selected_connection_name == name {
+            return;
+        }
+        self.selected_connection_name = name;
+        self.refresh_schema_cache(cx);
+        cx.notify();
     }
 
     pub fn search_path_label(&self) -> String {
@@ -468,7 +483,9 @@ impl EditorPanel {
         if let Some(config_schema) = self
             .data_source_manager
             .read(cx)
-            .active_config()
+            .configs()
+            .iter()
+            .find(|config| Some(config.name.as_str()) == self.selected_connection_name())
             .map(|config| config.schema.trim())
             .filter(|schema| !schema.is_empty())
         {
@@ -522,7 +539,9 @@ impl EditorPanel {
         let schema_cache = self
             .data_source_manager
             .read(cx)
-            .active_config()
+            .configs()
+            .iter()
+            .find(|config| Some(config.name.as_str()) == self.selected_connection_name())
             .and_then(|config| {
                 let key = schema_cache::cache_key(config);
                 if let Some((cached_key, cached_schema)) = &self.schema_cache {

@@ -162,6 +162,15 @@ impl MySqlDataSource {
             conn.query_drop(format!("USE {}", quote_mysql_identifier(schema)))
                 .await
                 .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
+        } else if !self.config.database.trim().is_empty() {
+            let conn = self.connection()?;
+            let mut conn = conn.lock().await;
+            conn.query_drop(format!(
+                "USE {}",
+                quote_mysql_identifier(self.config.database.trim())
+            ))
+            .await
+            .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
         }
 
         self.execute_query_async(query, apply_limit).await

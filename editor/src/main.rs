@@ -10,6 +10,7 @@ mod app_theme;
 mod assets;
 mod credentials;
 mod drivers;
+mod query_session;
 mod schema_cache;
 mod ui;
 mod workspace;

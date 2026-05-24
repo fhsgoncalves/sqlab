@@ -15,6 +15,12 @@ The long-term goal is to provide a fully open-source alternative to DBeaver and 
 
 ## Install
 
+- Install prebuilt binaries:
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/fhsgoncalves/sqlab/releases/download/v0.3.0/sqlab-installer.sh | sh
+```
+
+- Install from sources:
 ```bash
 cargo install --git https://github.com/fhsgoncalves/sqlab
 ```

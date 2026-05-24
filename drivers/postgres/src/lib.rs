@@ -137,6 +137,8 @@ impl PostgresDataSource {
                             &[&search_path],
                         )
                         .await?;
+                } else {
+                    client.batch_execute("RESET search_path").await?;
                 }
                 let statement = client.prepare(&query).await?;
                 let column_metadata: Vec<ColumnMetadata> = statement

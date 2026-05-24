@@ -17,13 +17,13 @@ use gpui_component::{
 use super::data_editor::DataEditorPanel;
 use super::editor::{EditorCursorPosition, EditorPanel, EditorPanelEvent, ExecuteQuery};
 use crate::credentials;
-use crate::drivers::create_configured_data_source;
+use crate::query_session::QuerySessionStore;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
 use crate::ui::panels::connection::ConnectionPanel;
 use crate::ui::panels::diagram::{DiagramModel, DiagramPanel};
 use sqlab_drivers_core::{
-    ConnectionStatus, DataSourceConfig, DataSourceError, TableInfo, manager::DataSourceManager,
+    ConnectionStatus, DataSourceConfig, TableInfo, manager::DataSourceManager,
 };
 
 actions!(
@@ -47,6 +47,7 @@ pub struct EditorTabs {
     data_source_manager: Entity<DataSourceManager>,
     is_zoomed: bool,
     activity_tracker: Entity<ActivityTracker>,
+    query_sessions: QuerySessionStore,
     navigation_history: NavigationHistory,
     navigation_subscriptions: Vec<Subscription>,
     suppress_navigation_recording: bool,
@@ -226,6 +227,7 @@ impl EditorTabs {
     pub fn new(
         data_source_manager: Entity<DataSourceManager>,
         activity_tracker: Entity<ActivityTracker>,
+        query_sessions: QuerySessionStore,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -237,6 +239,7 @@ impl EditorTabs {
             data_source_manager,
             is_zoomed: false,
             activity_tracker,
+            query_sessions,
             navigation_history: NavigationHistory::default(),
             navigation_subscriptions: Vec::new(),
             suppress_navigation_recording: false,
@@ -262,6 +265,7 @@ impl EditorTabs {
                 .unwrap_or(false)
         }) {
             self.active_ix = ix;
+            self.sync_active_connection(cx);
             cx.notify();
             return;
         }
@@ -271,6 +275,7 @@ impl EditorTabs {
         self.subscribe_to_editor_navigation(&editor, cx);
         self.tabs.push(EditorTab::Sql(editor));
         self.active_ix = self.tabs.len() - 1;
+        self.sync_active_connection(cx);
         cx.notify();
     }
 
@@ -285,6 +290,7 @@ impl EditorTabs {
             EditorTab::Sql(_) | EditorTab::Data(_) => false,
         }) {
             self.active_ix = ix;
+            self.sync_active_connection(cx);
             cx.notify();
             return;
         }
@@ -293,6 +299,7 @@ impl EditorTabs {
             cx.new(|cx| DiagramPanel::new(model, self.activity_tracker.clone(), window, cx));
         self.tabs.push(EditorTab::Diagram(diagram));
         self.active_ix = self.tabs.len() - 1;
+        self.sync_active_connection(cx);
         cx.notify();
     }
 
@@ -308,6 +315,7 @@ impl EditorTabs {
             EditorTab::Sql(_) | EditorTab::Diagram(_) => false,
         }) {
             self.active_ix = ix;
+            self.sync_active_connection(cx);
             cx.notify();
             return;
         }
@@ -317,6 +325,7 @@ impl EditorTabs {
         });
         self.tabs.push(EditorTab::Data(data_editor));
         self.active_ix = self.tabs.len() - 1;
+        self.sync_active_connection(cx);
         cx.notify();
     }
 
@@ -347,11 +356,22 @@ impl EditorTabs {
 
     fn close_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
-            self.tabs.remove(ix);
+            let tab = self.tabs.remove(ix);
+            if let Some(editor) = tab.as_sql() {
+                let path = editor.read(cx).path().clone();
+                let query_sessions = self.query_sessions.clone();
+                cx.spawn(async move |_this, _cx| {
+                    if let Err(error) = query_sessions.close_path(path).await {
+                        eprintln!("failed to close query session: {}", error);
+                    }
+                })
+                .detach();
+            }
             if self.active_ix >= self.tabs.len() {
                 self.active_ix = self.tabs.len().saturating_sub(1);
             }
             self.sync_current_navigation_point(cx);
+            self.sync_active_connection(cx);
             cx.notify();
         }
     }
@@ -360,6 +380,14 @@ impl EditorTabs {
         self.tabs.clear();
         self.active_ix = 0;
         self.navigation_history = NavigationHistory::default();
+        self.sync_active_connection(cx);
+        let query_sessions = self.query_sessions.clone();
+        cx.spawn(async move |_this, _cx| {
+            if let Err(error) = query_sessions.close_all().await {
+                eprintln!("failed to close query sessions: {}", error);
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -385,6 +413,7 @@ impl EditorTabs {
             self.record_current_before_navigation(cx);
             self.active_ix = (self.active_ix + 1) % self.tabs.len();
             self.sync_current_navigation_point(cx);
+            self.sync_active_connection(cx);
             cx.notify();
             self.focus_active_editor(window, cx);
         }
@@ -400,6 +429,7 @@ impl EditorTabs {
             self.record_current_before_navigation(cx);
             self.active_ix = (self.active_ix + self.tabs.len() - 1) % self.tabs.len();
             self.sync_current_navigation_point(cx);
+            self.sync_active_connection(cx);
             cx.notify();
             self.focus_active_editor(window, cx);
         }
@@ -412,6 +442,7 @@ impl EditorTabs {
         self.record_current_before_navigation(cx);
         self.active_ix = ix;
         self.sync_current_navigation_point(cx);
+        self.sync_active_connection(cx);
         cx.notify();
         self.focus_active_editor(window, cx);
     }
@@ -429,6 +460,7 @@ impl EditorTabs {
         } else if from_ix > self.active_ix && to_ix <= self.active_ix {
             self.active_ix += 1;
         }
+        self.sync_active_connection(cx);
         cx.notify();
     }
 
@@ -526,6 +558,7 @@ impl EditorTabs {
         }
         self.suppress_navigation_recording = false;
         self.navigation_history.sync_current(Some(target));
+        self.sync_active_connection(cx);
         cx.notify();
         self.focus_active_editor(window, cx);
     }
@@ -548,15 +581,11 @@ impl EditorTabs {
     }
 
     fn select_connection(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.active_editor().cloned() else {
+            return;
+        };
+
         let result = self.data_source_manager.update(cx, |manager, cx| {
-            let status = manager.status(&name);
-            manager.set_active(Some(name.clone()));
-
-            if status == ConnectionStatus::Connected {
-                cx.notify();
-                return Ok(None);
-            }
-
             manager.set_status(&name, ConnectionStatus::Idle);
             manager.clear_last_error(&name);
 
@@ -569,19 +598,23 @@ impl EditorTabs {
                 return Err(error);
             }
 
-            let config = manager
+            manager
                 .configs()
                 .iter()
                 .find(|config| config.name == name)
                 .cloned()
                 .ok_or_else(|| "The selected connection no longer exists.".to_string())?;
             cx.notify();
-            Ok(Some(config))
+            Ok(())
         });
 
         match result {
-            Ok(Some(config)) => self.test_selected_connection(config, cx),
-            Ok(None) => {}
+            Ok(()) => {
+                editor.update(cx, |editor, cx| {
+                    editor.set_selected_connection_name(Some(name), cx);
+                });
+                self.sync_active_connection(cx);
+            }
             Err(error) => {
                 window.open_alert_dialog(cx, move |alert, _, _| {
                     alert
@@ -592,45 +625,50 @@ impl EditorTabs {
         }
     }
 
-    fn test_selected_connection(&mut self, config: DataSourceConfig, cx: &mut Context<Self>) {
+    fn close_active_connection(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.active_editor().cloned() else {
+            return;
+        };
+        let path = editor.read(cx).path().clone();
+        let connection_name = editor
+            .read(cx)
+            .selected_connection_name()
+            .map(str::to_string);
+        let Some(connection_name) = connection_name else {
+            return;
+        };
+
+        let query_sessions = self.query_sessions.clone();
         let manager = self.data_source_manager.clone();
-        let activity_tracker = self.activity_tracker.clone();
-        let config_name = config.name.clone();
-        let activity_label = format!("Connecting: {}", config_name);
-        let activity_id = self
-            .activity_tracker
-            .update(cx, |tracker, cx| tracker.begin(activity_label, cx));
-
+        query_sessions.mark_closing(path.clone(), connection_name.clone());
         cx.spawn(async move |_this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut source = create_configured_data_source(&config)?;
-                    source.connect().await?;
-                    source.disconnect().await?;
-                    Ok::<(), DataSourceError>(())
-                })
-                .await;
-
-            cx.update_entity(&manager, move |manager, cx| {
-                match result {
-                    Ok(_) => {
-                        manager.set_status(&config_name, ConnectionStatus::Connected);
-                        manager.clear_last_error(&config_name);
-                    }
-                    Err(error) => {
-                        manager.set_status(&config_name, ConnectionStatus::Failed);
-                        manager.set_last_error(&config_name, error.to_string());
-                    }
-                }
-                cx.notify();
-            });
-
-            cx.update_entity(&activity_tracker, |tracker, cx| {
-                tracker.finish(activity_id, cx);
-            });
+            if let Err(error) = query_sessions
+                .close_path_connection(path, connection_name.clone())
+                .await
+            {
+                eprintln!("failed to close query session: {}", error);
+            }
+            if !query_sessions.is_connection_open(&connection_name) {
+                cx.update_entity(&manager, move |manager, cx| {
+                    manager.set_status(&connection_name, ConnectionStatus::Idle);
+                    cx.notify();
+                });
+            }
         })
         .detach();
+    }
+
+    fn sync_active_connection(&self, cx: &mut Context<Self>) {
+        let active_name = self.active_editor().and_then(|editor| {
+            editor
+                .read(cx)
+                .selected_connection_name()
+                .map(str::to_string)
+        });
+        self.data_source_manager.update(cx, |manager, cx| {
+            manager.set_active(active_name);
+            cx.notify();
+        });
     }
 }
 
@@ -768,13 +806,31 @@ impl Render for EditorTabs {
                 )
             });
 
-        let active_name = self
-            .data_source_manager
-            .read(cx)
-            .active_name()
-            .map(|name| name.to_string());
+        let active_sql_editor = self
+            .tabs
+            .get(self.active_ix)
+            .and_then(|tab| tab.as_sql())
+            .cloned();
+        let active_name = active_sql_editor.as_ref().and_then(|editor| {
+            editor
+                .read(cx)
+                .selected_connection_name()
+                .map(str::to_string)
+        });
+        let active_path = active_sql_editor
+            .as_ref()
+            .map(|editor| editor.read(cx).path().clone());
         let active_connection = active_name.as_ref().map(|name| {
-            let status = self.data_source_manager.read(cx).status(name);
+            let status = if active_path
+                .as_deref()
+                .is_some_and(|path| self.query_sessions.is_open(path, name))
+            {
+                ConnectionStatus::Connected
+            } else if self.data_source_manager.read(cx).status(name) == ConnectionStatus::Failed {
+                ConnectionStatus::Failed
+            } else {
+                ConnectionStatus::Idle
+            };
             format!("{} ({})", name, connection_status_label(status))
         });
         let connections = self
@@ -799,12 +855,6 @@ impl Render for EditorTabs {
             .tabs
             .get(self.active_ix)
             .map_or(false, |tab| tab.as_sql().is_some());
-        let active_sql_editor = self
-            .tabs
-            .get(self.active_ix)
-            .and_then(|tab| tab.as_sql())
-            .cloned();
-
         let editor_toolbar = is_sql_active.then(|| {
             let search_path_selector = active_sql_editor.as_ref().and_then(|editor| {
                 let schemas = editor.read(cx).available_search_paths(cx);
@@ -872,9 +922,11 @@ impl Render for EditorTabs {
                 })
                 .when(!connections.is_empty(), |toolbar| {
                     let selected_name = active_name.clone();
+                    let active_path = active_path.clone();
                     let connection_label =
                         active_connection.unwrap_or_else(|| "No connection".to_string());
                     let connections = connections.clone();
+                    let query_sessions = self.query_sessions.clone();
                     let view = entity.clone();
                     toolbar.child(
                         Button::new("active-connection-picker")
@@ -888,22 +940,79 @@ impl Render for EditorTabs {
                                 let mut menu = menu;
                                 for (config, status) in &connections {
                                     let name = config.name.clone();
-                                    let label =
-                                        format!("{} ({})", name, connection_status_label(*status));
                                     let view_for_item = view.clone();
+                                    let view_for_close = view.clone();
                                     let is_selected =
                                         selected_name.as_deref() == Some(name.as_str());
+                                    let icon_path =
+                                        ConnectionPanel::database_icon_path(config.db_type);
+                                    let close_button_id =
+                                        format!("close-active-connection-{}", config.name);
+                                    let active_path_for_row = active_path.clone();
+                                    let query_sessions_for_row = query_sessions.clone();
+                                    let status = *status;
+                                    let label_name = name.clone();
+                                    let select_name = name.clone();
+                                    let is_open_name = name.clone();
                                     menu = menu.item(
-                                        PopupMenuItem::new(label)
-                                            .icon(Icon::new(IconName::File).path(
-                                                ConnectionPanel::database_icon_path(config.db_type),
-                                            ))
+                                        PopupMenuItem::element(move |_window, _cx| {
+                                            let is_open = is_selected
+                                                && active_path_for_row.as_deref().is_some_and(
+                                                    |path| query_sessions_for_row.is_open(path, &is_open_name),
+                                                );
+                                            let row_status = if is_open {
+                                                ConnectionStatus::Connected
+                                            } else if is_selected
+                                                && status != ConnectionStatus::Failed
+                                            {
+                                                ConnectionStatus::Idle
+                                            } else {
+                                                status
+                                            };
+                                            let label = format!(
+                                                "{} ({})",
+                                                label_name,
+                                                connection_status_label(row_status)
+                                            );
+                                            h_flex()
+                                                .w_full()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(div().flex_1().child(label.clone()))
+                                                .when(is_open, |row| {
+                                                    row.child(
+                                                        Button::new(close_button_id.clone())
+                                                            .icon(IconName::Close)
+                                                            .xsmall()
+                                                            .ghost()
+                                                            .tooltip("Close Connection")
+                                                            .on_click({
+                                                                let view_for_close =
+                                                                    view_for_close.clone();
+                                                                move |_, window, cx| {
+                                                                    window.prevent_default();
+                                                                    cx.stop_propagation();
+                                                                    view_for_close.update(
+                                                                        cx,
+                                                                        |this, cx| {
+                                                                            this.close_active_connection(
+                                                                                cx,
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                    cx.refresh_windows();
+                                                                }
+                                                            }),
+                                                    )
+                                                })
+                                        })
+                                            .icon(Icon::new(IconName::File).path(icon_path))
                                             .checked(is_selected)
                                             .on_click(window.listener_for(
                                                 &view_for_item,
                                                 move |this, _, window, cx| {
                                                     this.select_connection(
-                                                        name.clone(),
+                                                        select_name.clone(),
                                                         window,
                                                         cx,
                                                     );

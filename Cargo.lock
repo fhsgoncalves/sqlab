@@ -7504,6 +7504,7 @@ dependencies = [
  "sqlab-drivers-sqlite",
  "sqlformat",
  "thiserror 1.0.69",
+ "tokio",
  "toml 0.8.23",
  "tree-sitter",
  "tree-sitter-sequel",

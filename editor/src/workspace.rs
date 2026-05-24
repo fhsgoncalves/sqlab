@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use gpui_component::{
 };
 
 use crate::credentials;
-use crate::drivers::create_configured_data_source;
+use crate::query_session::QuerySessionStore;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::bottom_panel::{BottomPanel, BottomPanelMode, ToggleBottomPanelMode};
@@ -642,10 +643,12 @@ pub struct Workspace {
     editor_tabs: Entity<EditorTabs>,
     bottom_panel: Entity<BottomPanel>,
     data_source_manager: Entity<DataSourceManager>,
+    query_sessions: QuerySessionStore,
     activity_tracker: Entity<ActivityTracker>,
     focus_handle: FocusHandle,
     terminal_panel: Entity<TerminalPanel>,
     bottom_panel_size: gpui::Pixels,
+    connection_fingerprints: HashMap<String, String>,
 }
 
 impl Workspace {
@@ -668,6 +671,7 @@ impl Workspace {
             })
         });
         let activity_tracker = cx.new(|_cx| ActivityTracker::new());
+        let query_sessions = QuerySessionStore::new();
 
         cx.observe(&activity_tracker, |_, _, cx| {
             cx.notify();
@@ -734,6 +738,7 @@ impl Workspace {
             let mut tabs = EditorTabs::new(
                 data_source_manager.clone(),
                 activity_tracker.clone(),
+                query_sessions.clone(),
                 window,
                 cx,
             );
@@ -903,11 +908,37 @@ impl Workspace {
             editor_tabs,
             bottom_panel,
             data_source_manager: data_source_manager.clone(),
+            query_sessions,
             activity_tracker,
             focus_handle,
             terminal_panel,
             bottom_panel_size,
+            connection_fingerprints: connection_fingerprints(
+                data_source_manager.read(cx).configs(),
+            ),
         };
+
+        cx.observe(&this.data_source_manager, |this, manager, cx| {
+            let next = connection_fingerprints(manager.read(cx).configs());
+            let stale_names = this
+                .connection_fingerprints
+                .iter()
+                .filter_map(|(name, fingerprint)| {
+                    (next.get(name) != Some(fingerprint)).then_some(name.clone())
+                })
+                .collect::<Vec<_>>();
+            this.connection_fingerprints = next;
+            for name in stale_names {
+                let query_sessions = this.query_sessions.clone();
+                cx.spawn(async move |_this, _cx| {
+                    if let Err(error) = query_sessions.close_connection_name(name).await {
+                        eprintln!("failed to close stale query sessions: {}", error);
+                    }
+                })
+                .detach();
+            }
+        })
+        .detach();
 
         cx.subscribe_in(
             &this.terminal_panel,
@@ -1092,11 +1123,17 @@ impl Workspace {
     }
 
     fn on_execute_query(&mut self, _: &ExecuteQuery, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((selected, active_queries, search_path)) =
+        let Some((path, selected_connection_name, selected, active_queries, search_path)) =
             self.editor_tabs.read(cx).active_editor().map(|editor| {
                 let editor = editor.read(cx);
                 let (selected, active_queries) = editor.query_context(cx);
-                (selected, active_queries, editor.selected_search_path())
+                (
+                    editor.path().clone(),
+                    editor.selected_connection_name().map(str::to_string),
+                    selected,
+                    active_queries,
+                    editor.selected_search_path(),
+                )
             })
         else {
             window.open_alert_dialog(cx, |alert, _, _| {
@@ -1132,12 +1169,21 @@ impl Workspace {
         }
 
         if queries.len() == 1 {
-            self.execute_single_query(queries[0].query.clone(), search_path, window, cx);
+            self.execute_single_query(
+                path,
+                selected_connection_name,
+                queries[0].query.clone(),
+                search_path,
+                window,
+                cx,
+            );
             return;
         }
 
         let selector = cx.new(|cx| QuerySelector::new(queries, cx));
         let selector_search_path = search_path.clone();
+        let selector_path = path.clone();
+        let selector_connection_name = selected_connection_name.clone();
         cx.subscribe_in(
             &selector,
             window,
@@ -1154,6 +1200,8 @@ impl Workspace {
                 if event.confirmed {
                     window.close_dialog(cx);
                     this.execute_single_query(
+                        selector_path.clone(),
+                        selector_connection_name.clone(),
                         event.choice.query.clone(),
                         selector_search_path.clone(),
                         window,
@@ -1179,21 +1227,33 @@ impl Workspace {
 
     fn execute_single_query(
         &mut self,
+        path: PathBuf,
+        selected_connection_name: Option<String>,
         query: String,
         search_path: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(config) = self.data_source_manager.read(cx).active_config().cloned() else {
-            self.show_connection_selector(query, search_path, window, cx);
+        let config = selected_connection_name.and_then(|name| {
+            self.data_source_manager
+                .read(cx)
+                .configs()
+                .iter()
+                .find(|config| config.name == name)
+                .cloned()
+        });
+
+        let Some(config) = config else {
+            self.show_connection_selector(path, query, search_path, window, cx);
             return;
         };
 
-        self.execute_query_with_config(query, config, search_path, window, cx);
+        self.execute_query_with_config(path, query, config, search_path, window, cx);
     }
 
     fn show_connection_selector(
         &mut self,
+        path: PathBuf,
         query: String,
         search_path: Option<String>,
         window: &mut Window,
@@ -1211,6 +1271,7 @@ impl Workspace {
 
         let selector = cx.new(|cx| ConnectionSelector::new(connections, window, cx));
         let selector_search_path = search_path.clone();
+        let selector_path = path.clone();
         cx.subscribe_in(
             &selector,
             window,
@@ -1218,7 +1279,15 @@ impl Workspace {
                 let name = event.name.clone();
                 window.close_dialog(cx);
                 if let Some(config) = this.prepare_query_connection(name.clone(), window, cx) {
+                    if let Some(editor) = this.editor_tabs.read(cx).active_editor().cloned()
+                        && editor.read(cx).path() == &selector_path
+                    {
+                        editor.update(cx, |editor, cx| {
+                            editor.set_selected_connection_name(Some(name.clone()), cx);
+                        });
+                    }
                     this.execute_query_with_config(
+                        selector_path.clone(),
                         query.clone(),
                         config,
                         selector_search_path.clone(),
@@ -1290,6 +1359,7 @@ impl Workspace {
 
     fn execute_query_with_config(
         &mut self,
+        path: PathBuf,
         query: String,
         config: DataSourceConfig,
         search_path: Option<String>,
@@ -1299,6 +1369,7 @@ impl Workspace {
         let results_panel = self.bottom_panel.read(cx).results_panel().clone();
         let bottom_panel = self.bottom_panel.clone();
         let data_source_manager = self.data_source_manager.clone();
+        let query_sessions = self.query_sessions.clone();
         let activity_tracker = self.activity_tracker.clone();
         let mut config_for_result = config.clone();
         if let Some(search_path) = search_path.as_deref() {
@@ -1316,13 +1387,9 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut source = create_configured_data_source(&config)?;
-                    source.connect().await?;
-                    let result = source
-                        .execute_query_with_options(&query_for_task, &execution_options)
-                        .await;
-                    source.disconnect().await?;
-                    result
+                    query_sessions
+                        .execute_query(path, config, execution_options, query_for_task)
+                        .await
                 })
                 .await;
 
@@ -1849,4 +1916,25 @@ fn error_result(error: DataSourceError) -> QueryResult {
         row_count: 1,
         execution_time_ms: 0,
     }
+}
+
+fn connection_fingerprints(configs: &[DataSourceConfig]) -> HashMap<String, String> {
+    configs
+        .iter()
+        .map(|config| {
+            (
+                config.name.clone(),
+                format!(
+                    "{:?}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    config.db_type,
+                    config.host,
+                    config.port,
+                    config.user,
+                    config.database,
+                    config.schema,
+                    config.query_string
+                ),
+            )
+        })
+        .collect()
 }
