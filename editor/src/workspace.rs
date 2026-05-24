@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Window, actions, div,
-    hsla, prelude::FluentBuilder, px,
+    IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, Window,
+    actions, div, hsla, point, prelude::FluentBuilder, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::{
@@ -14,7 +14,7 @@ use gpui_component::{
     dock::{DockArea, DockItem, DockPlacement},
     h_flex,
     input::{Input, InputEvent, InputState},
-    scroll::ScrollableElement as _,
+    scroll::{ScrollableElement as _, Scrollbar},
     spinner::Spinner,
     v_flex,
 };
@@ -58,6 +58,8 @@ actions!(
 );
 
 const CONNECTION_SELECTOR_CONTEXT: &str = "ConnectionSelector";
+const CONNECTION_SELECTOR_LIST_HEIGHT: f32 = 280.0;
+const CONNECTION_SELECTOR_ROW_HEIGHT: f32 = 58.0;
 const RECENT_FOLDERS_CONTEXT: &str = "RecentFolders";
 const RECENT_FOLDERS_LIMIT: usize = 20;
 
@@ -125,6 +127,7 @@ struct ConnectionSelector {
     filtered_indices: Vec<usize>,
     selected_ix: usize,
     focus_handle: FocusHandle,
+    scroll_handle: ScrollHandle,
     _input_subscription: gpui::Subscription,
 }
 
@@ -155,6 +158,7 @@ impl ConnectionSelector {
             filtered_indices,
             selected_ix: 0,
             focus_handle,
+            scroll_handle: ScrollHandle::default(),
             _input_subscription: input_subscription,
         }
     }
@@ -178,6 +182,7 @@ impl ConnectionSelector {
                 .collect();
         }
         self.selected_ix = 0;
+        self.scroll_handle.set_offset(point(px(0.), px(0.)));
         cx.notify();
     }
 
@@ -190,6 +195,7 @@ impl ConnectionSelector {
         } else {
             self.selected_ix - 1
         };
+        self.scroll_selected_connection_into_view();
         cx.notify();
     }
 
@@ -198,7 +204,25 @@ impl ConnectionSelector {
             return;
         }
         self.selected_ix = (self.selected_ix + 1) % self.filtered_indices.len();
+        self.scroll_selected_connection_into_view();
         cx.notify();
+    }
+
+    fn scroll_selected_connection_into_view(&self) {
+        let selected_top = px(self.selected_ix as f32 * CONNECTION_SELECTOR_ROW_HEIGHT);
+        let selected_bottom = selected_top + px(CONNECTION_SELECTOR_ROW_HEIGHT);
+        let viewport_height = px(CONNECTION_SELECTOR_LIST_HEIGHT);
+        let mut offset = self.scroll_handle.offset();
+        let visible_top = -offset.y;
+        let visible_bottom = visible_top + viewport_height;
+
+        if selected_top < visible_top {
+            offset.y = -selected_top;
+        } else if selected_bottom > visible_bottom {
+            offset.y = -(selected_bottom - viewport_height);
+        }
+
+        self.scroll_handle.set_offset(offset);
     }
 
     fn confirm_selected(&mut self, cx: &mut Context<Self>) {
@@ -262,6 +286,7 @@ impl ConnectionSelector {
         h_flex()
             .id(format!("connection-selector-row-{}", ix))
             .w_full()
+            .h(px(CONNECTION_SELECTOR_ROW_HEIGHT))
             .gap_2()
             .items_center()
             .px_3()
@@ -340,35 +365,48 @@ impl Render for ConnectionSelector {
             .child(
                 div()
                     .w_full()
-                    .max_h(px(280.))
-                    .overflow_y_scrollbar()
+                    .h(px(CONNECTION_SELECTOR_LIST_HEIGHT))
+                    .relative()
+                    .overflow_hidden()
                     .rounded(cx.theme().radius)
                     .border_1()
                     .border_color(cx.theme().border)
-                    .when(filtered.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .px_3()
-                                .py_6()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("No matching connections"),
-                        )
-                    })
-                    .children(
-                        filtered
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(ix, &connection_ix)| {
-                                self.connections.get(connection_ix).map(|config| {
-                                    self.render_connection_row(
-                                        ix,
-                                        config,
-                                        ix == self.selected_ix,
-                                        cx,
-                                    )
-                                })
-                            }),
+                    .child(
+                        div()
+                            .id("connection-selector-scroll")
+                            .size_full()
+                            .track_scroll(&self.scroll_handle)
+                            .overflow_y_scroll()
+                            .when(filtered.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .px_3()
+                                        .py_6()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("No matching connections"),
+                                )
+                            })
+                            .children(filtered.iter().enumerate().filter_map(
+                                |(ix, &connection_ix)| {
+                                    self.connections.get(connection_ix).map(|config| {
+                                        self.render_connection_row(
+                                            ix,
+                                            config,
+                                            ix == self.selected_ix,
+                                            cx,
+                                        )
+                                    })
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .child(Scrollbar::vertical(&self.scroll_handle)),
                     ),
             )
     }
