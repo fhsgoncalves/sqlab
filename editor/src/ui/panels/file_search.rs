@@ -208,7 +208,7 @@ impl FileSearch {
         scored.sort_by(|a, b| {
             b.1.unwrap_or(0)
                 .cmp(&a.1.unwrap_or(0))
-                .then_with(|| self.all_files[a.0].cmp(&self.all_files[b.0]))
+                .then_with(|| self.all_files.get(a.0).cmp(&self.all_files.get(b.0)))
         });
 
         self.filtered_indices = scored.into_iter().map(|(i, _)| i).collect();

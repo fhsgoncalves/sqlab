@@ -489,7 +489,9 @@ fn search_in_directory(
         for text_match in find_text_matches(&content, query, options) {
             let line_idx = text_match.line_number.saturating_sub(1);
             let context_start = line_idx.saturating_sub(4);
-            let context_before = lines[context_start..line_idx]
+            let context_before = lines
+                .get(context_start..line_idx)
+                .unwrap_or(&[])
                 .iter()
                 .enumerate()
                 .map(|(ix, line)| (context_start + ix + 1, (*line).to_string()))

@@ -296,15 +296,14 @@ impl MySqlDataSource {
         let mut tables = build_tables(table_rows, column_rows, &foreign_keys);
 
         for index in &indexes {
-            if index.is_primary {
-                if let Some(table) = tables
+            if index.is_primary
+                && let Some(table) = tables
                     .iter_mut()
                     .find(|table| table.schema == index.schema && table.name == index.table_name)
-                {
-                    for column in &mut table.columns {
-                        if index.columns.iter().any(|name| name == &column.name) {
-                            column.is_pk = true;
-                        }
+            {
+                for column in &mut table.columns {
+                    if index.columns.iter().any(|name| name == &column.name) {
+                        column.is_pk = true;
                     }
                 }
             }
@@ -582,7 +581,11 @@ fn group_indexes(rows: Vec<MySqlIndexRow>) -> Vec<IndexInfo> {
 }
 
 fn mysql_row_to_strings_and_nulls(row: Row) -> (Vec<String>, Vec<bool>) {
-    let values = row.unwrap();
+    let values = row
+        .unwrap_raw()
+        .into_iter()
+        .map(|value| value.unwrap_or(Value::NULL))
+        .collect::<Vec<_>>();
     let nulls = values
         .iter()
         .map(|value| matches!(value, Value::NULL))

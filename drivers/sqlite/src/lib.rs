@@ -96,13 +96,11 @@ impl SQLiteDataSource {
             .iter()
             .map(|column| column.name().to_string())
             .collect::<Vec<_>>();
-        let column_metadata = (0..column_count)
-            .map(|ix| ColumnMetadata {
-                name: columns[ix].clone(),
-                data_type: statement_columns[ix]
-                    .decl_type()
-                    .unwrap_or("unknown")
-                    .to_string(),
+        let column_metadata = statement_columns
+            .iter()
+            .map(|column| ColumnMetadata {
+                name: column.name().to_string(),
+                data_type: column.decl_type().unwrap_or("unknown").to_string(),
                 is_pk: false,
                 is_fk: false,
             })

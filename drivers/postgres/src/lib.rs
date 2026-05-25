@@ -1480,8 +1480,11 @@ fn format_numeric(raw: &[u8]) -> Result<String, Box<dyn Error + Sync + Send>> {
 }
 
 fn read_i16(raw: &[u8], offset: usize) -> Result<i16, Box<dyn Error + Sync + Send>> {
-    let bytes = raw.get(offset..offset + 2).ok_or("invalid numeric value")?;
-    Ok(i16::from_be_bytes([bytes[0], bytes[1]]))
+    let bytes = raw
+        .get(offset..)
+        .and_then(|bytes| bytes.get(..2))
+        .ok_or("invalid numeric value")?;
+    Ok(i16::from_be_bytes(bytes.try_into()?))
 }
 
 fn escape_csv_field(field: &str) -> String {

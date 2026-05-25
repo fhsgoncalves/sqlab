@@ -430,10 +430,9 @@ impl FileTreePanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_id.is_none() {
+        let Some(selected_id) = self.selected_id.clone() else {
             return;
-        }
-        let selected_id = self.selected_id.clone().unwrap();
+        };
         if !self.folder_ids.contains(selected_id.as_str()) {
             return;
         }
@@ -451,10 +450,9 @@ impl FileTreePanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_id.is_none() {
+        let Some(selected_id) = self.selected_id.clone() else {
             return;
-        }
-        let selected_id = self.selected_id.clone().unwrap();
+        };
         if !self.folder_ids.contains(selected_id.as_str()) {
             return;
         }
@@ -472,10 +470,12 @@ impl FileTreePanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_id.is_none() || self.pending_new.is_some() {
+        let Some(selected_id) = self.selected_id.as_ref() else {
+            return;
+        };
+        if self.pending_new.is_some() {
             return;
         }
-        let selected_id = self.selected_id.as_ref().unwrap();
         let path = PathBuf::from(selected_id);
         let value = path
             .file_name()
@@ -498,7 +498,9 @@ impl FileTreePanel {
         });
         if current_ix.is_none() {
             let next_ix = if offset < 0 { entries.len() - 1 } else { 0 };
-            let selected = &entries[next_ix].0;
+            let Some((selected, _)) = entries.get(next_ix) else {
+                return;
+            };
             self.selected_id = Some(selected.id.to_string());
             self.context_target = Some(PathBuf::from(selected.id.as_str()));
             self.renaming_id = None;
@@ -506,7 +508,9 @@ impl FileTreePanel {
             cx.notify();
             return;
         }
-        let current_ix = current_ix.unwrap();
+        let Some(current_ix) = current_ix else {
+            return;
+        };
         let next_ix = if offset < 0 {
             if current_ix == 0 {
                 entries.len() - 1
@@ -519,7 +523,9 @@ impl FileTreePanel {
             current_ix + 1
         };
 
-        let selected = &entries[next_ix].0;
+        let Some((selected, _)) = entries.get(next_ix) else {
+            return;
+        };
         self.selected_id = Some(selected.id.to_string());
         self.context_target = Some(PathBuf::from(selected.id.as_str()));
         self.renaming_id = None;
@@ -1077,7 +1083,10 @@ impl Render for FileTreePanel {
                                 )
                                 .on_drag(path_drag.clone(), move |path, _, _, cx| {
                                     cx.new(|_| DragPreview {
-                                        label: path.file_name().unwrap().to_string_lossy().into(),
+                                        label: path
+                                            .file_name()
+                                            .map(|name| name.to_string_lossy().into())
+                                            .unwrap_or_else(|| path.display().to_string().into()),
                                     })
                                 })
                                 .on_drop(cx.listener(

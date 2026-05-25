@@ -327,7 +327,9 @@ pub fn layout_diagram(model: &DiagramModel) -> DiagramLayout {
             remaining.remove(id);
         }
 
-        let root = choose_component_root(model, &component, &adjacency);
+        let Some(root) = choose_component_root(model, &component, &adjacency) else {
+            continue;
+        };
         let layers = layered_component(&root, &component, &adjacency, &model.edges);
         let mut component_bottom = next_component_y;
         let layer_widths = layers
@@ -360,7 +362,9 @@ pub fn layout_diagram(model: &DiagramModel) -> DiagramLayout {
                 component_bottom = component_bottom.max(y);
                 max_width = f32::max(max_width, x + width + 32.0);
             }
-            layer_x += layer_widths[layer_ix] + TABLE_GAP_X;
+            if let Some(width) = layer_widths.get(layer_ix) {
+                layer_x += *width + TABLE_GAP_X;
+            }
         }
 
         next_component_y = component_bottom + COMPONENT_GAP_Y;
@@ -1212,10 +1216,10 @@ fn choose_component_root(
     model: &DiagramModel,
     component: &BTreeSet<TableRef>,
     adjacency: &BTreeMap<TableRef, BTreeSet<TableRef>>,
-) -> TableRef {
+) -> Option<TableRef> {
     if let Some(selected) = model.scope.selected_table() {
         if component.contains(&selected) {
-            return selected;
+            return Some(selected);
         }
     }
 
@@ -1223,7 +1227,7 @@ fn choose_component_root(
         .iter()
         .max_by_key(|table| adjacency.get(*table).map(|n| n.len()).unwrap_or_default())
         .cloned()
-        .unwrap_or_else(|| component.iter().next().cloned().unwrap())
+        .or_else(|| component.iter().next().cloned())
 }
 
 fn layered_component(
@@ -1235,7 +1239,9 @@ fn layered_component(
     let mut distance = BTreeMap::from([(root.clone(), 0usize)]);
     let mut queue = VecDeque::from([root.clone()]);
     while let Some(table) = queue.pop_front() {
-        let next_distance = distance[&table] + 1;
+        let Some(next_distance) = distance.get(&table).map(|distance| distance + 1) else {
+            continue;
+        };
         if let Some(neighbors) = adjacency.get(&table) {
             for neighbor in neighbors {
                 if component.contains(neighbor) && !distance.contains_key(neighbor) {
@@ -1279,13 +1285,19 @@ fn sort_layer_by_neighbor_barycenter(
     layers: &mut [Vec<TableRef>],
     edge_pairs: &[(TableRef, TableRef)],
 ) {
-    let neighbor_positions = layers[neighbor_layer_ix]
+    let Some(neighbor_layer) = layers.get(neighbor_layer_ix) else {
+        return;
+    };
+    let neighbor_positions = neighbor_layer
         .iter()
         .enumerate()
         .map(|(ix, table)| (table.clone(), ix as f32))
         .collect::<BTreeMap<_, _>>();
 
-    layers[layer_ix].sort_by(|left, right| {
+    let Some(layer) = layers.get_mut(layer_ix) else {
+        return;
+    };
+    layer.sort_by(|left, right| {
         let left_center = neighbor_barycenter(left, &neighbor_positions, edge_pairs);
         let right_center = neighbor_barycenter(right, &neighbor_positions, edge_pairs);
         left_center
@@ -1379,11 +1391,9 @@ fn paint_edges(bounds: Bounds<gpui::Pixels>, state: &DiagramPaintState, window: 
         }
 
         // Draw arrow at the end of the route
-        if route.len() >= 2 {
-            let last = route[route.len() - 1];
-            let second_last = route[route.len() - 2];
-            let end = diagram_to_screen(bounds, state, last);
-            let prev = diagram_to_screen(bounds, state, second_last);
+        if let [.., second_last, last] = route.as_slice() {
+            let end = diagram_to_screen(bounds, state, *last);
+            let prev = diagram_to_screen(bounds, state, *second_last);
             paint_arrow(end, prev, state.muted.opacity(0.82), window);
         }
     }
@@ -1964,9 +1974,13 @@ fn compact_route(route: Vec<DiagramPoint>) -> Vec<DiagramPoint> {
 
     let mut ix = 1;
     while ix + 1 < compacted.len() {
-        let previous = compacted[ix - 1];
-        let current = compacted[ix];
-        let next = compacted[ix + 1];
+        let (Some(previous), Some(current), Some(next)) = (
+            compacted.get(ix - 1).copied(),
+            compacted.get(ix).copied(),
+            compacted.get(ix + 1).copied(),
+        ) else {
+            break;
+        };
         let same_x = (previous.x - current.x).abs() < 0.5 && (current.x - next.x).abs() < 0.5;
         let same_y = (previous.y - current.y).abs() < 0.5 && (current.y - next.y).abs() < 0.5;
         if same_x || same_y {
@@ -1981,15 +1995,23 @@ fn compact_route(route: Vec<DiagramPoint>) -> Vec<DiagramPoint> {
 fn route_length(route: &[DiagramPoint]) -> f32 {
     route
         .windows(2)
-        .map(|points| (points[1].x - points[0].x).abs() + (points[1].y - points[0].y).abs())
+        .filter_map(|points| {
+            let [start, end] = points else {
+                return None;
+            };
+            Some((end.x - start.x).abs() + (end.y - start.y).abs())
+        })
         .sum()
 }
 
 fn route_is_clear(route: &[DiagramPoint], obstacles: &[DiagramRect]) -> bool {
     route.windows(2).all(|points| {
+        let [start, end] = points else {
+            return true;
+        };
         obstacles
             .iter()
-            .all(|obstacle| !segment_intersects_rect(points[0], points[1], *obstacle))
+            .all(|obstacle| !segment_intersects_rect(*start, *end, *obstacle))
     })
 }
 
@@ -2041,7 +2063,7 @@ fn write_diagram_export_file(
 ) -> anyhow::Result<()> {
     match format {
         DiagramExportFormat::Png => {
-            let image = render_diagram_png(export);
+            let image = render_diagram_png(export)?;
             image.save(path)?;
         }
         DiagramExportFormat::Mermaid => {
@@ -2059,7 +2081,9 @@ fn render_mermaid(export: &DiagramExport) -> String {
     }
 
     for table in &export.model.tables {
-        let id = &ids[&table.id];
+        let Some(id) = ids.get(&table.id) else {
+            continue;
+        };
         let _ = writeln!(output, "    {id} {{");
         for column in &table.columns {
             let mut flags = Vec::new();
@@ -2160,16 +2184,14 @@ struct DiagramFontCache {
 }
 
 impl DiagramFontCache {
-    fn new() -> Self {
+    fn new() -> anyhow::Result<Self> {
         let font_bytes = load_system_font_bytes();
         let regular = if font_bytes.is_empty() {
-            Arc::new(
-                Font::from_bytes(&[][..], FontSettings::default()).expect("Failed to load font"),
-            )
+            anyhow::bail!("no supported system font found for diagram export");
         } else {
             Arc::new(
                 Font::from_bytes(font_bytes.as_slice(), FontSettings::default())
-                    .expect("Failed to load font"),
+                    .map_err(|error| anyhow::anyhow!("{error}"))?,
             )
         };
         let bold = Font::from_bytes(
@@ -2182,7 +2204,7 @@ impl DiagramFontCache {
         .ok()
         .map(Arc::new)
         .unwrap_or_else(|| regular.clone());
-        Self { regular, bold }
+        Ok(Self { regular, bold })
     }
 
     fn get(&self, bold: bool) -> &Arc<Font> {
@@ -2243,7 +2265,7 @@ fn load_system_font_bytes() -> Vec<u8> {
     Vec::new()
 }
 
-fn render_diagram_png(export: &DiagramExport) -> RgbaImage {
+fn render_diagram_png(export: &DiagramExport) -> anyhow::Result<RgbaImage> {
     let (min_x, min_y, max_x, max_y) = diagram_export_bounds(export);
     let content_width = (max_x - min_x + EXPORT_MARGIN * 2.0).max(320.0);
     let content_height = (max_y - min_y + EXPORT_MARGIN * 2.0).max(240.0);
@@ -2257,7 +2279,7 @@ fn render_diagram_png(export: &DiagramExport) -> RgbaImage {
     let offset_x = EXPORT_MARGIN - min_x;
     let offset_y = EXPORT_MARGIN - min_y;
 
-    let font_cache = DiagramFontCache::new();
+    let font_cache = DiagramFontCache::new()?;
 
     draw_export_grid(&mut image, scale, export.style.grid);
     draw_export_edges(export, &mut image, scale, offset_x, offset_y);
@@ -2273,7 +2295,7 @@ fn render_diagram_png(export: &DiagramExport) -> RgbaImage {
         );
     }
 
-    image
+    Ok(image)
 }
 
 fn diagram_export_bounds(export: &DiagramExport) -> (f32, f32, f32, f32) {
@@ -2353,17 +2375,18 @@ fn draw_export_edges(
 
         // Draw the route with proper thickness
         for points in route.windows(2) {
-            let start_x = (points[0].x + offset_x) * scale;
-            let start_y = (points[0].y + offset_y) * scale;
-            let end_x = (points[1].x + offset_x) * scale;
-            let end_y = (points[1].y + offset_y) * scale;
+            let [start, end] = points else {
+                continue;
+            };
+            let start_x = (start.x + offset_x) * scale;
+            let start_y = (start.y + offset_y) * scale;
+            let end_x = (end.x + offset_x) * scale;
+            let end_y = (end.y + offset_y) * scale;
             draw_aa_thick_line(image, start_x, start_y, end_x, end_y, color, line_width);
         }
 
         // Draw arrow at the end of the route (pointing to target table)
-        if route.len() >= 2 {
-            let last = route[route.len() - 1];
-            let second_last = route[route.len() - 2];
+        if let [.., second_last, last] = route.as_slice() {
             let end_x = (last.x + offset_x) * scale;
             let end_y = (last.y + offset_y) * scale;
             let prev_x = (second_last.x + offset_x) * scale;
@@ -2528,8 +2551,12 @@ fn fill_triangle(
 
         if intersections.len() >= 2 {
             intersections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let start_x = intersections[0].ceil() as i32;
-            let end_x = intersections[intersections.len() - 1].floor() as i32;
+            let Some(start_x) = intersections.first().map(|value| value.ceil() as i32) else {
+                continue;
+            };
+            let Some(end_x) = intersections.last().map(|value| value.floor() as i32) else {
+                continue;
+            };
 
             for x in start_x..=end_x {
                 if x >= 0 && x < image.width() as i32 {
@@ -2812,7 +2839,9 @@ fn draw_text(
 
         for sy in 0..metrics.height {
             for sx in 0..metrics.width {
-                let alpha = bitmap[sy * metrics.width + sx];
+                let Some(alpha) = bitmap.get(sy * metrics.width + sx).copied() else {
+                    continue;
+                };
                 if alpha > 0 {
                     let px = (glyph_x + sx as f32).floor() as i32;
                     let py = (glyph_y + sy as f32).floor() as i32;
@@ -3063,7 +3092,7 @@ mod tests {
     fn png_export_renders_non_empty_image() {
         let model =
             DiagramModel::build(&config(), &schema(), DiagramScope::Schema("public".into()));
-        let image = render_diagram_png(&export_for(model));
+        let image = render_diagram_png(&export_for(model)).expect("png should render");
 
         assert!(image.width() > 320);
         assert!(image.height() > 200);

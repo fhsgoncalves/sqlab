@@ -250,7 +250,12 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
-        let column = Column::new(&self.columns[col_ix], &self.columns[col_ix])
+        let column_name = self
+            .columns
+            .get(col_ix)
+            .cloned()
+            .unwrap_or_else(|| format!("column_{}", col_ix + 1));
+        let column = Column::new(&column_name, &column_name)
             .width(self.column_width(col_ix))
             .sortable();
         if self.is_numeric_column(col_ix) {
@@ -287,7 +292,7 @@ impl TableDelegate for ResultsTableDelegate {
             .child(
                 div()
                     .text_color(foreground)
-                    .child(self.columns[col_ix].clone()),
+                    .child(self.columns.get(col_ix).cloned().unwrap_or_default()),
             )
             .children(if !data_type.is_empty() {
                 Some(div().text_color(muted).text_xs().child(data_type))
@@ -305,8 +310,12 @@ impl TableDelegate for ResultsTableDelegate {
     ) {
         let mut order = (0..self.rows.len()).collect::<Vec<_>>();
         order.sort_by(|&a_ix, &b_ix| {
-            let a = &self.rows[a_ix];
-            let b = &self.rows[b_ix];
+            let Some(a) = self.rows.get(a_ix) else {
+                return std::cmp::Ordering::Equal;
+            };
+            let Some(b) = self.rows.get(b_ix) else {
+                return std::cmp::Ordering::Equal;
+            };
             let ord = match self.columns.get(col_ix).map(String::as_str) {
                 Some("id") => {
                     let a_num: i32 = a.get(col_ix).and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -994,7 +1003,11 @@ impl ResultsTableDelegate {
                     .iter()
                     .map(|&col_ix| {
                         if self.selected_cells.contains(&(row_ix, col_ix)) {
-                            self.rows[row_ix][col_ix].clone()
+                            self.rows
+                                .get(row_ix)
+                                .and_then(|row| row.get(col_ix))
+                                .cloned()
+                                .unwrap_or_default()
                         } else {
                             String::new()
                         }
@@ -1010,7 +1023,7 @@ impl ResultsTableDelegate {
         Some(ExportData {
             columns: col_indices
                 .iter()
-                .map(|&col_ix| self.columns[col_ix].clone())
+                .filter_map(|&col_ix| self.columns.get(col_ix).cloned())
                 .collect(),
             column_metadata: col_indices
                 .iter()
@@ -1252,7 +1265,9 @@ impl ResultPanel {
                     .collect(),
             )
         } else {
-            let execution = &self.executions[self.active_tab - 1];
+            let Some(execution) = self.executions.get(self.active_tab.saturating_sub(1)) else {
+                return;
+            };
             let enriched_metadata = enrich_column_metadata(
                 execution.config.as_ref(),
                 execution.result.column_metadata.clone(),
@@ -1624,7 +1639,7 @@ impl ResultPanel {
         Some(ExportData {
             columns: col_indices
                 .iter()
-                .map(|&col_ix| delegate.columns[col_ix].clone())
+                .filter_map(|&col_ix| delegate.columns.get(col_ix).cloned())
                 .collect(),
             column_metadata: col_indices
                 .iter()
@@ -1662,8 +1677,11 @@ impl ResultPanel {
         let single_cell_value = self.table_state.update(cx, |table, cx| {
             let delegate = table.delegate();
             if delegate.selected_cells.len() == 1 {
-                let (row_ix, col_ix) = delegate.selected_cells.iter().next().unwrap();
-                Some(delegate.cell_text(*row_ix, *col_ix, cx))
+                delegate
+                    .selected_cells
+                    .iter()
+                    .next()
+                    .map(|(row_ix, col_ix)| delegate.cell_text(*row_ix, *col_ix, cx))
             } else {
                 None
             }
@@ -2216,31 +2234,36 @@ impl Render for ResultPanel {
                                 .scrollbar_visible(true, true)
                                 .into_any_element()
                         } else {
-                            let execution = &self.executions[self.active_tab - 1];
-                            if execution.succeeded {
-                                DataTable::new(&self.table_state)
-                                    .xsmall()
-                                    .stripe(false)
-                                    .fill_width(false)
-                                    .bordered(true)
-                                    .scrollbar_visible(true, true)
-                                    .into_any_element()
+                            if let Some(execution) =
+                                self.executions.get(self.active_tab.saturating_sub(1))
+                            {
+                                if execution.succeeded {
+                                    DataTable::new(&self.table_state)
+                                        .xsmall()
+                                        .stripe(false)
+                                        .fill_width(false)
+                                        .bordered(true)
+                                        .scrollbar_visible(true, true)
+                                        .into_any_element()
+                                } else {
+                                    let error_msg = execution
+                                        .result
+                                        .rows
+                                        .first()
+                                        .and_then(|r| r.first())
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    div()
+                                        .size_full()
+                                        .p_4()
+                                        .overflow_y_scrollbar()
+                                        .text_color(rgb(0xef4444))
+                                        .font_family("Monospace")
+                                        .child(error_msg)
+                                        .into_any_element()
+                                }
                             } else {
-                                let error_msg = execution
-                                    .result
-                                    .rows
-                                    .first()
-                                    .and_then(|r| r.first())
-                                    .cloned()
-                                    .unwrap_or_default();
-                                div()
-                                    .size_full()
-                                    .p_4()
-                                    .overflow_y_scrollbar()
-                                    .text_color(rgb(0xef4444))
-                                    .font_family("Monospace")
-                                    .child(error_msg)
-                                    .into_any_element()
+                                div().into_any_element()
                             }
                         }
                     }),
@@ -2614,7 +2637,7 @@ fn find_schema_table<'a>(
     }
 
     if matches.len() == 1 {
-        Some(matches[0])
+        matches.first().copied()
     } else {
         None
     }
@@ -2622,7 +2645,10 @@ fn find_schema_table<'a>(
 
 fn single_table_select(query: &str) -> Option<ParsedTableRef> {
     let tokens = sql_tokens(query);
-    if tokens.is_empty() || !tokens[0].eq_ignore_ascii_case("select") {
+    if !tokens
+        .first()
+        .is_some_and(|token| token.eq_ignore_ascii_case("select"))
+    {
         return None;
     }
     if tokens
@@ -2666,7 +2692,9 @@ fn single_table_select(query: &str) -> Option<ParsedTableRef> {
     ];
     let mut ix = from_ix + 2;
     while ix < tokens.len() {
-        let token = &tokens[ix];
+        let Some(token) = tokens.get(ix) else {
+            break;
+        };
         if token == "(" {
             depth += 1;
         } else if token == ")" {
@@ -2899,7 +2927,10 @@ fn render_sql_updates(data: &ExportData) -> String {
         .find_map(|(ix, metadata)| metadata.is_pk.then_some(ix))
         .unwrap_or(0);
     let table = quote_sql_identifier(&data.table_name);
-    let key_column = quote_sql_identifier(&columns[key_ix]);
+    let key_column = columns
+        .get(key_ix)
+        .map(|column| quote_sql_identifier(column))
+        .unwrap_or_else(|| quote_sql_identifier("id"));
 
     data.rows
         .iter()
@@ -2911,7 +2942,9 @@ fn render_sql_updates(data: &ExportData) -> String {
                 .map(|(ix, cell)| {
                     format!(
                         "{} = {}",
-                        quote_sql_identifier(&columns[ix]),
+                        quote_sql_identifier(
+                            columns.get(ix).map(String::as_str).unwrap_or("column"),
+                        ),
                         sql_literal(cell, data.column_metadata.get(ix))
                     )
                 })
@@ -2919,7 +2952,10 @@ fn render_sql_updates(data: &ExportData) -> String {
                 .join(", ");
             format!(
                 "UPDATE {table} SET {assignments} WHERE {key_column} = {};",
-                sql_literal(&row[key_ix], data.column_metadata.get(key_ix))
+                sql_literal(
+                    row.get(key_ix).map(String::as_str).unwrap_or_default(),
+                    data.column_metadata.get(key_ix)
+                )
             )
         })
         .collect::<Vec<_>>()
@@ -2942,7 +2978,9 @@ fn render_where_clause(data: &ExportData) -> String {
                 .map(|(ix, cell)| {
                     format!(
                         "{} = {}",
-                        quote_sql_identifier(&columns[ix]),
+                        quote_sql_identifier(
+                            columns.get(ix).map(String::as_str).unwrap_or("column"),
+                        ),
                         sql_literal(cell, data.column_metadata.get(ix))
                     )
                 })
@@ -3068,11 +3106,14 @@ fn infer_table_name(query: &str) -> String {
         .collect::<Vec<_>>();
 
     for window in tokens.windows(2) {
-        if matches_ignore_ascii_case(window[0], "from")
-            || matches_ignore_ascii_case(window[0], "into")
-            || matches_ignore_ascii_case(window[0], "update")
+        let [keyword, table] = window else {
+            continue;
+        };
+        if matches_ignore_ascii_case(keyword, "from")
+            || matches_ignore_ascii_case(keyword, "into")
+            || matches_ignore_ascii_case(keyword, "update")
         {
-            return clean_identifier_token(window[1]);
+            return clean_identifier_token(table);
         }
     }
     "results".to_string()

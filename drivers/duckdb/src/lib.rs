@@ -105,9 +105,11 @@ impl DuckDbDataSource {
                     .unwrap_or_else(|_| format!("column_{}", ix + 1))
             })
             .collect::<Vec<_>>();
-        let column_metadata = (0..column_count)
-            .map(|ix| ColumnMetadata {
-                name: columns[ix].clone(),
+        let column_metadata = columns
+            .iter()
+            .enumerate()
+            .map(|(ix, column)| ColumnMetadata {
+                name: column.clone(),
                 data_type: format!("{:?}", statement_ref.column_logical_type(ix)),
                 is_pk: false,
                 is_fk: false,

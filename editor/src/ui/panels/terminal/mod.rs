@@ -731,7 +731,10 @@ impl TerminalSession {
             }
 
             let col = indexed.point.column.0;
-            if col >= lines[row].len() {
+            let Some(line) = lines.get_mut(row) else {
+                continue;
+            };
+            if col >= line.len() {
                 continue;
             }
 
@@ -752,23 +755,26 @@ impl TerminalSession {
                 Some(terminal_color_to_gpui(cell.bg, &palette, cx))
             };
 
-            lines[row][col] = StyledCell {
-                c: ch,
-                fg,
-                bg,
-                bold: cell.flags.contains(Flags::BOLD),
-                _italic: cell.flags.contains(Flags::ITALIC),
-                _underline: cell.flags.contains(Flags::UNDERLINE),
-            };
+            if let Some(slot) = line.get_mut(col) {
+                *slot = StyledCell {
+                    c: ch,
+                    fg,
+                    bg,
+                    bold: cell.flags.contains(Flags::BOLD),
+                    _italic: cell.flags.contains(Flags::ITALIC),
+                    _underline: cell.flags.contains(Flags::UNDERLINE),
+                };
+            }
         }
 
         // Handle cursor
         let cursor_row = content.cursor.point.line.0 + content.display_offset as i32;
-        if let Ok(cursor_row) = usize::try_from(cursor_row) {
-            if cursor_row < lines.len() {
-                let cursor_col = content.cursor.point.column.0;
-                if cursor_col < lines[cursor_row].len() {
-                    let cell = &mut lines[cursor_row][cursor_col];
+        if let Ok(cursor_row) = usize::try_from(cursor_row)
+            && let Some(line) = lines.get_mut(cursor_row)
+        {
+            let cursor_col = content.cursor.point.column.0;
+            if cursor_col < line.len() {
+                if let Some(cell) = line.get_mut(cursor_col) {
                     if cell.c == ' ' && cell.bg.is_none() {
                         cell.fg = cx.theme().accent_foreground;
                         cell.bg = Some(cx.theme().accent);
@@ -778,17 +784,17 @@ impl TerminalSession {
                         cell.fg = cursor_fg;
                         cell.bg = Some(cursor_bg);
                     }
-                } else if cursor_col == lines[cursor_row].len() {
-                    // Cursor at end of line
-                    lines[cursor_row].push(StyledCell {
-                        c: ' ',
-                        fg: cx.theme().accent_foreground,
-                        bg: Some(cx.theme().accent),
-                        bold: false,
-                        _italic: false,
-                        _underline: false,
-                    });
                 }
+            } else if cursor_col == line.len() {
+                // Cursor at end of line
+                line.push(StyledCell {
+                    c: ' ',
+                    fg: cx.theme().accent_foreground,
+                    bg: Some(cx.theme().accent),
+                    bold: false,
+                    _italic: false,
+                    _underline: false,
+                });
             }
         }
 
@@ -1704,7 +1710,9 @@ fn group_cells_by_style(cells: Vec<StyledCell>) -> Vec<StyledSpan> {
                 col += 1;
                 continue;
             } else {
-                spans.push(current_span.take().unwrap());
+                if let Some(span) = current_span.take() {
+                    spans.push(span);
+                }
             }
         }
 

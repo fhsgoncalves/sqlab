@@ -62,18 +62,19 @@ impl DdlGenerator for PostgresDdlGenerator {
                     && fk.source_table == table.name
                     && fk.source_columns.len() == 1
             })
-            .map(|fk| {
-                format!(
+            .filter_map(|fk| {
+                let source_column = fk.source_columns.first()?;
+                Some(format!(
                     "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
                     quote_identifier(&fk.name),
-                    quote_identifier(&fk.source_columns[0]),
+                    quote_identifier(source_column),
                     qualified_name(&fk.target_schema, &fk.target_table),
                     fk.target_columns
                         .iter()
                         .map(|c| quote_identifier(c))
                         .collect::<Vec<_>>()
                         .join(", ")
-                )
+                ))
             })
             .collect();
 
@@ -121,7 +122,7 @@ impl DdlGenerator for PostgresDdlGenerator {
 
         // Include column definitions
         if !table.columns.is_empty() {
-            ddl.push_str(&format!("\n-- Columns:\n"));
+            ddl.push_str("\n-- Columns:\n");
             for col in &table.columns {
                 ddl.push_str(&format!(
                     "--   {} : {}\n",
@@ -344,10 +345,10 @@ fn format_column_type(col: &ColumnInfo) -> String {
     let mut type_str = col.data_type.clone();
 
     // Handle generated columns
-    if col.is_generated {
-        if let Some(gen_expr) = &col.generation_expression {
-            type_str = format!("GENERATED ALWAYS AS ({}) STORED", gen_expr);
-        }
+    if col.is_generated
+        && let Some(gen_expr) = &col.generation_expression
+    {
+        type_str = format!("GENERATED ALWAYS AS ({}) STORED", gen_expr);
     }
 
     type_str
@@ -368,7 +369,9 @@ fn needs_quoting(name: &str) -> bool {
         return true;
     }
 
-    let first_char = name.chars().next().unwrap();
+    let Some(first_char) = name.chars().next() else {
+        return true;
+    };
     if first_char.is_ascii_digit() || !first_char.is_alphanumeric() && first_char != '_' {
         return true;
     }
@@ -695,25 +698,29 @@ fn generic_table_ddl(
         })
         .collect::<Vec<_>>();
 
-    definitions.extend(schema.foreign_keys.iter().filter_map(|fk| {
-        (fk.source_schema == table.schema && fk.source_table == table.name).then(|| {
-            format!(
-                "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
-                quote(&fk.name),
-                fk.source_columns
-                    .iter()
-                    .map(|column| quote(column))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                qualified(&fk.target_schema, &fk.target_table),
-                fk.target_columns
-                    .iter()
-                    .map(|column| quote(column))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
-    }));
+    definitions.extend(
+        schema
+            .foreign_keys
+            .iter()
+            .filter(|fk| fk.source_schema == table.schema && fk.source_table == table.name)
+            .map(|fk| {
+                format!(
+                    "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+                    quote(&fk.name),
+                    fk.source_columns
+                        .iter()
+                        .map(|column| quote(column))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    qualified(&fk.target_schema, &fk.target_table),
+                    fk.target_columns
+                        .iter()
+                        .map(|column| quote(column))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }),
+    );
 
     ddl.push_str(&definitions.join(",\n"));
     ddl.push_str("\n);\n");

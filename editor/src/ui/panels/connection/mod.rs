@@ -917,14 +917,16 @@ impl ConnectionPanel {
             if offset < 0 { entries.len() - 1 } else { 0 }
         };
 
-        let selected_id = &entries[next_ix];
+        let Some(selected_id) = entries.get(next_ix) else {
+            return;
+        };
 
         // Determine if it's a connection or a node
         // Connection entries are exactly "conn:name" (2 parts), everything else is a node
         let parts: Vec<&str> = selected_id.split(':').collect();
-        if parts.len() == 2 && parts[0] == "conn" {
+        if let ["conn", connection_name] = parts.as_slice() {
             // It's a connection
-            self.selected_connection = Some(parts[1].to_string());
+            self.selected_connection = Some((*connection_name).to_string());
             self.selected_node = None;
         } else {
             // It's a schema node (including database folder like conn:name:schemas)
@@ -1175,7 +1177,7 @@ impl ConnectionPanel {
         if let Some(schema_name_idx) = segments.iter().position(|&s| s == "schema") {
             let schema_name = segments.get(schema_name_idx + 1)?;
             // Ensure this is a leaf schema node (no other object type after it)
-            let after_schema = &segments[schema_name_idx + 2..];
+            let after_schema = segments.get(schema_name_idx + 2..)?;
             if after_schema.is_empty() {
                 let schema_info = schema.schemas.iter().find(|s| s.name == *schema_name)?;
                 return Some(generator.generate_schema_ddl(schema_info));
@@ -1279,7 +1281,7 @@ impl ConnectionPanel {
 
         let schema_name_idx = segments.iter().position(|&segment| segment == "schema")?;
         let schema_name = segments.get(schema_name_idx + 1)?;
-        let after_schema = &segments[schema_name_idx + 2..];
+        let after_schema = segments.get(schema_name_idx + 2..)?;
         if after_schema.is_empty() {
             return Some(DiagramScope::Schema((*schema_name).to_string()));
         }
@@ -2300,9 +2302,11 @@ fn percent_decode(value: &str) -> String {
     let mut bytes = Vec::new();
     let mut ix = 0;
     let raw = value.as_bytes();
-    while ix < raw.len() {
-        if raw[ix] == b'%' && ix + 2 < raw.len() {
-            if let Ok(hex) = std::str::from_utf8(&raw[ix + 1..ix + 3]) {
+    while let Some(byte) = raw.get(ix) {
+        if *byte == b'%' {
+            if let Some(encoded) = raw.get(ix + 1..ix + 3)
+                && let Ok(hex) = std::str::from_utf8(encoded)
+            {
                 if let Ok(byte) = u8::from_str_radix(hex, 16) {
                     bytes.push(byte);
                     ix += 3;
@@ -2310,7 +2314,7 @@ fn percent_decode(value: &str) -> String {
                 }
             }
         }
-        bytes.push(raw[ix]);
+        bytes.push(*byte);
         ix += 1;
     }
     String::from_utf8_lossy(&bytes).replace('+', " ")

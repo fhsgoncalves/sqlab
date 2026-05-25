@@ -958,7 +958,9 @@ fn is_operator_token(token: &str) -> bool {
 }
 
 fn is_expression_position(tokens: &[String], ix: usize) -> bool {
-    tokens[..ix]
+    tokens
+        .get(..ix)
+        .unwrap_or(tokens)
         .iter()
         .rev()
         .find(|token| token.as_str() != "," && token.as_str() != ".")
@@ -999,7 +1001,7 @@ fn table_refs_for_statement(statement: &str, schema: &DatabaseSchema) -> Vec<Tab
             continue;
         }
 
-        let is_from_list = tokens[ix] == "from";
+        let is_from_list = tokens.get(ix).is_some_and(|token| token == "from");
         ix += 1;
 
         while ix < tokens.len() {
@@ -1046,7 +1048,7 @@ fn table_refs_for_statement(statement: &str, schema: &DatabaseSchema) -> Vec<Tab
 }
 
 fn is_table_reference_keyword(tokens: &[String], ix: usize) -> bool {
-    tokens[ix] == "from" || tokens[ix] == "join"
+    matches!(tokens.get(ix).map(String::as_str), Some("from" | "join"))
 }
 
 fn alias_token(token: Option<&String>, schema: &DatabaseSchema) -> Option<String> {
@@ -1095,7 +1097,9 @@ fn sql_tokens(text: &str) -> Vec<String> {
                 if matches!(ch, '<' | '>' | '!')
                     && chars.peek().is_some_and(|next| matches!(next, '=' | '>'))
                 {
-                    operator.push(chars.next().unwrap());
+                    if let Some(next) = chars.next() {
+                        operator.push(next);
+                    }
                 }
                 tokens.push(operator);
             }
@@ -1164,9 +1168,10 @@ fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
                         .peek()
                         .is_some_and(|(_, next)| matches!(next, '=' | '>'))
                 {
-                    let (next_ix, next) = chars.next().unwrap();
-                    text.push(next);
-                    end = next_ix + next.len_utf8();
+                    if let Some((next_ix, next)) = chars.next() {
+                        text.push(next);
+                        end = next_ix + next.len_utf8();
+                    }
                 }
                 tokens.push(PositionedToken {
                     text,

@@ -4,9 +4,10 @@ pub mod manager;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Database {
+    #[default]
     Postgres,
     MySql,
     SQLite,
@@ -43,12 +44,6 @@ impl Database {
             Database::DuckDB => "main",
             Database::Databend => "",
         }
-    }
-}
-
-impl Default for Database {
-    fn default() -> Self {
-        Database::Postgres
     }
 }
 
@@ -121,15 +116,17 @@ fn normalize_postgres_timestamp_type(data_type: &str) -> Option<String> {
         return Some("timestamp".to_string());
     }
 
-    if let Some(precision) = suffix.strip_suffix(" with time zone") {
-        if precision.starts_with('(') && precision.ends_with(')') {
-            return Some(format!("timestamptz{precision}"));
-        }
+    if let Some(precision) = suffix.strip_suffix(" with time zone")
+        && precision.starts_with('(')
+        && precision.ends_with(')')
+    {
+        return Some(format!("timestamptz{precision}"));
     }
-    if let Some(precision) = suffix.strip_suffix(" without time zone") {
-        if precision.starts_with('(') && precision.ends_with(')') {
-            return Some(format!("timestamp{precision}"));
-        }
+    if let Some(precision) = suffix.strip_suffix(" without time zone")
+        && precision.starts_with('(')
+        && precision.ends_with(')')
+    {
+        return Some(format!("timestamp{precision}"));
     }
 
     None

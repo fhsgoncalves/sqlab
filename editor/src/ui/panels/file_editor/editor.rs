@@ -364,7 +364,7 @@ fn map_preserving_line_endings(text: &str, mut map_line: impl FnMut(&str) -> Str
 
     for (ix, ch) in text.char_indices() {
         if ch == '\n' {
-            let line_end = if ix > start && text.as_bytes()[ix - 1] == b'\r' {
+            let line_end = if ix > start && text.as_bytes().get(ix - 1) == Some(&b'\r') {
                 ix - 1
             } else {
                 ix

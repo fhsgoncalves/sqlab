@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use keyring_core::{Entry, Error, set_default_store};
 
@@ -15,6 +15,8 @@ pub enum CredentialError {
     StoreUnavailable(String),
     #[error("credential data is invalid: {0}")]
     InvalidData(#[from] serde_json::Error),
+    #[error("password cache lock is poisoned")]
+    PasswordCachePoisoned,
     #[error(transparent)]
     Keyring(#[from] Error),
 }
@@ -49,11 +51,7 @@ pub fn load_password(account: &str) -> Result<Option<String>, CredentialError> {
 }
 
 pub fn load_passwords() -> Result<HashMap<String, String>, CredentialError> {
-    if let Some(passwords) = password_cache()
-        .lock()
-        .expect("password cache poisoned")
-        .clone()
-    {
+    if let Some(passwords) = lock_password_cache()?.clone() {
         return Ok(passwords);
     }
 
@@ -63,7 +61,7 @@ pub fn load_passwords() -> Result<HashMap<String, String>, CredentialError> {
         Err(error) => return Err(error.into()),
     };
 
-    *password_cache().lock().expect("password cache poisoned") = Some(passwords.clone());
+    *lock_password_cache()? = Some(passwords.clone());
     Ok(passwords)
 }
 
@@ -88,7 +86,7 @@ fn save_password_map(passwords: HashMap<String, String>) -> Result<(), Credentia
         entry(PASSWORDS_ACCOUNT)?.set_password(&content)?;
     }
 
-    *password_cache().lock().expect("password cache poisoned") = Some(passwords);
+    *lock_password_cache()? = Some(passwords);
     Ok(())
 }
 
@@ -99,6 +97,13 @@ fn entry(account: &str) -> Result<Entry, CredentialError> {
 
 fn password_cache() -> &'static Mutex<Option<HashMap<String, String>>> {
     PASSWORD_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn lock_password_cache()
+-> Result<MutexGuard<'static, Option<HashMap<String, String>>>, CredentialError> {
+    password_cache()
+        .lock()
+        .map_err(|_| CredentialError::PasswordCachePoisoned)
 }
 
 fn ensure_store() -> Result<(), CredentialError> {

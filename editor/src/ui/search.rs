@@ -151,7 +151,10 @@ fn fuzzy_match(line: &str, query: &str, case_sensitive: bool) -> Option<(usize, 
     let mut last_match_end = None;
 
     for (byte_ix, ch) in line.char_indices() {
-        if char_eq(ch, query_chars[query_ix], case_sensitive) {
+        let Some(query_ch) = query_chars.get(query_ix).copied() else {
+            break;
+        };
+        if char_eq(ch, query_ch, case_sensitive) {
             start.get_or_insert(byte_ix);
             if let Some(last_end) = last_match_end {
                 gaps += byte_ix.saturating_sub(last_end);

@@ -77,7 +77,9 @@ pub fn query_ranges_in_text(text: &str) -> Vec<QueryRange> {
     {
         fallback
     } else if parsed.is_empty() {
-        vec![trimmed_query_range(text, 0, text.len()).expect("text is not empty")]
+        trimmed_query_range(text, 0, text.len())
+            .into_iter()
+            .collect()
     } else {
         parsed
     }
@@ -305,10 +307,10 @@ fn append_missing_ranges(cursor: usize, ranges: &mut Vec<QueryRange>, candidates
             continue;
         }
 
-        if ranges.iter().any(|existing| {
-            existing.trimmed_range.start == candidate.trimmed_range.start
-                || existing.trimmed_range.start > candidate.trimmed_range.start
-        }) {
+        if ranges
+            .iter()
+            .any(|existing| existing.trimmed_range.start >= candidate.trimmed_range.start)
+        {
             continue;
         }
 
@@ -414,7 +416,9 @@ fn fallback_queries_in_text(text: &str) -> Vec<QueryRange> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut ix = 0;
     while ix < chars.len() {
-        let (byte_ix, ch) = chars[ix];
+        let Some((byte_ix, ch)) = chars.get(ix).copied() else {
+            break;
+        };
         let at_top_level =
             paren_depth == 0 && !in_single_quote && !in_double_quote && dollar_quote_tag.is_none();
 
@@ -491,20 +495,23 @@ fn parse_dollar_quote_tag(text: &str) -> Option<String> {
         return None;
     }
 
-    if bytes[1] == b'$' {
+    if bytes.get(1) == Some(&b'$') {
         return Some(String::new());
     }
 
     let mut end = 1;
     while end < bytes.len() {
-        if bytes[end] == b'$' {
-            let tag = std::str::from_utf8(&bytes[1..end]).ok()?;
+        let Some(byte) = bytes.get(end) else {
+            return None;
+        };
+        if *byte == b'$' {
+            let tag = std::str::from_utf8(bytes.get(1..end)?).ok()?;
             if tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !tag.is_empty() {
                 return Some(tag.to_string());
             }
             return None;
         }
-        if !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_' {
+        if !byte.is_ascii_alphanumeric() && *byte != b'_' {
             return None;
         }
         end += 1;
@@ -589,8 +596,11 @@ fn collect_declared_variables(text: &str, names: &mut std::collections::HashSet<
 fn collect_for_loop_variables(text: &str, names: &mut std::collections::HashSet<String>) {
     let tokens = identifier_tokens(text);
     for window in tokens.windows(3) {
-        if window[0] == "for" && window[2] == "in" {
-            names.insert(window[1].clone());
+        if let [first, name, third] = window
+            && first == "for"
+            && third == "in"
+        {
+            names.insert(name.clone());
         }
     }
 }
@@ -610,7 +620,10 @@ fn collect_function_arguments(text: &str, names: &mut std::collections::HashSet<
         return;
     };
 
-    for argument in text[open_paren + 1..close_paren].split(',') {
+    let Some(arguments) = text.get(open_paren + 1..close_paren) else {
+        return;
+    };
+    for argument in arguments.split(',') {
         let mut tokens = identifier_tokens(argument);
         if tokens
             .first()
@@ -619,15 +632,18 @@ fn collect_function_arguments(text: &str, names: &mut std::collections::HashSet<
             tokens.remove(0);
         }
 
-        if tokens.len() >= 2 && !is_common_type_name(&tokens[0]) {
-            names.insert(tokens[0].clone());
+        if let Some(name) = tokens.first()
+            && tokens.len() >= 2
+            && !is_common_type_name(name)
+        {
+            names.insert(name.clone());
         }
     }
 }
 
 fn matching_close_paren(text: &str, open_paren: usize) -> Option<usize> {
     let mut depth = 0usize;
-    for (ix, ch) in text[open_paren..].char_indices() {
+    for (ix, ch) in text.get(open_paren..)?.char_indices() {
         match ch {
             '(' => depth += 1,
             ')' => {

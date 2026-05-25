@@ -211,7 +211,7 @@ fn main() {
         let window_size = size(px(1400.0), px(900.0));
         let window_bounds = Bounds::centered(None, window_size, cx);
 
-        cx.open_window(
+        if let Err(error) = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
                 titlebar: Some(gpui_component::TitleBar::title_bar_options()),
@@ -239,7 +239,8 @@ fn main() {
                 });
                 cx.new(|cx| Root::new(workspace, window, cx))
             },
-        )
-        .expect("Failed to open window");
+        ) {
+            eprintln!("Failed to open window: {}", error);
+        }
     });
 }

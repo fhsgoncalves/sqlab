@@ -1218,11 +1218,14 @@ impl Workspace {
         }
 
         if queries.len() == 1 {
+            let Some(query) = queries.first() else {
+                return;
+            };
             self.execute_single_query(
                 path,
                 selected_connection_name,
-                queries[0].query.clone(),
-                queries[0].range.clone(),
+                query.query.clone(),
+                query.range.clone(),
                 Some(active_editor),
                 search_path,
                 window,

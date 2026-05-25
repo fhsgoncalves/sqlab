@@ -1,0 +1,55 @@
+#!/bin/sh
+set -eu
+
+echo "🚀 Starting pre-commit checks..."
+
+STYLE_LINT_ALLOWS="
+  -A clippy::collapsible_if
+  -A clippy::too_many_arguments
+  -A clippy::type_complexity
+  -A clippy::derivable_impls
+  -A clippy::unnecessary_map_or
+  -A clippy::let_unit_value
+  -A clippy::redundant_closure
+  -A clippy::if_same_then_else
+  -A clippy::needless_borrow
+  -A clippy::int_plus_one
+  -A clippy::needless_return
+  -A clippy::unnecessary_sort_by
+  -A clippy::implicit_saturating_sub
+  -A clippy::nonminimal_bool
+  -A clippy::question_mark
+  -A clippy::single_match
+  -A clippy::cmp_owned
+  -A clippy::len_zero
+  -A clippy::ptr_arg
+  -A clippy::only_used_in_recursion
+  -A clippy::items_after_test_module
+  -A clippy::field_reassign_with_default
+"
+
+echo "🎨 Formatting all Rust code with cargo fmt..."
+cargo fmt --all
+
+echo "🔍 Running clippy on production targets (bins + libs) with strict panic checks..."
+# Production targets must be free of common panic paths.
+cargo clippy --workspace --bins --lib -- \
+  -D warnings \
+  $STYLE_LINT_ALLOWS \
+  -D clippy::unwrap_used \
+  -D clippy::expect_used \
+  -D clippy::indexing_slicing \
+  -D clippy::panic
+
+echo "🧪 Running clippy on tests (allowing unwrap/expect)..."
+# Tests may use unwrap/expect, but still must be warning-clean.
+cargo clippy --workspace --tests -- \
+  -D warnings \
+  $STYLE_LINT_ALLOWS \
+  -A clippy::unwrap_used \
+  -A clippy::expect_used
+
+echo "🏃 Running all workspace tests..."
+cargo test --workspace
+
+echo "✅ All clear! Committing..."
