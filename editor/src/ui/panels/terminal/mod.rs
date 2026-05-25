@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -64,6 +64,8 @@ pub struct TerminalPanel {
 struct TerminalSession {
     id: usize,
     title: String,
+    default_title_left: String,
+    shell_name: String,
     backend: Option<TerminalBackend>,
 }
 
@@ -286,11 +288,11 @@ impl TerminalPanel {
 
         match event.event {
             TerminalEvent::Title(title) => {
-                session.title = title;
+                session.title = session.format_title(Some(&title));
                 cx.notify();
             }
             TerminalEvent::ResetTitle => {
-                session.title = format!("Terminal {}", session.id);
+                session.title = session.format_title(None);
                 cx.notify();
             }
             TerminalEvent::PtyWrite(text) => {
@@ -654,18 +656,34 @@ impl TerminalSession {
         tx: Sender<SessionEvent>,
         working_directory: Option<PathBuf>,
     ) -> Self {
+        let default_title_left = terminal_default_title_left(working_directory.as_deref());
+        let shell_name = terminal_shell_name();
+        let title = terminal_tab_title(&default_title_left, &shell_name);
+
         match TerminalBackend::new(id, size, tx, working_directory) {
             Ok(backend) => Self {
                 id,
-                title: format!("Terminal {}", id),
+                title,
+                default_title_left,
+                shell_name,
                 backend: Some(backend),
             },
             Err(_) => Self {
                 id,
-                title: format!("Terminal {}", id),
+                title,
+                default_title_left,
+                shell_name,
                 backend: None,
             },
         }
+    }
+
+    fn format_title(&self, title: Option<&str>) -> String {
+        let title_left = title
+            .and_then(terminal_title_left)
+            .unwrap_or(&self.default_title_left);
+
+        terminal_tab_title(title_left, &self.shell_name)
     }
 
     fn write_key(&mut self, keystroke: &Keystroke) -> bool {
@@ -889,6 +907,60 @@ fn terminal_color_to_gpui(color: AnsiColor, palette: &Palette, cx: &App) -> Hsla
             gpui::rgb((rgb.r as u32) << 16 | (rgb.g as u32) << 8 | (rgb.b as u32)).into()
         }
     }
+}
+
+fn terminal_default_title_left(working_directory: Option<&Path>) -> String {
+    working_directory
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Terminal")
+        .to_string()
+}
+
+fn terminal_shell_name() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .and_then(|shell| {
+            Path::new(&shell)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "shell".to_string())
+}
+
+fn terminal_title_left(title: &str) -> Option<&str> {
+    let title = title
+        .split_once(" — ")
+        .map(|(left, _)| left)
+        .unwrap_or(title)
+        .trim()
+        .split_whitespace()
+        .next()?;
+
+    if title.is_empty() {
+        return None;
+    }
+
+    title
+        .split_once(':')
+        .and_then(|(_, path)| terminal_path_leaf(path))
+        .or_else(|| terminal_path_leaf(title))
+        .or(Some(title))
+}
+
+fn terminal_path_leaf(path: &str) -> Option<&str> {
+    path.trim()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|leaf| !leaf.is_empty() && *leaf != "~")
+}
+
+fn terminal_tab_title(title_left: &str, shell_name: &str) -> String {
+    format!("{} — {}", title_left.trim(), shell_name.trim())
 }
 
 impl TerminalBackend {
@@ -1680,7 +1752,11 @@ fn terminal_cell_width(text_style: &TextStyle, window: &mut Window, cx: &App) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalPoint, TerminalSelection, selected_cell_ranges, selected_text_from_lines};
+    use super::{
+        TerminalPoint, TerminalSelection, selected_cell_ranges, selected_text_from_lines,
+        terminal_default_title_left, terminal_tab_title, terminal_title_left,
+    };
+    use std::path::Path;
 
     #[test]
     fn normalizes_reversed_selection() {
@@ -1728,6 +1804,32 @@ mod tests {
                 TerminalPoint { row: 2, col: 3 },
             ),
             vec![(1, 0, 10), (2, 0, 3)]
+        );
+    }
+
+    #[test]
+    fn terminal_default_title_uses_working_directory_leaf() {
+        assert_eq!(
+            terminal_default_title_left(Some(Path::new("/Users/dev/repos/sqlab"))),
+            "sqlab"
+        );
+    }
+
+    #[test]
+    fn terminal_tab_title_adds_shell_suffix() {
+        assert_eq!(terminal_tab_title("sqlab", "zsh"), "sqlab — zsh");
+    }
+
+    #[test]
+    fn terminal_title_left_avoids_duplicate_shell_suffix() {
+        assert_eq!(terminal_title_left("opencode — zsh"), Some("opencode"));
+    }
+
+    #[test]
+    fn terminal_title_left_collapses_prompt_path_to_leaf() {
+        assert_eq!(
+            terminal_title_left("fernando.goncalves@Fernandos-MBP:~/repos/devligeiro/sqlab"),
+            Some("sqlab")
         );
     }
 }
