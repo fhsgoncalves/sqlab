@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ops::Range,
     path::PathBuf,
     sync::Arc,
@@ -77,6 +78,7 @@ pub struct EditorPanel {
     query_decoration_override: Option<QueryRange>,
     query_decoration_override_snapshot: Option<EditorSnapshot>,
     query_executions: Vec<QueryExecutionMarker>,
+    last_query_execution_text: String,
     next_query_execution_id: u64,
     elapsed_timer_task: Option<Task<()>>,
     search_open: bool,
@@ -129,6 +131,12 @@ struct EditorSnapshot {
     selected: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TextEditDelta {
+    old_range: Range<usize>,
+    new_len: usize,
+}
+
 fn global_match_range(text: &str, text_match: &TextMatch) -> Option<Range<usize>> {
     let line_start = text
         .lines()
@@ -164,11 +172,103 @@ fn selected_query_range(text: &str, selected_range: Range<usize>) -> Option<Quer
     })
 }
 
+fn common_prefix_len(left: &str, right: &str) -> usize {
+    let mut len = 0;
+    for (left_ch, right_ch) in left.chars().zip(right.chars()) {
+        if left_ch != right_ch {
+            break;
+        }
+        len += left_ch.len_utf8();
+    }
+    len
+}
+
+fn common_suffix_len(left: &str, right: &str, prefix_len: usize) -> usize {
+    let left_tail = &left[prefix_len..];
+    let right_tail = &right[prefix_len..];
+    let mut len = 0;
+
+    for (left_ch, right_ch) in left_tail.chars().rev().zip(right_tail.chars().rev()) {
+        if left_ch != right_ch {
+            break;
+        }
+        len += left_ch.len_utf8();
+    }
+
+    len
+}
+
+fn text_edit_delta(old_text: &str, new_text: &str) -> Option<TextEditDelta> {
+    if old_text == new_text {
+        return None;
+    }
+
+    let prefix_len = common_prefix_len(old_text, new_text);
+    let suffix_len = common_suffix_len(old_text, new_text, prefix_len);
+
+    Some(TextEditDelta {
+        old_range: prefix_len..old_text.len() - suffix_len,
+        new_len: new_text.len() - prefix_len - suffix_len,
+    })
+}
+
+fn transform_offset(offset: usize, delta: &TextEditDelta) -> usize {
+    let edit_start = delta.old_range.start;
+    let edit_end = delta.old_range.end;
+    let deleted_len = edit_end - edit_start;
+
+    if edit_end <= offset {
+        offset + delta.new_len - deleted_len
+    } else if offset <= edit_start {
+        offset
+    } else {
+        edit_start + delta.new_len
+    }
+}
+
+fn transform_range(range: Range<usize>, delta: &TextEditDelta) -> Option<Range<usize>> {
+    let start = transform_offset(range.start, delta);
+    let end = transform_offset(range.end, delta);
+
+    (start < end).then_some(start..end)
+}
+
+fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
+fn update_query_range_for_edit(
+    query_range: &QueryRange,
+    delta: &TextEditDelta,
+    new_text: &str,
+) -> Option<QueryRange> {
+    let range = transform_range(query_range.range.clone(), delta)?;
+    let trimmed_range = transform_range(query_range.trimmed_range.clone(), delta)?;
+    let text = new_text.get(trimmed_range.clone())?.to_string();
+
+    Some(QueryRange {
+        range,
+        trimmed_range,
+        text,
+    })
+}
+
 fn line_number_for_offset(text: &str, offset: usize) -> usize {
     text[..offset.min(text.len())]
         .bytes()
         .filter(|byte| *byte == b'\n')
         .count()
+}
+
+fn query_execution_marker_conflicts(
+    text: &str,
+    marker: &QueryExecutionMarker,
+    range: &QueryRange,
+) -> bool {
+    let marker_line = line_number_for_offset(text, marker.range.trimmed_range.start);
+    let range_line = line_number_for_offset(text, range.trimmed_range.start);
+
+    marker_line == range_line || ranges_overlap(&marker.range.trimmed_range, &range.trimmed_range)
 }
 
 fn format_elapsed(duration: Duration) -> String {
@@ -409,11 +509,12 @@ impl EditorPanel {
             replace_input: replace_input.clone(),
             data_source_manager,
             focus_handle: cx.focus_handle(),
-            last_saved_content: content,
+            last_saved_content: content.clone(),
             active_query: None,
             query_decoration_override: None,
             query_decoration_override_snapshot: None,
             query_executions: Vec::new(),
+            last_query_execution_text: content,
             next_query_execution_id: 1,
             elapsed_timer_task: None,
             search_open: false,
@@ -449,6 +550,9 @@ impl EditorPanel {
                     };
                     if this.last_observed_snapshot.as_ref() == Some(&snapshot) {
                         return;
+                    }
+                    if this.last_query_execution_text != snapshot.text {
+                        this.update_query_execution_ranges(&snapshot.text, cx);
                     }
                     let cursor_moved_without_edit =
                         previous_snapshot.as_ref().is_some_and(|previous| {
@@ -755,8 +859,9 @@ impl EditorPanel {
         let range = range?;
         let id = self.next_query_execution_id;
         self.next_query_execution_id += 1;
-        self.query_executions
-            .retain(|marker| marker.range.trimmed_range != range.trimmed_range);
+        let text = self.editor.read(cx).value().to_string();
+        self.last_query_execution_text = text;
+        self.cleanup_query_execution_markers_for_range(&range);
         self.query_executions.push(QueryExecutionMarker {
             id,
             range,
@@ -767,6 +872,12 @@ impl EditorPanel {
         self.apply_query_execution_adornments(cx);
         self.start_elapsed_timer(cx);
         Some(id)
+    }
+
+    fn cleanup_query_execution_markers_for_range(&mut self, range: &QueryRange) {
+        self.query_executions.retain(|marker| {
+            !query_execution_marker_conflicts(&self.last_query_execution_text, marker, range)
+        });
     }
 
     pub(crate) fn finish_query_execution(
@@ -791,6 +902,28 @@ impl EditorPanel {
             };
             self.apply_query_execution_adornments(cx);
         }
+    }
+
+    fn update_query_execution_ranges(&mut self, new_text: &str, cx: &mut Context<Self>) {
+        let Some(delta) = text_edit_delta(&self.last_query_execution_text, new_text) else {
+            return;
+        };
+
+        self.last_query_execution_text = new_text.to_string();
+
+        if self.query_executions.is_empty() {
+            return;
+        }
+
+        self.query_executions = self
+            .query_executions
+            .drain(..)
+            .filter_map(|mut marker| {
+                marker.range = update_query_range_for_edit(&marker.range, &delta, new_text)?;
+                Some(marker)
+            })
+            .collect();
+        self.apply_query_execution_adornments(cx);
     }
 
     fn start_elapsed_timer(&mut self, cx: &mut Context<Self>) {
@@ -829,22 +962,27 @@ impl EditorPanel {
         let text = self.editor.read(cx).value().to_string();
         let mut gutter_adornments = Vec::new();
         let mut inline_adornments = Vec::new();
+        let mut adorned_lines = HashSet::new();
 
-        for marker in &self.query_executions {
+        for marker in self.query_executions.iter().rev() {
             if marker.range.trimmed_range.start > text.len() {
                 continue;
             }
 
             let line = line_number_for_offset(&text, marker.range.trimmed_range.start);
+            if !adorned_lines.insert(line) {
+                continue;
+            }
+
             let (icon, color, spin) = match marker.status {
                 QueryExecutionStatus::Running { .. } => {
                     (IconName::Loader, hsla(0.0, 0.0, 0.65, 0.9), true)
                 }
                 QueryExecutionStatus::Succeeded => {
-                    (IconName::CircleCheck, hsla(0.34, 0.55, 0.48, 1.0), false)
+                    (IconName::Check, hsla(0.34, 0.55, 0.48, 1.0), false)
                 }
                 QueryExecutionStatus::Failed => {
-                    (IconName::CircleX, hsla(0.0, 0.72, 0.58, 1.0), false)
+                    (IconName::Close, hsla(0.0, 0.72, 0.58, 1.0), false)
                 }
             };
 
@@ -1497,6 +1635,98 @@ mod tests {
         assert_eq!(query.range, range);
         assert_eq!(query.trimmed_range, 13..22);
         assert_eq!(query.text, "select 2;");
+    }
+
+    #[test]
+    fn query_execution_range_follows_inserted_lines_before_query() {
+        let old_text = "select 1;\nselect 1;";
+        let new_text = "-- added\n\nselect 1;\nselect 1;";
+        let marker = QueryRange {
+            range: 10..19,
+            trimmed_range: 10..19,
+            text: "select 1;".to_string(),
+        };
+        let delta = text_edit_delta(old_text, new_text).unwrap();
+        let updated = update_query_range_for_edit(&marker, &delta, new_text).unwrap();
+
+        assert_eq!(updated.trimmed_range, 20..29);
+        assert_eq!(&new_text[updated.trimmed_range.clone()], "select 1;");
+    }
+
+    #[test]
+    fn query_execution_range_does_not_jump_to_duplicate_query_text() {
+        let old_text = "select 1;\nselect 1;";
+        let new_text = "select 1;\n\nselect 1;";
+        let marker = QueryRange {
+            range: 10..19,
+            trimmed_range: 10..19,
+            text: "select 1;".to_string(),
+        };
+        let delta = text_edit_delta(old_text, new_text).unwrap();
+        let updated = update_query_range_for_edit(&marker, &delta, new_text).unwrap();
+
+        assert_eq!(updated.trimmed_range, 11..20);
+        assert_eq!(&new_text[updated.trimmed_range.clone()], "select 1;");
+    }
+
+    #[test]
+    fn query_execution_range_is_removed_when_query_is_deleted() {
+        let old_text = "select 1;\nselect 2;";
+        let new_text = "select 1;\n";
+        let marker = QueryRange {
+            range: 10..19,
+            trimmed_range: 10..19,
+            text: "select 2;".to_string(),
+        };
+        let delta = text_edit_delta(old_text, new_text).unwrap();
+
+        assert!(update_query_range_for_edit(&marker, &delta, new_text).is_none());
+    }
+
+    #[test]
+    fn query_execution_marker_conflicts_on_same_gutter_line() {
+        let text = "select 1; select 2;\nselect 3;";
+        let marker = QueryExecutionMarker {
+            id: 1,
+            range: QueryRange {
+                range: 0..9,
+                trimmed_range: 0..9,
+                text: "select 1;".to_string(),
+            },
+            status: QueryExecutionStatus::Succeeded,
+        };
+        let next_range = QueryRange {
+            range: 10..19,
+            trimmed_range: 10..19,
+            text: "select 2;".to_string(),
+        };
+
+        assert!(query_execution_marker_conflicts(text, &marker, &next_range));
+    }
+
+    #[test]
+    fn query_execution_marker_does_not_conflict_on_different_gutter_line() {
+        let text = "select 1;\nselect 2;";
+        let marker = QueryExecutionMarker {
+            id: 1,
+            range: QueryRange {
+                range: 0..9,
+                trimmed_range: 0..9,
+                text: "select 1;".to_string(),
+            },
+            status: QueryExecutionStatus::Succeeded,
+        };
+        let next_range = QueryRange {
+            range: 10..19,
+            trimmed_range: 10..19,
+            text: "select 2;".to_string(),
+        };
+
+        assert!(!query_execution_marker_conflicts(
+            text,
+            &marker,
+            &next_range
+        ));
     }
 
     #[test]

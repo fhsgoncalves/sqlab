@@ -158,6 +158,7 @@ struct CompletionContextData {
 impl CompletionContextData {
     fn new(rope: &Rope, offset: usize, schema: &DatabaseSchema) -> Self {
         let text = rope.to_string();
+        let offset = char_boundary_at_or_before(&text, offset);
         let statement_start = text[..offset]
             .rfind(';')
             .map(|ix| ix + 1)
@@ -166,7 +167,7 @@ impl CompletionContextData {
             .find(';')
             .map(|ix| offset + ix)
             .unwrap_or(text.len());
-        let current_token = current_completion_token(rope, offset);
+        let current_token = current_token_before_cursor(&text, offset);
         let mut replace_start = offset.saturating_sub(current_token.len());
         let mut prefix = current_token.clone();
         let mut qualifier = None;
@@ -175,10 +176,8 @@ impl CompletionContextData {
             prefix = after_dot.to_string();
             qualifier = (!before_dot.is_empty()).then(|| before_dot.to_string());
             replace_start = offset.saturating_sub(prefix.len());
-        } else if replace_start > 0
-            && rope.slice(replace_start - 1..replace_start).to_string() == "."
-        {
-            qualifier = previous_identifier(rope, replace_start - 1);
+        } else if let Some((dot_start, '.')) = previous_char(&text, replace_start) {
+            qualifier = previous_identifier(rope, dot_start);
         }
 
         let statement = text[statement_start..statement_end].to_string();
@@ -1366,11 +1365,13 @@ fn is_sqlite_reserved_token(token: &str) -> bool {
 }
 
 fn previous_identifier(rope: &Rope, before_offset: usize) -> Option<String> {
-    let text = rope.slice(0..before_offset).to_string();
+    let text = rope.to_string();
+    let before_offset = char_boundary_at_or_before(&text, before_offset);
+    let text = &text[..before_offset];
     let identifier = text
         .chars()
         .rev()
-        .take_while(|ch| *ch == '_' || *ch == '.' || ch.is_ascii_alphanumeric())
+        .take_while(|ch| *ch == '_' || *ch == '.' || ch.is_alphanumeric())
         .collect::<String>()
         .chars()
         .rev()
@@ -1379,13 +1380,9 @@ fn previous_identifier(rope: &Rope, before_offset: usize) -> Option<String> {
     (!identifier.is_empty()).then_some(identifier)
 }
 
-fn current_completion_token(rope: &Rope, offset: usize) -> String {
-    let text = rope.slice(0..offset).to_string();
-    current_token_before_cursor(&text, text.len())
-}
-
 fn current_token_before_cursor(text: &str, offset: usize) -> String {
-    text[..offset.min(text.len())]
+    let offset = char_boundary_at_or_before(text, offset);
+    text[..offset]
         .chars()
         .rev()
         .take_while(|ch| is_completion_token_char(*ch))
@@ -1396,7 +1393,20 @@ fn current_token_before_cursor(text: &str, offset: usize) -> String {
 }
 
 fn is_completion_token_char(ch: char) -> bool {
-    ch == '_' || ch == '.' || ch == '"' || ch.is_ascii_alphanumeric()
+    ch == '_' || ch == '.' || ch == '"' || ch.is_alphanumeric()
+}
+
+fn previous_char(text: &str, offset: usize) -> Option<(usize, char)> {
+    let offset = char_boundary_at_or_before(text, offset);
+    text[..offset].char_indices().next_back()
+}
+
+fn char_boundary_at_or_before(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 fn matches_prefix(value: &str, prefix: &str) -> bool {
@@ -1570,6 +1580,30 @@ mod tests {
         assert_eq!(context.prefix, "");
         assert_eq!(context.replace_start, offset);
         assert_eq!(context.qualifier.as_deref(), Some("u"));
+    }
+
+    #[test]
+    fn handles_completion_after_multibyte_character() {
+        let text = "select é";
+        let rope = Rope::from(text);
+        let schema = DatabaseSchema::default();
+        let context = CompletionContextData::new(&rope, text.len(), &schema);
+
+        assert_eq!(context.offset, text.len());
+        assert_eq!(context.prefix, "é");
+        assert_eq!(context.qualifier, None);
+    }
+
+    #[test]
+    fn handles_completion_after_multibyte_qualifier_dot() {
+        let text = "select usuário.";
+        let rope = Rope::from(text);
+        let schema = DatabaseSchema::default();
+        let context = CompletionContextData::new(&rope, text.len(), &schema);
+
+        assert_eq!(context.prefix, "");
+        assert_eq!(context.replace_start, text.len());
+        assert_eq!(context.qualifier.as_deref(), Some("usuário"));
     }
 
     #[test]

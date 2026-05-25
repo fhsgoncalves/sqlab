@@ -977,7 +977,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -3267,7 +3267,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#a27564e766272882c8d745bc48231650f095e6bb"
+source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#383259d891bf06e3bd5b2c042fc54a812cd70f9b"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3311,7 +3311,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
-source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#a27564e766272882c8d745bc48231650f095e6bb"
+source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#383259d891bf06e3bd5b2c042fc54a812cd70f9b"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3325,7 +3325,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
-source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#a27564e766272882c8d745bc48231650f095e6bb"
+source = "git+https://github.com/fhsgoncalves/gpui-component?branch=input-decoration#383259d891bf06e3bd5b2c042fc54a812cd70f9b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3848,7 +3848,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tokio",
  "tower-service",
  "tracing",
@@ -6098,7 +6098,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6135,7 +6135,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.60.2",
 ]

@@ -1666,9 +1666,12 @@ impl Workspace {
                 }
             };
 
-            cx.update_entity(&results_panel, |panel, cx| {
-                panel.set_result(query, result, succeeded, Some(config_for_result), cx);
-            });
+            let open_result_tab = should_open_result_tab(succeeded, &result);
+            if open_result_tab {
+                cx.update_entity(&results_panel, |panel, cx| {
+                    panel.set_result(query, result, succeeded, Some(config_for_result), cx);
+                });
+            }
 
             if let Some(editor) = editor {
                 cx.update_entity(&editor, |editor, cx| {
@@ -2189,6 +2192,10 @@ fn error_result(error: DataSourceError) -> QueryResult {
     }
 }
 
+fn should_open_result_tab(succeeded: bool, result: &QueryResult) -> bool {
+    !succeeded || !result.columns.is_empty() || !result.rows.is_empty()
+}
+
 fn connection_fingerprints(configs: &[DataSourceConfig]) -> HashMap<String, String> {
     configs
         .iter()
@@ -2208,4 +2215,44 @@ fn connection_fingerprints(configs: &[DataSourceConfig]) -> HashMap<String, Stri
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn query_result(columns: Vec<&str>, rows: Vec<Vec<&str>>) -> QueryResult {
+        QueryResult {
+            columns: columns.into_iter().map(str::to_string).collect(),
+            column_metadata: Vec::new(),
+            rows: rows
+                .into_iter()
+                .map(|row| row.into_iter().map(str::to_string).collect())
+                .collect(),
+            nulls: Vec::new(),
+            row_count: 0,
+            execution_time_ms: 0,
+        }
+    }
+
+    #[test]
+    fn opens_result_tab_for_empty_select_result() {
+        let result = query_result(vec!["id"], Vec::new());
+
+        assert!(should_open_result_tab(true, &result));
+    }
+
+    #[test]
+    fn skips_result_tab_for_success_without_result_set() {
+        let result = query_result(Vec::new(), Vec::new());
+
+        assert!(!should_open_result_tab(true, &result));
+    }
+
+    #[test]
+    fn opens_result_tab_for_errors() {
+        let result = query_result(Vec::new(), Vec::new());
+
+        assert!(should_open_result_tab(false, &result));
+    }
 }
