@@ -7,7 +7,7 @@ use gpui::{Context, Entity, Task, Window};
 use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionItemLabelDetails,
-    CompletionResponse, CompletionTextEdit, Documentation, TextEdit,
+    CompletionResponse, CompletionTextEdit, TextEdit,
 };
 use serde_json::json;
 
@@ -710,7 +710,7 @@ fn scored_completion_item(
     context: &CompletionContextData,
     label: &str,
     kind: CompletionItemKind,
-    documentation: Option<String>,
+    detail: Option<String>,
     insert_text: Option<String>,
     right: Option<String>,
     score: usize,
@@ -721,15 +721,15 @@ fn scored_completion_item(
         item: CompletionItem {
             label: label.to_string(),
             kind: Some(kind),
+            detail: detail.clone(),
             label_details: Some(CompletionItemLabelDetails {
-                detail: documentation.clone(),
+                detail,
                 description: right.clone(),
             }),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                 range: context.replace_range(),
                 new_text,
             })),
-            documentation: documentation.map(Documentation::String),
             data: Some(json!({ "right": right })),
             ..Default::default()
         },
@@ -1573,6 +1573,27 @@ mod tests {
                 .as_deref(),
             Some("(customers)")
         );
+    }
+
+    #[test]
+    fn completion_metadata_does_not_open_documentation_panel() {
+        let rope = Rope::from("select * from ");
+        let schema = test_schema();
+        let config = DataSourceConfig {
+            name: "local".to_string(),
+            database: "app".to_string(),
+            ..Default::default()
+        };
+        let context = CompletionContextData::new(&rope, rope.len(), &schema);
+
+        let items = table_reference_items(&context, &schema, &config);
+        let customers_item = items
+            .iter()
+            .find(|item| item.item.label == "customers")
+            .unwrap();
+
+        assert_eq!(customers_item.item.detail.as_deref(), Some("(app.public)"));
+        assert!(customers_item.item.documentation.is_none());
     }
 
     #[test]
