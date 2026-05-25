@@ -13,4 +13,6 @@ pub use query_selector::{
     ConfirmSelectedQuery, QueryChoice, QuerySelected, QuerySelector, SelectNextQuery,
     SelectPreviousQuery,
 };
-pub use tabs::{CycleTabBackward, CycleTabForward, EditorTabs, NavigateBack, NavigateForward};
+pub use tabs::{
+    CloseActiveTab, CycleTabBackward, CycleTabForward, EditorTabs, NavigateBack, NavigateForward,
+};

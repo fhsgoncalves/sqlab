@@ -17,21 +17,24 @@ mod workspace;
 
 use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
-    ConfirmSelectedQuery, CycleTabBackward, CycleTabForward, ExecuteQuery, FormatQuery,
-    NavigateBack, NavigateForward, SaveFile, SelectNextQuery, SelectPreviousQuery,
-    ToggleCommentLines, ToggleEditorReplace, ToggleEditorSearch,
+    CloseActiveTab as EditorCloseActiveTab, ConfirmSelectedQuery, CycleTabBackward,
+    CycleTabForward, ExecuteQuery, FormatQuery, NavigateBack, NavigateForward, SaveFile,
+    SelectNextQuery, SelectPreviousQuery, ToggleCommentLines, ToggleEditorReplace,
+    ToggleEditorSearch,
 };
 use ui::panels::file_search::ToggleFileSearch;
 use ui::panels::project_search::ToggleProjectSearch;
 use ui::panels::result::{
-    CopyResultSelection, CycleTabBackward as ResultCycleTabBackward,
-    CycleTabForward as ResultCycleTabForward, EditResultCell, ExtendResultSelectionDown,
-    ExtendResultSelectionLeft, ExtendResultSelectionRight, ExtendResultSelectionUp,
-    SelectResultCellDown, SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp,
+    CloseActiveTab as ResultCloseActiveTab, CopyResultSelection,
+    CycleTabBackward as ResultCycleTabBackward, CycleTabForward as ResultCycleTabForward,
+    EditResultCell, ExtendResultSelectionDown, ExtendResultSelectionLeft,
+    ExtendResultSelectionRight, ExtendResultSelectionUp, SelectResultCellDown,
+    SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp,
 };
 use ui::panels::terminal::{
-    CopyTerminalSelection, CycleTabBackward as TerminalCycleTabBackward,
-    CycleTabForward as TerminalCycleTabForward, NewTerminalTab, Paste,
+    CloseActiveTab as TerminalCloseActiveTab, CopyTerminalSelection,
+    CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward,
+    NewTerminalTab, Paste,
 };
 use workspace::{
     CloseRecentFolders, ConfirmRecentFolder, ConfirmSelectedConnection, OpenFolder,
@@ -79,6 +82,11 @@ fn set_app_menus(cx: &mut gpui::App) {
             MenuItem::separator(),
             MenuItem::action("Save", SaveFile),
         ]),
+        Menu::new("Tab").items(vec![
+            MenuItem::action("Close Editor Tab", EditorCloseActiveTab),
+            MenuItem::action("Close Terminal Tab", TerminalCloseActiveTab),
+            MenuItem::action("Close Results Tab", ResultCloseActiveTab),
+        ]),
     ]);
 }
 
@@ -122,6 +130,9 @@ fn main() {
 
         cx.bind_keys(vec![
             KeyBinding::new("cmd-w", ClosePanel, None),
+            KeyBinding::new("cmd-w", EditorCloseActiveTab, Some("editor_tabs")),
+            KeyBinding::new("cmd-w", TerminalCloseActiveTab, Some("terminal_panel")),
+            KeyBinding::new("cmd-w", ResultCloseActiveTab, Some("results_panel")),
             KeyBinding::new("cmd-o", OpenRecentFolders, None),
             KeyBinding::new("cmd-shift-o", OpenFolder, None),
             KeyBinding::new("cmd-e", ToggleFileSearch, None),

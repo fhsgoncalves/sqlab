@@ -15,9 +15,9 @@ use async_channel::{Receiver, Sender};
 use gpui::{
     App, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement,
     IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Render, ScrollWheelEvent, StatefulInteractiveElement, Styled,
-    TextRun, TextStyle, WeakEntity, WhiteSpace, Window, actions, canvas, div, fill, point,
-    prelude::FluentBuilder, px, size,
+    MouseUpEvent, ParentElement, Render, ScrollHandle, ScrollWheelEvent,
+    StatefulInteractiveElement, Styled, TextRun, TextStyle, WeakEntity, WhiteSpace, Window,
+    actions, canvas, div, fill, point, prelude::FluentBuilder, px, size,
 };
 
 use gpui_component::{
@@ -38,7 +38,8 @@ actions!(
         CycleTabForward,
         CycleTabBackward,
         Paste,
-        CopyTerminalSelection
+        CopyTerminalSelection,
+        CloseActiveTab
     ]
 );
 
@@ -57,6 +58,7 @@ pub struct TerminalPanel {
     working_directory: Option<PathBuf>,
     selection: Option<TerminalSelection>,
     selecting: bool,
+    tab_scroll_handle: ScrollHandle,
 }
 
 struct TerminalSession {
@@ -218,6 +220,7 @@ impl TerminalPanel {
             working_directory: Some(working_directory),
             selection: None,
             selecting: false,
+            tab_scroll_handle: ScrollHandle::default(),
         };
         panel.start_event_task(cx);
         panel.new_tab(_window, cx);
@@ -246,6 +249,7 @@ impl TerminalPanel {
             self.working_directory.clone(),
         ));
         self.active_ix = self.sessions.len().saturating_sub(1);
+        self.scroll_to_active_tab();
         cx.notify();
     }
 
@@ -336,6 +340,7 @@ impl TerminalPanel {
         } else if self.active_ix >= self.sessions.len() {
             self.active_ix = self.sessions.len().saturating_sub(1);
         }
+        self.scroll_to_active_tab();
         cx.notify();
     }
 
@@ -364,6 +369,7 @@ impl TerminalPanel {
     ) {
         if self.sessions.len() > 1 {
             self.active_ix = (self.active_ix + 1) % self.sessions.len();
+            self.scroll_to_active_tab();
             cx.notify();
             window.focus(&self.focus_handle, cx);
         }
@@ -377,9 +383,59 @@ impl TerminalPanel {
     ) {
         if self.sessions.len() > 1 {
             self.active_ix = (self.active_ix + self.sessions.len() - 1) % self.sessions.len();
+            self.scroll_to_active_tab();
             cx.notify();
             window.focus(&self.focus_handle, cx);
         }
+    }
+
+    fn scroll_to_active_tab(&self) {
+        if self.sessions.is_empty() {
+            return;
+        }
+        let mut tab_left = px(0.);
+        let mut tab_width = px(0.);
+        for (ix, session) in self.sessions.iter().enumerate() {
+            let label = session.title.clone();
+            let estimated_width = px(48.0 + label.chars().count() as f32 * 7.5);
+            if ix == self.active_ix {
+                tab_width = estimated_width;
+                break;
+            }
+            tab_left += estimated_width;
+        }
+        let tab_right = tab_left + tab_width;
+
+        let viewport = self.tab_scroll_handle.bounds();
+        let viewport_width = viewport.size.width;
+        if viewport_width > px(0.) {
+            let current_offset = self.tab_scroll_handle.offset();
+            let current_scroll_x = (-current_offset.x).max(px(0.));
+            let viewport_right = current_scroll_x + viewport_width;
+
+            let mut target_scroll_x = current_scroll_x;
+            if tab_left < current_scroll_x {
+                target_scroll_x = tab_left;
+            } else if tab_right > viewport_right {
+                target_scroll_x = (tab_right - viewport_width).max(px(0.));
+            }
+
+            if target_scroll_x != current_scroll_x {
+                self.tab_scroll_handle
+                    .set_offset(point(-target_scroll_x, px(0.)));
+            }
+        } else {
+            self.tab_scroll_handle.set_offset(point(-tab_left, px(0.)));
+        }
+    }
+
+    fn close_active_tab(
+        &mut self,
+        _: &CloseActiveTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_tab(self.active_ix, cx);
     }
 
     fn on_action_paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
@@ -439,6 +495,7 @@ impl TerminalPanel {
         } else if from_ix > self.active_ix && to_ix <= self.active_ix {
             self.active_ix += 1;
         }
+        self.scroll_to_active_tab();
         cx.notify();
     }
 
@@ -1088,8 +1145,10 @@ impl Render for TerminalPanel {
 
         let tab_bar = TabBar::new("terminal-tab-bar")
             .selected_index(active_ix)
+            .scroll_handle(self.tab_scroll_handle.clone())
             .on_click(cx.listener(|this, ix: &usize, _window, cx| {
                 this.active_ix = *ix;
+                this.scroll_to_active_tab();
                 cx.notify();
             }))
             .on_reorder(cx.listener(|this, (from_ix, to_ix), _, cx| {
@@ -1138,6 +1197,7 @@ impl Render for TerminalPanel {
             .on_action(cx.listener(Self::on_cycle_tab_backward))
             .on_action(cx.listener(Self::on_action_paste))
             .on_action(cx.listener(Self::on_action_copy_terminal_selection))
+            .on_action(cx.listener(Self::close_active_tab))
             .capture_key_down(cx.listener(Self::handle_key_down))
             .on_click(cx.listener(|this, _, window, cx| {
                 window.focus(&this.focus_handle, cx);

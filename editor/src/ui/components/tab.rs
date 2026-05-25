@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, hsla,
-    prelude::FluentBuilder, px,
+    ParentElement, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    Window, div, hsla, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, h_flex};
 
@@ -243,11 +243,13 @@ impl RenderOnce for Tab {
 pub struct TabBar {
     id: SharedString,
     tabs: Vec<Tab>,
-    selected_index: usize,
+    frozen_prefix: Vec<Tab>,
+    selected_index: Option<usize>,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     on_reorder: Option<Rc<dyn Fn(&(usize, usize), &mut Window, &mut App) + 'static>>,
+    scroll_handle: Option<ScrollHandle>,
 }
 
 impl TabBar {
@@ -255,12 +257,19 @@ impl TabBar {
         Self {
             id: id.into(),
             tabs: Vec::new(),
-            selected_index: 0,
+            frozen_prefix: Vec::new(),
+            selected_index: None,
             on_click: None,
             prefix: None,
             suffix: None,
             on_reorder: None,
+            scroll_handle: None,
         }
+    }
+
+    pub fn scroll_handle(mut self, handle: ScrollHandle) -> Self {
+        self.scroll_handle = Some(handle);
+        self
     }
 
     pub fn child(mut self, tab: impl Into<Tab>) -> Self {
@@ -268,8 +277,13 @@ impl TabBar {
         self
     }
 
+    pub fn frozen_prefix(mut self, tab: impl Into<Tab>) -> Self {
+        self.frozen_prefix.push(tab.into());
+        self
+    }
+
     pub fn selected_index(mut self, index: usize) -> Self {
-        self.selected_index = index;
+        self.selected_index = Some(index);
         self
     }
 
@@ -306,9 +320,30 @@ impl ParentElement for TabBar {
 impl RenderOnce for TabBar {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let on_reorder = self.on_reorder.clone();
+        let tabs = self.tabs.into_iter().enumerate().map(|(ix, tab)| {
+            let selected = self.selected_index.map_or(false, |idx| ix == idx);
+            let on_click = self.on_click.clone();
+            let on_reorder = on_reorder.clone();
+            tab.id(format!("tab-{}", ix))
+                .selected(selected)
+                .index(ix)
+                .on_click({
+                    let on_click = on_click.clone();
+                    move |_, window, cx| {
+                        if let Some(on_click) = on_click.as_ref() {
+                            on_click(&ix, window, cx);
+                        }
+                    }
+                })
+                .when_some(on_reorder, |this, on_reorder| {
+                    this.on_tab_drop(move |from_ix, to_ix, window, cx| {
+                        on_reorder(&(from_ix, to_ix), window, cx);
+                    })
+                })
+        });
 
         div()
-            .id(self.id)
+            .id(self.id.clone())
             .flex()
             .flex_row()
             .items_center()
@@ -319,28 +354,25 @@ impl RenderOnce for TabBar {
             .border_color(cx.theme().border)
             .overflow_hidden()
             .when_some(self.prefix, |this, prefix| this.child(prefix))
-            .children(self.tabs.into_iter().enumerate().map(|(ix, tab)| {
-                let selected = ix == self.selected_index;
-                let on_click = self.on_click.clone();
-                let on_reorder = on_reorder.clone();
-                tab.id(format!("tab-{}", ix))
-                    .selected(selected)
-                    .index(ix)
-                    .on_click({
-                        let on_click = on_click.clone();
-                        move |_, window, cx| {
-                            if let Some(on_click) = on_click.as_ref() {
-                                on_click(&ix, window, cx);
-                            }
-                        }
+            .children(
+                self.frozen_prefix
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, tab)| tab.id(format!("frozen-tab-{}", ix))),
+            )
+            .child(
+                div()
+                    .id(format!("{}-scroll", self.id))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .flex_1()
+                    .overflow_x_scroll()
+                    .when_some(self.scroll_handle, |this, handle| {
+                        this.track_scroll(&handle)
                     })
-                    .when_some(on_reorder, |this, on_reorder| {
-                        this.on_tab_drop(move |from_ix, to_ix, window, cx| {
-                            on_reorder(&(from_ix, to_ix), window, cx);
-                        })
-                    })
-            }))
-            .child(div().flex_1().h_full())
+                    .children(tabs),
+            )
             .when_some(self.suffix, |this, suffix| this.child(suffix))
     }
 }

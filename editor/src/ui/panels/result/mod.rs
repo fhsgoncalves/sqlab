@@ -7,9 +7,9 @@ use std::{
 use chrono::Local;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Div, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Modifiers, ParentElement, Pixels, Render, Stateful,
-    StatefulInteractiveElement, Styled, TextAlign, WeakEntity, Window, actions, div, hsla, point,
-    prelude::FluentBuilder, rgb,
+    InteractiveElement, IntoElement, Modifiers, ParentElement, Pixels, Render, ScrollHandle,
+    Stateful, StatefulInteractiveElement, Styled, TextAlign, WeakEntity, Window, actions, div,
+    hsla, point, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
@@ -47,6 +47,7 @@ actions!(
         SelectResultCellRight,
         SelectResultCellUp,
         SelectResultCellDown,
+        CloseActiveTab,
     ]
 );
 
@@ -122,6 +123,7 @@ pub struct ResultPanel {
     activity_tracker: gpui::Entity<ActivityTracker>,
     submitting_edits: bool,
     edit_error: Option<String>,
+    tab_scroll_handle: ScrollHandle,
 }
 
 #[derive(Clone)]
@@ -1080,6 +1082,7 @@ impl ResultPanel {
             activity_tracker,
             submitting_edits: false,
             edit_error: None,
+            tab_scroll_handle: ScrollHandle::default(),
         }
     }
 
@@ -1121,7 +1124,54 @@ impl ResultPanel {
         };
         self.executions.push(execution);
         self.active_tab = self.executions.len();
+        self.scroll_to_active_tab();
         self.rebuild_table(window, cx);
+    }
+
+    fn scroll_to_active_tab(&self) {
+        if self.active_tab == 0 {
+            // History is selected; scroll scrollable area all the way to the left
+            self.tab_scroll_handle.set_offset(point(px(0.), px(0.)));
+            return;
+        }
+        let active_ix = self.active_tab - 1;
+        if active_ix >= self.executions.len() {
+            return;
+        }
+        let mut tab_left = px(0.);
+        let mut tab_width = px(0.);
+        for (ix, execution) in self.executions.iter().enumerate() {
+            let label = format!("Result {}", execution.id);
+            let estimated_width = px(48.0 + label.chars().count() as f32 * 7.5);
+            if ix == active_ix {
+                tab_width = estimated_width;
+                break;
+            }
+            tab_left += estimated_width;
+        }
+        let tab_right = tab_left + tab_width;
+
+        let viewport = self.tab_scroll_handle.bounds();
+        let viewport_width = viewport.size.width;
+        if viewport_width > px(0.) {
+            let current_offset = self.tab_scroll_handle.offset();
+            let current_scroll_x = (-current_offset.x).max(px(0.));
+            let viewport_right = current_scroll_x + viewport_width;
+
+            let mut target_scroll_x = current_scroll_x;
+            if tab_left < current_scroll_x {
+                target_scroll_x = tab_left;
+            } else if tab_right > viewport_right {
+                target_scroll_x = (tab_right - viewport_width).max(px(0.));
+            }
+
+            if target_scroll_x != current_scroll_x {
+                self.tab_scroll_handle
+                    .set_offset(point(-target_scroll_x, px(0.)));
+            }
+        } else {
+            self.tab_scroll_handle.set_offset(point(-tab_left, px(0.)));
+        }
     }
 
     fn rebuild_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1467,6 +1517,7 @@ impl ResultPanel {
         } else if self.active_tab > closed_tab {
             self.active_tab -= 1;
         }
+        self.scroll_to_active_tab();
         self.rebuild_table(window, cx);
         cx.notify();
     }
@@ -1788,6 +1839,7 @@ impl ResultPanel {
     ) {
         if self.executions.len() + 1 > 1 {
             self.active_tab = (self.active_tab + 1) % (self.executions.len() + 1);
+            self.scroll_to_active_tab();
             self.rebuild_table(window, cx);
             cx.notify();
             window.focus(&self.focus_handle, cx);
@@ -1803,9 +1855,21 @@ impl ResultPanel {
         if self.executions.len() + 1 > 1 {
             self.active_tab =
                 (self.active_tab + self.executions.len()) % (self.executions.len() + 1);
+            self.scroll_to_active_tab();
             self.rebuild_table(window, cx);
             cx.notify();
             window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn close_active_tab(
+        &mut self,
+        _: &CloseActiveTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_tab > 0 {
+            self.close_result_tab(self.active_tab - 1, window, cx);
         }
     }
 
@@ -1828,6 +1892,7 @@ impl ResultPanel {
         } else if from_ix > self.active_tab - 1 && to_ix <= self.active_tab - 1 {
             self.active_tab += 1;
         }
+        self.scroll_to_active_tab();
         self.rebuild_table(window, cx);
         cx.notify();
     }
@@ -1907,17 +1972,32 @@ impl Render for ResultPanel {
         let submit_disabled = !has_dirty_edits || self.submitting_edits;
 
         let entity = cx.entity();
-        let tab_bar = TabBar::new("results-tab-bar")
-            .selected_index(self.active_tab)
+        let history_tab = Tab::new()
+            .label("History")
+            .selected(self.active_tab == 0)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.active_tab = 0;
+                this.scroll_to_active_tab();
+                this.rebuild_table(window, cx);
+                cx.notify();
+            }));
+
+        let mut tab_bar = TabBar::new("results-tab-bar")
+            .scroll_handle(self.tab_scroll_handle.clone())
             .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                this.active_tab = *ix;
+                this.active_tab = *ix + 1;
+                this.scroll_to_active_tab();
                 this.rebuild_table(window, cx);
                 cx.notify();
             }))
             .on_reorder(cx.listener(|this, (from_ix, to_ix), window, cx| {
                 this.reorder_tab(*from_ix, *to_ix, window, cx);
             }))
-            .child(Tab::new().label("History").selected(self.active_tab == 0));
+            .frozen_prefix(history_tab);
+
+        if self.active_tab > 0 {
+            tab_bar = tab_bar.selected_index(self.active_tab - 1);
+        }
 
         let tab_bar =
             self.executions
@@ -1960,6 +2040,7 @@ impl Render for ResultPanel {
             .on_action(cx.listener(Self::on_cycle_tab_forward))
             .on_action(cx.listener(Self::on_cycle_tab_backward))
             .on_action(cx.listener(Self::start_edit_selected_cell))
+            .on_action(cx.listener(Self::close_active_tab))
             .on_click(cx.listener(|this, _, window, cx| {
                 window.focus(&this.focus_handle, cx);
             }))

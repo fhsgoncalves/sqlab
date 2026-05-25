@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, Subscription, WeakEntity,
-    Window, actions, div, hsla, prelude::FluentBuilder, px, rgb,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, Styled, Subscription,
+    WeakEntity, Window, actions, div, hsla, point, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, WindowExt,
@@ -32,7 +32,8 @@ actions!(
         CycleTabForward,
         CycleTabBackward,
         NavigateBack,
-        NavigateForward
+        NavigateForward,
+        CloseActiveTab
     ]
 );
 
@@ -51,6 +52,7 @@ pub struct EditorTabs {
     navigation_history: NavigationHistory,
     navigation_subscriptions: Vec<Subscription>,
     suppress_navigation_recording: bool,
+    tab_scroll_handle: ScrollHandle,
 }
 
 enum EditorTab {
@@ -243,6 +245,7 @@ impl EditorTabs {
             navigation_history: NavigationHistory::default(),
             navigation_subscriptions: Vec::new(),
             suppress_navigation_recording: false,
+            tab_scroll_handle: ScrollHandle::default(),
         }
     }
 
@@ -276,6 +279,7 @@ impl EditorTabs {
         self.tabs.push(EditorTab::Sql(editor));
         self.active_ix = self.tabs.len() - 1;
         self.sync_active_connection(cx);
+        self.scroll_to_active_tab(cx);
         cx.notify();
     }
 
@@ -300,6 +304,7 @@ impl EditorTabs {
         self.tabs.push(EditorTab::Diagram(diagram));
         self.active_ix = self.tabs.len() - 1;
         self.sync_active_connection(cx);
+        self.scroll_to_active_tab(cx);
         cx.notify();
     }
 
@@ -326,6 +331,7 @@ impl EditorTabs {
         self.tabs.push(EditorTab::Data(data_editor));
         self.active_ix = self.tabs.len() - 1;
         self.sync_active_connection(cx);
+        self.scroll_to_active_tab(cx);
         cx.notify();
     }
 
@@ -372,6 +378,7 @@ impl EditorTabs {
             }
             self.sync_current_navigation_point(cx);
             self.sync_active_connection(cx);
+            self.scroll_to_active_tab(cx);
             cx.notify();
         }
     }
@@ -414,6 +421,7 @@ impl EditorTabs {
             self.active_ix = (self.active_ix + 1) % self.tabs.len();
             self.sync_current_navigation_point(cx);
             self.sync_active_connection(cx);
+            self.scroll_to_active_tab(cx);
             cx.notify();
             self.focus_active_editor(window, cx);
         }
@@ -430,9 +438,19 @@ impl EditorTabs {
             self.active_ix = (self.active_ix + self.tabs.len() - 1) % self.tabs.len();
             self.sync_current_navigation_point(cx);
             self.sync_active_connection(cx);
+            self.scroll_to_active_tab(cx);
             cx.notify();
             self.focus_active_editor(window, cx);
         }
+    }
+
+    fn close_active_tab(
+        &mut self,
+        _: &CloseActiveTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_tab(self.active_ix, cx);
     }
 
     fn select_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -443,6 +461,7 @@ impl EditorTabs {
         self.active_ix = ix;
         self.sync_current_navigation_point(cx);
         self.sync_active_connection(cx);
+        self.scroll_to_active_tab(cx);
         cx.notify();
         self.focus_active_editor(window, cx);
     }
@@ -461,6 +480,7 @@ impl EditorTabs {
             self.active_ix += 1;
         }
         self.sync_active_connection(cx);
+        self.scroll_to_active_tab(cx);
         cx.notify();
     }
 
@@ -567,6 +587,46 @@ impl EditorTabs {
         if let Some(editor) = self.active_editor() {
             let focus_handle = editor.read(cx).editor_focus_handle(cx);
             window.focus(&focus_handle, cx);
+        }
+    }
+
+    fn scroll_to_active_tab(&self, cx: &App) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let mut tab_left = px(0.);
+        let mut tab_width = px(0.);
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            let label = tab.label(cx);
+            let estimated_width = px(48.0 + label.chars().count() as f32 * 7.5);
+            if ix == self.active_ix {
+                tab_width = estimated_width;
+                break;
+            }
+            tab_left += estimated_width;
+        }
+        let tab_right = tab_left + tab_width;
+
+        let viewport = self.tab_scroll_handle.bounds();
+        let viewport_width = viewport.size.width;
+        if viewport_width > px(0.) {
+            let current_offset = self.tab_scroll_handle.offset();
+            let current_scroll_x = (-current_offset.x).max(px(0.));
+            let viewport_right = current_scroll_x + viewport_width;
+
+            let mut target_scroll_x = current_scroll_x;
+            if tab_left < current_scroll_x {
+                target_scroll_x = tab_left;
+            } else if tab_right > viewport_right {
+                target_scroll_x = (tab_right - viewport_width).max(px(0.));
+            }
+
+            if target_scroll_x != current_scroll_x {
+                self.tab_scroll_handle
+                    .set_offset(point(-target_scroll_x, px(0.)));
+            }
+        } else {
+            self.tab_scroll_handle.set_offset(point(-tab_left, px(0.)));
         }
     }
 
@@ -775,6 +835,7 @@ impl Render for EditorTabs {
 
         let tab_bar = TabBar::new("editor-tab-bar")
             .selected_index(self.active_ix)
+            .scroll_handle(self.tab_scroll_handle.clone())
             .prefix(navigation_controls)
             .suffix(h_flex().gap_1().children(zoom_btn))
             .on_click(cx.listener(|this, ix: &usize, window, cx| {
@@ -1028,12 +1089,15 @@ impl Render for EditorTabs {
 
         v_flex()
             .id("editor-tabs")
+            .key_context("editor_tabs")
             .size_full()
             .bg(cx.theme().background)
+            .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::cycle_tab_forward))
             .on_action(cx.listener(Self::cycle_tab_backward))
             .on_action(cx.listener(Self::navigate_back))
             .on_action(cx.listener(Self::navigate_forward))
+            .on_action(cx.listener(Self::close_active_tab))
             .child(tab_bar)
             .when_some(editor_toolbar, |this, toolbar| this.child(toolbar))
             .child(
