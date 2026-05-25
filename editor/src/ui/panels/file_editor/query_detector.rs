@@ -14,7 +14,7 @@ pub fn query_ranges_for_execution(text: &str, cursor: usize) -> Vec<QueryRange> 
         return ranges;
     }
 
-    if current_line(text, cursor).trim().is_empty() {
+    if current_line(text, cursor).trim().is_empty() || current_line_is_comment(text, cursor) {
         return Vec::new();
     }
 
@@ -52,7 +52,7 @@ pub fn query_ranges_at_cursor(text: &str, cursor: usize) -> Vec<QueryRange> {
         return ranges;
     }
 
-    if current_line(text, cursor).trim().is_empty() {
+    if current_line(text, cursor).trim().is_empty() || current_line_is_comment(text, cursor) {
         return Vec::new();
     }
 
@@ -276,6 +276,10 @@ fn procedural_block_contains_cursor(text: &str, query: &QueryRange, cursor: usiz
 fn current_line(text: &str, cursor: usize) -> &str {
     let cursor = cursor.min(text.len());
     &text[line_start(text, cursor)..line_end(text, cursor)]
+}
+
+fn current_line_is_comment(text: &str, cursor: usize) -> bool {
+    current_line(text, cursor).trim_start().starts_with("--")
 }
 
 fn line_start(text: &str, cursor: usize) -> usize {
@@ -867,21 +871,80 @@ fn first_keyword(text: &str) -> Option<&str> {
 
 fn trimmed_query_range(text: &str, start: usize, end: usize) -> Option<QueryRange> {
     let raw = text.get(start..end)?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
     let leading = raw.len() - raw.trim_start().len();
     let trailing = raw.len() - raw.trim_end().len();
     let trimmed_start = start + leading;
     let trimmed_end = end - trailing;
+    let (trimmed_start, trimmed_end) = trim_edge_line_comments(text, trimmed_start, trimmed_end)?;
+    let trimmed = text.get(trimmed_start..trimmed_end)?;
+
+    if trimmed.trim().is_empty() {
+        return None;
+    }
 
     Some(QueryRange {
         range: start..end,
         trimmed_range: trimmed_start..trimmed_end,
-        text: trimmed.to_string(),
+        text: trimmed.trim().to_string(),
     })
+}
+
+fn trim_edge_line_comments(text: &str, start: usize, end: usize) -> Option<(usize, usize)> {
+    if start >= end {
+        return None;
+    }
+
+    let mut start = start;
+    let mut end = end;
+
+    while start < end {
+        let line_end = text[start..end]
+            .find('\n')
+            .map(|ix| start + ix)
+            .unwrap_or(end);
+        let line = text.get(start..line_end)?;
+
+        if !line.trim().is_empty() && !line.trim_start().starts_with("--") {
+            break;
+        }
+
+        start = if line_end < end { line_end + 1 } else { end };
+        start += text[start..end]
+            .chars()
+            .take_while(|ch| ch.is_whitespace())
+            .map(char::len_utf8)
+            .sum::<usize>();
+    }
+
+    while start < end {
+        let line_start = text[start..end]
+            .rfind('\n')
+            .map(|ix| start + ix + 1)
+            .unwrap_or(start);
+        let line = text.get(line_start..end)?;
+
+        if !line.trim().is_empty() && !line.trim_start().starts_with("--") {
+            break;
+        }
+
+        end = if line_start > start {
+            line_start - 1
+        } else {
+            start
+        };
+        end -= text[start..end]
+            .chars()
+            .rev()
+            .take_while(|ch| ch.is_whitespace())
+            .map(char::len_utf8)
+            .sum::<usize>();
+    }
+
+    if start >= end {
+        return None;
+    }
+
+    Some((start, end))
 }
 
 #[cfg(test)]
@@ -951,6 +1014,40 @@ mod tests {
         let queries = query_ranges_for_execution(text, text.find("   ").unwrap() + 1);
 
         assert!(queries.is_empty());
+    }
+
+    #[test]
+    fn returns_no_query_when_cursor_is_on_line_comment() {
+        let text = "select 1;\n-- select 2;\nselect 3;";
+        let queries = query_ranges_for_execution(text, text.find("-- select").unwrap() + 3);
+
+        assert!(queries.is_empty(), "got: {queries:?}");
+    }
+
+    #[test]
+    fn does_not_treat_comment_only_text_as_query() {
+        let queries = query_ranges_in_text("-- select 1;\n  -- select 2;");
+
+        assert!(queries.is_empty(), "got: {queries:?}");
+    }
+
+    #[test]
+    fn ignores_leading_line_comments_before_query() {
+        let text = "-- setup query\nselect 1;";
+        let queries = query_ranges_for_execution(text, text.find("select 1").unwrap());
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select 1");
+        assert_eq!(&text[queries[0].trimmed_range.clone()], "select 1");
+    }
+
+    #[test]
+    fn ignores_trailing_line_comments_after_query() {
+        let text = "select 1\n-- trailing note\nselect 2";
+        let queries = query_ranges_for_execution(text, text.find("select 1").unwrap());
+
+        assert_eq!(queries.len(), 1, "got: {queries:?}");
+        assert_eq!(queries[0].text, "select 1");
     }
 
     #[test]
