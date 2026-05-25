@@ -942,7 +942,6 @@ fn terminal_title_left(title: &str) -> Option<&str> {
         .split_once(" — ")
         .map(|(left, _)| left)
         .unwrap_or(title)
-        .trim()
         .split_whitespace()
         .next()?;
 
