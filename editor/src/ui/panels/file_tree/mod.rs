@@ -643,7 +643,10 @@ impl FileTreePanel {
             );
         } else {
             self.selected_id = Some(new_path.to_string_lossy().to_string());
-            self.context_target = Some(new_path);
+            self.context_target = Some(new_path.clone());
+            if pending.kind == PendingNewKind::File {
+                cx.emit(OpenFileEvent { path: new_path });
+            }
         }
         self.refresh_tree(cx);
     }
