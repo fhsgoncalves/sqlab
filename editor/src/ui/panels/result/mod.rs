@@ -119,6 +119,7 @@ pub struct ResultPanel {
     pending_result: Option<QueryExecution>,
     dock_area: Option<WeakEntity<DockArea>>,
     is_zoomed: bool,
+    zoomed_side_docks: Option<ZoomedSideDocks>,
     selected_export_format: ExportFormat,
     activity_tracker: gpui::Entity<ActivityTracker>,
     submitting_edits: bool,
@@ -1062,6 +1063,12 @@ struct QueryExecution {
     config: Option<DataSourceConfig>,
 }
 
+#[derive(Clone, Copy)]
+struct ZoomedSideDocks {
+    left: bool,
+    right: bool,
+}
+
 impl EventEmitter<PanelEvent> for ResultPanel {}
 
 impl ResultPanel {
@@ -1091,6 +1098,7 @@ impl ResultPanel {
             pending_result: None,
             dock_area: None,
             is_zoomed: false,
+            zoomed_side_docks: None,
             selected_export_format: ExportFormat::Csv,
             activity_tracker,
             submitting_edits: false,
@@ -1939,36 +1947,72 @@ impl Panel for ResultPanel {
 }
 
 impl ResultPanel {
-    fn toggle_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.is_zoomed = !self.is_zoomed;
+    pub fn is_zoomed(&self) -> bool {
+        self.is_zoomed
+    }
+
+    pub fn sync_zoomed_side_docks(&mut self, cx: &App) {
+        if !self.is_zoomed {
+            return;
+        }
+
         if let Some(dock_area) = self.dock_area.as_ref() {
             if let Some(dock_area) = dock_area.upgrade() {
-                dock_area.update(cx, |dock_area, cx| {
-                    if self.is_zoomed {
-                        if dock_area.is_dock_open(DockPlacement::Left, cx) {
-                            dock_area.toggle_dock(DockPlacement::Left, window, cx);
-                        }
-                        if dock_area.is_dock_open(DockPlacement::Right, cx) {
-                            dock_area.toggle_dock(DockPlacement::Right, window, cx);
-                        }
-                        if !dock_area.is_dock_open(DockPlacement::Bottom, cx) {
-                            dock_area.toggle_dock(DockPlacement::Bottom, window, cx);
-                        }
-                    } else {
-                        if !dock_area.is_dock_open(DockPlacement::Left, cx) {
-                            dock_area.toggle_dock(DockPlacement::Left, window, cx);
-                        }
-                        if !dock_area.is_dock_open(DockPlacement::Right, cx) {
-                            dock_area.toggle_dock(DockPlacement::Right, window, cx);
-                        }
-                        if !dock_area.is_dock_open(DockPlacement::Bottom, cx) {
-                            dock_area.toggle_dock(DockPlacement::Bottom, window, cx);
-                        }
-                    }
+                let dock_area = dock_area.read(cx);
+                self.zoomed_side_docks = Some(ZoomedSideDocks {
+                    left: dock_area.is_dock_open(DockPlacement::Left, cx),
+                    right: dock_area.is_dock_open(DockPlacement::Right, cx),
                 });
             }
         }
+    }
+
+    pub fn set_zoomed(&mut self, zoomed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_zoomed == zoomed {
+            return;
+        }
+
+        self.is_zoomed = zoomed;
+        if let Some(dock_area) = self.dock_area.as_ref() {
+            if let Some(dock_area) = dock_area.upgrade() {
+                let panel = cx.entity();
+                let saved_side_docks = self.zoomed_side_docks.take();
+                let mut next_side_docks = None;
+                dock_area.update(cx, |dock_area, cx| {
+                    if zoomed {
+                        let side_docks = ZoomedSideDocks {
+                            left: dock_area.is_dock_open(DockPlacement::Left, cx),
+                            right: dock_area.is_dock_open(DockPlacement::Right, cx),
+                        };
+                        if side_docks.left {
+                            dock_area.toggle_dock(DockPlacement::Left, window, cx);
+                        }
+                        if side_docks.right {
+                            dock_area.toggle_dock(DockPlacement::Right, window, cx);
+                        }
+                        next_side_docks = Some(side_docks);
+                        dock_area.set_zoomed_in(panel.clone(), window, cx);
+                    } else {
+                        dock_area.set_zoomed_out(window, cx);
+                        if let Some(side_docks) = saved_side_docks {
+                            if dock_area.is_dock_open(DockPlacement::Left, cx) != side_docks.left {
+                                dock_area.toggle_dock(DockPlacement::Left, window, cx);
+                            }
+                            if dock_area.is_dock_open(DockPlacement::Right, cx) != side_docks.right
+                            {
+                                dock_area.toggle_dock(DockPlacement::Right, window, cx);
+                            }
+                        }
+                    }
+                });
+                self.zoomed_side_docks = next_side_docks;
+            }
+        }
         cx.notify();
+    }
+
+    fn toggle_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_zoomed(!self.is_zoomed, window, cx);
     }
 }
 
@@ -2011,6 +2055,26 @@ impl Render for ResultPanel {
             .on_reorder(cx.listener(|this, (from_ix, to_ix), window, cx| {
                 this.reorder_tab(*from_ix, *to_ix, window, cx);
             }))
+            .suffix(
+                h_flex().gap_1().child(
+                    Button::new("results-zoom")
+                        .icon(if self.is_zoomed {
+                            IconName::Minimize
+                        } else {
+                            IconName::Maximize
+                        })
+                        .xsmall()
+                        .ghost()
+                        .tooltip(if self.is_zoomed {
+                            "Restore"
+                        } else {
+                            "Maximize"
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_zoom(window, cx);
+                        })),
+                ),
+            )
             .frozen_prefix(history_tab);
 
         if self.active_tab > 0 {
@@ -2141,24 +2205,6 @@ impl Render for ResultPanel {
                         h_flex()
                             .flex_shrink_0()
                             .gap_1()
-                            .child(
-                                Button::new("results-zoom")
-                                    .icon(if self.is_zoomed {
-                                        IconName::Minimize
-                                    } else {
-                                        IconName::Maximize
-                                    })
-                                    .xsmall()
-                                    .ghost()
-                                    .tooltip(if self.is_zoomed {
-                                        "Restore"
-                                    } else {
-                                        "Maximize"
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_zoom(window, cx);
-                                    })),
-                            )
                             .child(
                                 Button::new("results-copy")
                                     .icon(IconName::Copy)

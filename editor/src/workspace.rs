@@ -1842,6 +1842,55 @@ impl Workspace {
         }
     }
 
+    fn restore_zoomed_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let editor_zoomed = self.editor_tabs.read(cx).is_zoomed();
+        let bottom_zoomed = self.bottom_panel.read(cx).is_zoomed(cx);
+
+        if editor_zoomed {
+            self.editor_tabs.update(cx, |tabs, cx| {
+                tabs.set_zoomed(false, window, cx);
+            });
+        }
+
+        if bottom_zoomed {
+            self.bottom_panel.update(cx, |panel, cx| {
+                panel.set_zoomed(false, window, cx);
+            });
+        }
+
+        editor_zoomed || bottom_zoomed
+    }
+
+    fn toggle_side_dock_from_bottom_bar(
+        &mut self,
+        placement: DockPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dock_area.update(cx, |dock_area, cx| {
+            dock_area.toggle_dock(placement, window, cx);
+        });
+        self.editor_tabs.update(cx, |tabs, cx| {
+            tabs.sync_zoomed_side_docks(cx);
+        });
+        self.bottom_panel.update(cx, |panel, cx| {
+            panel.sync_zoomed_side_docks(cx);
+        });
+    }
+
+    fn toggle_bottom_panel_from_bottom_bar(
+        &mut self,
+        mode: BottomPanelMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.restore_zoomed_panels(window, cx) {
+            self.show_bottom_panel(mode, true, window, cx);
+        } else {
+            self.toggle_bottom_panel(mode, window, cx);
+        }
+    }
+
     fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (is_busy, activity_label, activity_count) = {
             let tracker = self.activity_tracker.read(cx);
@@ -1860,6 +1909,7 @@ impl Workspace {
         let bottom_panel_mode = self.bottom_panel.read(cx).mode();
         let is_terminal_active = bottom_panel_mode == BottomPanelMode::Terminal;
         let is_results_active = bottom_panel_mode == BottomPanelMode::Results;
+        let is_editor_zoomed = self.editor_tabs.read(cx).is_zoomed();
         let is_left_open = self
             .dock_area
             .read(cx)
@@ -1871,7 +1921,8 @@ impl Workspace {
         let is_dock_open = self
             .dock_area
             .read(cx)
-            .is_dock_open(DockPlacement::Bottom, cx);
+            .is_dock_open(DockPlacement::Bottom, cx)
+            && !is_editor_zoomed;
         let active_bottom_button_fg = if cx.theme().is_dark() {
             hsla(0.74, 0.78, 0.58, 1.0)
         } else {
@@ -1905,9 +1956,7 @@ impl Workspace {
                         "Expand Left Panel"
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.dock_area.update(cx, |dock_area, cx| {
-                            dock_area.toggle_dock(DockPlacement::Left, window, cx);
-                        });
+                        this.toggle_side_dock_from_bottom_bar(DockPlacement::Left, window, cx);
                     })),
             )
             .child(div().flex_1())
@@ -1943,7 +1992,11 @@ impl Workspace {
                         };
 
                         btn.on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_bottom_panel(BottomPanelMode::Results, window, cx);
+                            this.toggle_bottom_panel_from_bottom_bar(
+                                BottomPanelMode::Results,
+                                window,
+                                cx,
+                            );
                         }))
                     })
                     .child({
@@ -1960,7 +2013,11 @@ impl Workspace {
                         };
 
                         btn.on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_bottom_panel(BottomPanelMode::Terminal, window, cx);
+                            this.toggle_bottom_panel_from_bottom_bar(
+                                BottomPanelMode::Terminal,
+                                window,
+                                cx,
+                            );
                         }))
                     })
                     .child(
@@ -1978,9 +2035,11 @@ impl Workspace {
                                 "Expand Right Panel"
                             })
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.dock_area.update(cx, |dock_area, cx| {
-                                    dock_area.toggle_dock(DockPlacement::Right, window, cx);
-                                });
+                                this.toggle_side_dock_from_bottom_bar(
+                                    DockPlacement::Right,
+                                    window,
+                                    cx,
+                                );
                             })),
                     ),
             )

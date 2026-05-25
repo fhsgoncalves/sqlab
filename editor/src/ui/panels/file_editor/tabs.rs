@@ -47,6 +47,7 @@ pub struct EditorTabs {
     dock_area: Option<WeakEntity<DockArea>>,
     data_source_manager: Entity<DataSourceManager>,
     is_zoomed: bool,
+    zoomed_side_docks: Option<ZoomedSideDocks>,
     activity_tracker: Entity<ActivityTracker>,
     query_sessions: QuerySessionStore,
     navigation_history: NavigationHistory,
@@ -59,6 +60,12 @@ enum EditorTab {
     Sql(Entity<EditorPanel>),
     Diagram(Entity<DiagramPanel>),
     Data(Entity<DataEditorPanel>),
+}
+
+#[derive(Clone, Copy)]
+struct ZoomedSideDocks {
+    left: bool,
+    right: bool,
 }
 
 impl EditorTab {
@@ -240,6 +247,7 @@ impl EditorTabs {
             dock_area: None,
             data_source_manager,
             is_zoomed: false,
+            zoomed_side_docks: None,
             activity_tracker,
             query_sessions,
             navigation_history: NavigationHistory::default(),
@@ -734,6 +742,76 @@ impl EditorTabs {
 
 impl EventEmitter<PanelEvent> for EditorTabs {}
 
+impl EditorTabs {
+    pub fn is_zoomed(&self) -> bool {
+        self.is_zoomed
+    }
+
+    pub fn sync_zoomed_side_docks(&mut self, cx: &App) {
+        if !self.is_zoomed {
+            return;
+        }
+
+        if let Some(dock_area) = self.dock_area.as_ref() {
+            if let Some(dock_area) = dock_area.upgrade() {
+                let dock_area = dock_area.read(cx);
+                self.zoomed_side_docks = Some(ZoomedSideDocks {
+                    left: dock_area.is_dock_open(DockPlacement::Left, cx),
+                    right: dock_area.is_dock_open(DockPlacement::Right, cx),
+                });
+            }
+        }
+    }
+
+    pub fn set_zoomed(&mut self, zoomed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_zoomed == zoomed {
+            return;
+        }
+
+        self.is_zoomed = zoomed;
+        if let Some(dock_area) = self.dock_area.as_ref() {
+            if let Some(dock_area) = dock_area.upgrade() {
+                let panel = cx.entity();
+                let saved_side_docks = self.zoomed_side_docks.take();
+                let mut next_side_docks = None;
+                dock_area.update(cx, |dock_area, cx| {
+                    if zoomed {
+                        let side_docks = ZoomedSideDocks {
+                            left: dock_area.is_dock_open(DockPlacement::Left, cx),
+                            right: dock_area.is_dock_open(DockPlacement::Right, cx),
+                        };
+                        if side_docks.left {
+                            dock_area.toggle_dock(DockPlacement::Left, window, cx);
+                        }
+                        if side_docks.right {
+                            dock_area.toggle_dock(DockPlacement::Right, window, cx);
+                        }
+                        next_side_docks = Some(side_docks);
+                        dock_area.set_zoomed_in(panel.clone(), window, cx);
+                    } else {
+                        dock_area.set_zoomed_out(window, cx);
+                        if let Some(side_docks) = saved_side_docks {
+                            if dock_area.is_dock_open(DockPlacement::Left, cx) != side_docks.left {
+                                dock_area.toggle_dock(DockPlacement::Left, window, cx);
+                            }
+                            if dock_area.is_dock_open(DockPlacement::Right, cx) != side_docks.right
+                            {
+                                dock_area.toggle_dock(DockPlacement::Right, window, cx);
+                            }
+                        }
+                    }
+                });
+                self.zoomed_side_docks = next_side_docks;
+            }
+        }
+        cx.notify();
+    }
+
+    fn toggle_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_zoomed(!self.is_zoomed, window, cx);
+    }
+}
+
 impl Panel for EditorTabs {
     fn panel_name(&self) -> &'static str {
         "EditorTabs"
@@ -768,35 +846,7 @@ impl Render for EditorTabs {
                 .ghost()
                 .tooltip(if is_zoomed { "Restore" } else { "Maximize" })
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.is_zoomed = !this.is_zoomed;
-                    if let Some(dock_area) = this.dock_area.as_ref() {
-                        if let Some(dock_area) = dock_area.upgrade() {
-                            dock_area.update(cx, |dock_area, cx| {
-                                if this.is_zoomed {
-                                    if dock_area.is_dock_open(DockPlacement::Left, cx) {
-                                        dock_area.toggle_dock(DockPlacement::Left, window, cx);
-                                    }
-                                    if dock_area.is_dock_open(DockPlacement::Right, cx) {
-                                        dock_area.toggle_dock(DockPlacement::Right, window, cx);
-                                    }
-                                    if dock_area.is_dock_open(DockPlacement::Bottom, cx) {
-                                        dock_area.toggle_dock(DockPlacement::Bottom, window, cx);
-                                    }
-                                } else {
-                                    if !dock_area.is_dock_open(DockPlacement::Left, cx) {
-                                        dock_area.toggle_dock(DockPlacement::Left, window, cx);
-                                    }
-                                    if !dock_area.is_dock_open(DockPlacement::Right, cx) {
-                                        dock_area.toggle_dock(DockPlacement::Right, window, cx);
-                                    }
-                                    if !dock_area.is_dock_open(DockPlacement::Bottom, cx) {
-                                        dock_area.toggle_dock(DockPlacement::Bottom, window, cx);
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    cx.notify();
+                    this.toggle_zoom(window, cx);
                 }))
         });
 

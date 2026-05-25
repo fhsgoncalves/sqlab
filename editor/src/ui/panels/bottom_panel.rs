@@ -54,6 +54,43 @@ impl BottomPanel {
         &self.results_panel
     }
 
+    pub fn is_zoomed(&self, cx: &App) -> bool {
+        match self.mode {
+            BottomPanelMode::Results => self.results_panel.read(cx).is_zoomed(),
+            BottomPanelMode::Terminal => self.terminal_panel.read(cx).is_zoomed(),
+        }
+    }
+
+    pub fn set_zoomed(&mut self, zoomed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match self.mode {
+            BottomPanelMode::Results => {
+                self.results_panel.update(cx, |panel, cx| {
+                    panel.set_zoomed(zoomed, window, cx);
+                });
+            }
+            BottomPanelMode::Terminal => {
+                self.terminal_panel.update(cx, |panel, cx| {
+                    panel.set_zoomed(zoomed, window, cx);
+                });
+            }
+        }
+    }
+
+    pub fn sync_zoomed_side_docks(&mut self, cx: &mut Context<Self>) {
+        match self.mode {
+            BottomPanelMode::Results => {
+                self.results_panel.update(cx, |panel, cx| {
+                    panel.sync_zoomed_side_docks(cx);
+                });
+            }
+            BottomPanelMode::Terminal => {
+                self.terminal_panel.update(cx, |panel, cx| {
+                    panel.sync_zoomed_side_docks(cx);
+                });
+            }
+        }
+    }
+
     pub fn set_dock_area(&mut self, dock_area: WeakEntity<DockArea>, cx: &mut App) {
         self.dock_area = Some(dock_area.clone());
         self.results_panel.update(cx, |panel, _| {
