@@ -1168,6 +1168,7 @@ impl Workspace {
             active_editor,
             selected,
             active_queries,
+            has_selection,
             search_path,
         )) = self.editor_tabs.read(cx).active_editor().map(|editor| {
             let editor_entity = editor.clone();
@@ -1179,6 +1180,7 @@ impl Workspace {
                 editor_entity,
                 selected,
                 active_queries,
+                editor.has_nonempty_selection(cx),
                 editor.selected_search_path(),
             )
         })
@@ -1222,6 +1224,38 @@ impl Workspace {
                 queries[0].query.clone(),
                 queries[0].range.clone(),
                 Some(active_editor),
+                search_path,
+                window,
+                cx,
+            );
+            return;
+        }
+
+        if has_selection {
+            let config = selected_connection_name.and_then(|name| {
+                self.data_source_manager
+                    .read(cx)
+                    .configs()
+                    .iter()
+                    .find(|config| config.name == name)
+                    .cloned()
+            });
+            let Some(config) = config else {
+                self.show_connection_selector_for_all(
+                    path,
+                    queries,
+                    active_editor,
+                    search_path,
+                    window,
+                    cx,
+                );
+                return;
+            };
+            self.execute_all_with_config(
+                path,
+                queries,
+                active_editor,
+                config,
                 search_path,
                 window,
                 cx,
@@ -1274,6 +1308,173 @@ impl Workspace {
             }
         });
         window.focus(&selector.read(cx).focus_handle(cx), cx);
+    }
+
+    fn show_connection_selector_for_all(
+        &mut self,
+        path: PathBuf,
+        queries: Vec<QueryChoice>,
+        editor: Entity<EditorPanel>,
+        search_path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connections = self.data_source_manager.read(cx).configs().to_vec();
+        if connections.is_empty() {
+            window.open_alert_dialog(cx, |alert, _, _| {
+                alert
+                    .title("No Connections")
+                    .child("Create a database connection before running queries.")
+            });
+            return;
+        }
+
+        let selector = cx.new(|cx| ConnectionSelector::new(connections, window, cx));
+        let selector_search_path = search_path.clone();
+        let selector_path = path.clone();
+        cx.subscribe_in(
+            &selector,
+            window,
+            move |this, _selector, event: &ConnectionSelected, window, cx| {
+                let name = event.name.clone();
+                window.close_dialog(cx);
+                if let Some(config) = this.prepare_query_connection(name.clone(), window, cx) {
+                    if let Some(editor) = this.editor_tabs.read(cx).active_editor().cloned()
+                        && editor.read(cx).path() == &selector_path
+                    {
+                        editor.update(cx, |editor, cx| {
+                            editor.set_selected_connection_name(Some(name.clone()), cx);
+                        });
+                    }
+                    this.execute_all_with_config(
+                        selector_path.clone(),
+                        queries.clone(),
+                        editor.clone(),
+                        config,
+                        selector_search_path.clone(),
+                        window,
+                        cx,
+                    );
+                }
+            },
+        )
+        .detach();
+
+        window.open_alert_dialog(cx, {
+            let selector = selector.clone();
+            move |alert, _window, _cx| {
+                alert
+                    .title("Choose Connection")
+                    .child(selector.clone())
+                    .footer(div())
+                    .close_button(true)
+            }
+        });
+        window.focus(&selector.read(cx).input_focus_handle(cx), cx);
+    }
+
+    fn execute_all_with_config(
+        &mut self,
+        path: PathBuf,
+        queries: Vec<QueryChoice>,
+        editor: Entity<EditorPanel>,
+        config: DataSourceConfig,
+        search_path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let results_panel = self.bottom_panel.read(cx).results_panel().clone();
+        let bottom_panel = self.bottom_panel.clone();
+        let data_source_manager = self.data_source_manager.clone();
+        let query_sessions = self.query_sessions.clone();
+        let activity_tracker = self.activity_tracker.clone();
+        let mut config_for_result = config.clone();
+        if let Some(search_path) = search_path.as_deref() {
+            config_for_result.schema = search_path.to_string();
+        }
+        let config_name = config.name.clone();
+        let activity_id = self
+            .activity_tracker
+            .update(cx, |tracker, cx| tracker.begin("Running queries", cx));
+        let editor_for_task = editor.clone();
+        let search_path_for_task = search_path.clone();
+        self.show_bottom_panel(BottomPanelMode::Results, false, window, cx);
+
+        cx.spawn(async move |_this, cx| {
+            for query in queries {
+                let execution_marker_id = cx.update_entity(&editor_for_task, |editor, cx| {
+                    editor.begin_query_execution(query.range.clone(), cx)
+                });
+
+                let query_text = query.query.clone();
+                let execution_options = QueryExecutionOptions {
+                    search_path: search_path_for_task.clone(),
+                };
+                let path_for_task = path.clone();
+                let config_for_task = config.clone();
+                let query_sessions_for_task = query_sessions.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        query_sessions_for_task
+                            .execute_query(
+                                path_for_task,
+                                config_for_task,
+                                execution_options,
+                                query_text,
+                            )
+                            .await
+                    })
+                    .await;
+
+                let (result, succeeded, connection_failed) = match result {
+                    Ok(result) => (result, true, false),
+                    Err(error) => {
+                        let is_conn_fail = matches!(error, DataSourceError::ConnectionFailed(_));
+                        (error_result(error), false, is_conn_fail)
+                    }
+                };
+
+                cx.update_entity(&results_panel, |panel, cx| {
+                    panel.set_result(
+                        query.query.clone(),
+                        result,
+                        succeeded,
+                        Some(config_for_result.clone()),
+                        cx,
+                    );
+                });
+
+                cx.update_entity(&bottom_panel, |panel, cx| {
+                    panel.set_mode(BottomPanelMode::Results, cx);
+                });
+
+                if let Some(marker_id) = execution_marker_id {
+                    cx.update_entity(&editor_for_task, |editor, cx| {
+                        editor.finish_query_execution(Some(marker_id), succeeded, cx);
+                    });
+                }
+
+                let config_name_for_closure = config_name.clone();
+                cx.update_entity(&data_source_manager, move |manager, cx| {
+                    if connection_failed {
+                        manager.set_status(&config_name_for_closure, ConnectionStatus::Failed);
+                    } else {
+                        manager.set_status(&config_name_for_closure, ConnectionStatus::Connected);
+                    }
+                    cx.notify();
+                });
+
+                if !succeeded {
+                    break;
+                }
+            }
+
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
+            });
+        })
+        .detach();
     }
 
     fn execute_single_query(

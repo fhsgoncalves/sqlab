@@ -140,6 +140,7 @@ fn global_match_range(text: &str, text_match: &TextMatch) -> Option<Range<usize>
     (end <= text.len()).then_some(start..end)
 }
 
+#[cfg(test)]
 fn selected_query_range(text: &str, selected_range: Range<usize>) -> Option<QueryRange> {
     let start = selected_range.start.min(text.len());
     let end = selected_range.end.min(text.len());
@@ -507,14 +508,31 @@ impl EditorPanel {
         let selected = state.selected_value().to_string();
 
         if !selected.trim().is_empty() {
-            return (
-                selected_query_range(&text, state.selected_range()),
-                Vec::new(),
-            );
+            let selected_range = state.selected_range();
+            let selected_text = text.get(selected_range.clone()).unwrap_or("");
+            let offset = selected_range.start;
+            let queries = query_ranges_in_text(selected_text)
+                .into_iter()
+                .map(|q| QueryRange {
+                    range: (q.range.start + offset)..(q.range.end + offset),
+                    trimmed_range: (q.trimmed_range.start + offset)..(q.trimmed_range.end + offset),
+                    text: q.text,
+                })
+                .collect::<Vec<_>>();
+
+            if queries.len() == 1 {
+                return (queries.into_iter().next(), Vec::new());
+            } else {
+                return (None, queries);
+            }
         }
 
         let queries = query_ranges_for_execution(&text, cursor);
         (None, queries)
+    }
+
+    pub(crate) fn has_nonempty_selection(&self, cx: &App) -> bool {
+        !self.editor.read(cx).selected_value().trim().is_empty()
     }
 
     pub fn selected_search_path(&self) -> Option<String> {
