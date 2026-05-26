@@ -23,7 +23,8 @@ use crate::ui::panels::result::{
     CopyResultSelection, EditResultCell, EditableTable, ExtendResultSelectionDown,
     ExtendResultSelectionLeft, ExtendResultSelectionRight, ExtendResultSelectionUp,
     ResultsTableDelegate, SelectResultCellDown, SelectResultCellLeft, SelectResultCellRight,
-    SelectResultCellUp, set_selected_result_cell,
+    SelectResultCellUp, SelectResultFirstCellColumn, SelectResultLastCellColumn,
+    set_selected_result_cell, sync_horizontal_scroll_to_col,
 };
 
 const DEFAULT_LIMIT: usize = 1000;
@@ -456,6 +457,38 @@ impl DataEditorPanel {
         });
     }
 
+    fn select_cell_column_edge(&mut self, last: bool, cx: &mut Context<Self>) {
+        self.table_state.update(cx, |table, cx| {
+            let columns_count = table.delegate().columns_count(cx);
+            let rows_count = table.delegate().rows_count(cx);
+            if columns_count == 0 || rows_count == 0 {
+                return;
+            }
+
+            let next_col = if last {
+                columns_count.saturating_sub(1)
+            } else {
+                0
+            };
+
+            if let Some((row_ix, _)) = table.selected_cell() {
+                let row_ix = row_ix.min(rows_count.saturating_sub(1));
+                table
+                    .delegate_mut()
+                    .select_cell(row_ix, next_col, Modifiers::none());
+                set_selected_result_cell(table, row_ix, next_col, cx);
+            } else if table.selected_col().is_some() {
+                sync_horizontal_scroll_to_col(table, next_col, cx);
+                table.set_selected_col(next_col, cx);
+            } else {
+                table
+                    .delegate_mut()
+                    .select_cell(0, next_col, Modifiers::none());
+                set_selected_result_cell(table, 0, next_col, cx);
+            }
+        });
+    }
+
     fn select_cell_vertically(
         &mut self,
         row_delta: isize,
@@ -521,6 +554,24 @@ impl DataEditorPanel {
         self.select_cell_vertically(1, window, cx);
     }
 
+    fn on_select_first_cell_column(
+        &mut self,
+        _: &SelectResultFirstCellColumn,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_cell_column_edge(false, cx);
+    }
+
+    fn on_select_last_cell_column(
+        &mut self,
+        _: &SelectResultLastCellColumn,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_cell_column_edge(true, cx);
+    }
+
     fn on_extend_selection_up(
         &mut self,
         _: &ExtendResultSelectionUp,
@@ -584,6 +635,8 @@ impl Render for DataEditorPanel {
             .on_action(cx.listener(Self::on_select_cell_right))
             .on_action(cx.listener(Self::on_select_cell_up))
             .on_action(cx.listener(Self::on_select_cell_down))
+            .on_action(cx.listener(Self::on_select_first_cell_column))
+            .on_action(cx.listener(Self::on_select_last_cell_column))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::start_edit_selected_cell))
             .child(

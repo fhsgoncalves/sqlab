@@ -29,7 +29,8 @@ use ui::panels::result::{
     CycleTabBackward as ResultCycleTabBackward, CycleTabForward as ResultCycleTabForward,
     EditResultCell, ExtendResultSelectionDown, ExtendResultSelectionLeft,
     ExtendResultSelectionRight, ExtendResultSelectionUp, SelectResultCellDown,
-    SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp,
+    SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp, SelectResultFirstCellColumn,
+    SelectResultLastCellColumn,
 };
 use ui::panels::terminal::{
     CloseActiveTab as TerminalCloseActiveTab, CopyTerminalSelection,
@@ -165,6 +166,8 @@ fn main() {
             KeyBinding::new("shift-right", ExtendResultSelectionRight, Some("DataTable")),
             KeyBinding::new("left", SelectResultCellLeft, Some("DataTable")),
             KeyBinding::new("right", SelectResultCellRight, Some("DataTable")),
+            KeyBinding::new("home", SelectResultFirstCellColumn, Some("DataTable")),
+            KeyBinding::new("end", SelectResultLastCellColumn, Some("DataTable")),
             KeyBinding::new("up", SelectResultCellUp, Some("DataTable")),
             KeyBinding::new("down", SelectResultCellDown, Some("DataTable")),
             KeyBinding::new("enter", EditResultCell, Some("DataTable")),
