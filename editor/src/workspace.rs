@@ -14,11 +14,13 @@ use gpui_component::{
     dock::{DockArea, DockItem, DockPlacement},
     h_flex,
     input::{Input, InputEvent, InputState},
+    menu::AppMenuBar,
     scroll::{ScrollableElement as _, Scrollbar},
     spinner::Spinner,
     v_flex,
 };
 
+use crate::app_theme::SwitchTheme;
 use crate::credentials;
 use crate::query_session::QuerySessionStore;
 use crate::schema_cache;
@@ -684,6 +686,7 @@ pub struct Workspace {
     data_source_manager: Entity<DataSourceManager>,
     query_sessions: QuerySessionStore,
     activity_tracker: Entity<ActivityTracker>,
+    app_menu_bar: Entity<AppMenuBar>,
     focus_handle: FocusHandle,
     terminal_panel: Entity<TerminalPanel>,
     bottom_panel_size: gpui::Pixels,
@@ -710,6 +713,7 @@ impl Workspace {
             })
         });
         let activity_tracker = cx.new(|_cx| ActivityTracker::new());
+        let app_menu_bar = AppMenuBar::new(cx);
         let query_sessions = QuerySessionStore::new();
 
         cx.observe(&activity_tracker, |_, _, cx| {
@@ -949,6 +953,7 @@ impl Workspace {
             data_source_manager: data_source_manager.clone(),
             query_sessions,
             activity_tracker,
+            app_menu_bar,
             focus_handle,
             terminal_panel,
             bottom_panel_size,
@@ -1118,6 +1123,14 @@ impl Workspace {
 
     fn on_open_folder(&mut self, _: &OpenFolder, _window: &mut Window, cx: &mut Context<Self>) {
         self.open_folder_picker(cx);
+    }
+
+    fn on_switch_theme(&mut self, _: &SwitchTheme, window: &mut Window, cx: &mut Context<Self>) {
+        cx.defer_in(window, |this, _window, cx| {
+            this.app_menu_bar.update(cx, |menu_bar, cx| {
+                menu_bar.reload(cx);
+            });
+        });
     }
 
     pub(crate) fn open_recent_folders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2077,6 +2090,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_project_search))
             .on_action(cx.listener(Self::on_toggle_search_replace))
             .on_action(cx.listener(Self::on_toggle_bottom_panel_mode))
+            .on_action(cx.listener(Self::on_switch_theme))
             .child(
                 TitleBar::new().child(
                     h_flex()
@@ -2084,17 +2098,25 @@ impl Render for Workspace {
                         .justify_between()
                         .child(
                             h_flex()
-                                .gap_0()
-                                .text_color(cx.theme().foreground)
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child("sq")
+                                .items_center()
+                                .gap_3()
+                                .when(!cfg!(target_os = "macos"), |this| {
+                                    this.child(self.app_menu_bar.clone())
+                                })
                                 .child(
-                                    div()
-                                        .text_color(cx.theme().primary)
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .child("/"),
-                                )
-                                .child("lab"),
+                                    h_flex()
+                                        .gap_0()
+                                        .text_color(cx.theme().foreground)
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .child("sq")
+                                        .child(
+                                            div()
+                                                .text_color(cx.theme().primary)
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .child("/"),
+                                        )
+                                        .child("lab"),
+                                ),
                         )
                         .child(
                             Button::new("theme-toggle")

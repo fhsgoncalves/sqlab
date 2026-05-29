@@ -3,8 +3,8 @@ use std::{path::PathBuf, sync::Arc};
 use gpui::{
     AppContext, Bounds, KeyBinding, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions, px, size,
 };
-use gpui_component::Root;
 use gpui_component::dock::ClosePanel;
+use gpui_component::{GlobalState, Root};
 
 mod app_theme;
 mod assets;
@@ -54,8 +54,8 @@ fn app_icon() -> Option<Arc<image::RgbaImage>> {
     }
 }
 
-fn set_app_menus(cx: &mut gpui::App) {
-    cx.set_menus(vec![
+fn app_menus(cx: &gpui::App) -> Vec<Menu> {
+    vec![
         Menu::new("sq/lab").items(vec![app_theme::themes_menu_item(cx)]),
         Menu::new("File").items(vec![
             MenuItem::action("Open Recent Folder...", OpenRecentFolders),
@@ -88,7 +88,14 @@ fn set_app_menus(cx: &mut gpui::App) {
             MenuItem::action("Close Terminal Tab", TerminalCloseActiveTab),
             MenuItem::action("Close Results Tab", ResultCloseActiveTab),
         ]),
-    ]);
+    ]
+}
+
+fn set_app_menus(cx: &mut gpui::App) {
+    cx.set_menus(app_menus(cx));
+
+    let owned_menus = app_menus(cx).into_iter().map(|menu| menu.owned()).collect();
+    GlobalState::global_mut(cx).set_app_menus(owned_menus);
 }
 
 fn main() {
