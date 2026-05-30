@@ -67,20 +67,7 @@ impl QuerySessionStore {
     ) -> Result<QueryResult, DataSourceError> {
         let mut sessions = self.sessions.lock().await;
 
-        if !sessions
-            .get(&path)
-            .is_some_and(|conns| conns.contains_key(&config.name))
-        {
-            let mut source = create_configured_data_source(&config)?;
-            source.connect().await?;
-            let name = config.name.clone();
-            sessions
-                .entry(path.clone())
-                .or_default()
-                .insert(name.clone(), QuerySession { source });
-            self.mark_open(path.clone(), name);
-            self.unmark_closing(&path, &config.name);
-        }
+        self.ensure_connected(&path, &config, &mut sessions).await?;
 
         let result = {
             let session = sessions
@@ -99,6 +86,16 @@ impl QuerySessionStore {
         ) {
             let _ = self
                 .disconnect_locked(&path, &config.name, &mut sessions)
+                .await;
+            self.ensure_connected(&path, &config, &mut sessions).await?;
+
+            let session = sessions
+                .get(&path)
+                .and_then(|conns| conns.get(&config.name))
+                .ok_or(DataSourceError::NotConnected)?;
+            return session
+                .source
+                .execute_query_with_options(&query, &options)
                 .await;
         }
 
@@ -150,6 +147,30 @@ impl QuerySessionStore {
         for path in paths {
             self.disconnect_locked(&path, &name, &mut sessions).await?;
         }
+        Ok(())
+    }
+
+    async fn ensure_connected(
+        &self,
+        path: &Path,
+        config: &DataSourceConfig,
+        sessions: &mut HashMap<PathBuf, HashMap<String, QuerySession>>,
+    ) -> Result<(), DataSourceError> {
+        if sessions
+            .get(path)
+            .is_some_and(|conns| conns.contains_key(&config.name))
+        {
+            return Ok(());
+        }
+        let mut source = create_configured_data_source(config)?;
+        source.connect().await?;
+        let name = config.name.clone();
+        sessions
+            .entry(path.to_path_buf())
+            .or_default()
+            .insert(name.clone(), QuerySession { source });
+        self.mark_open(path.to_path_buf(), name);
+        self.unmark_closing(path, &config.name);
         Ok(())
     }
 
@@ -278,6 +299,59 @@ mod tests {
 
         assert!(!store.is_open(&path, "conn-1"));
         assert!(store.is_open(&path, "conn-2"));
+    }
+
+    #[test]
+    fn reconnects_automatically_when_connection_drops() {
+        let store = QuerySessionStore::new();
+        let path = PathBuf::from("/tmp/sqlab-session-reconnect-test.sql");
+        let _ = std::fs::remove_file(&path);
+        let config = DataSourceConfig {
+            name: "file-conn".into(),
+            db_type: Database::SQLite,
+            database: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+
+        let rt = Runtime::new().unwrap();
+
+        rt.block_on(store.execute_query(
+            path.clone(),
+            config.clone(),
+            QueryExecutionOptions::default(),
+            "create table t1 (id integer);".into(),
+        ))
+        .unwrap();
+
+        rt.block_on(store.execute_query(
+            path.clone(),
+            config.clone(),
+            QueryExecutionOptions::default(),
+            "insert into t1 values (99);".into(),
+        ))
+        .unwrap();
+
+        rt.block_on(async {
+            let mut sessions = store.sessions.lock().await;
+            let session = sessions
+                .get_mut(&path)
+                .and_then(|conns| conns.get_mut("file-conn"))
+                .unwrap();
+            session.source.disconnect().await.unwrap();
+        });
+
+        let result = rt.block_on(store.execute_query(
+            path.clone(),
+            config,
+            QueryExecutionOptions::default(),
+            "select id from t1;".into(),
+        ));
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().rows, vec![vec!["99".to_string()]]);
+        assert!(store.is_open(&path, "file-conn"));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
