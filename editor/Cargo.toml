@@ -1,6 +1,6 @@
 [package]
 name = "sqlab"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "sq/lab is a SQL editor written in Rust using GPUI."
 repository = "https://github.com/fhsgoncalves/sqlab"
