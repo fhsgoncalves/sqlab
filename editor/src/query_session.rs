@@ -177,24 +177,24 @@ impl QuerySessionStore {
     }
 
     fn mark_closed(&self, path: &Path, name: &str) {
-        if let Ok(mut sessions) = self.open_sessions.lock() {
-            if let Some(conns) = sessions.get_mut(path) {
-                conns.remove(name);
-                if conns.is_empty() {
-                    sessions.remove(path);
-                }
+        if let Ok(mut sessions) = self.open_sessions.lock()
+            && let Some(conns) = sessions.get_mut(path)
+        {
+            conns.remove(name);
+            if conns.is_empty() {
+                sessions.remove(path);
             }
         }
         self.unmark_closing(path, name);
     }
 
     fn unmark_closing(&self, path: &Path, name: &str) {
-        if let Ok(mut sessions) = self.closing_sessions.lock() {
-            if let Some(conns) = sessions.get_mut(path) {
-                conns.remove(name);
-                if conns.is_empty() {
-                    sessions.remove(path);
-                }
+        if let Ok(mut sessions) = self.closing_sessions.lock()
+            && let Some(conns) = sessions.get_mut(path)
+        {
+            conns.remove(name);
+            if conns.is_empty() {
+                sessions.remove(path);
             }
         }
     }

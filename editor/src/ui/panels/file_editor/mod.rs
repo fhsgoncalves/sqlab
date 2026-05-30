@@ -6,8 +6,8 @@ pub mod sql_completion;
 pub mod tabs;
 
 pub use editor::{
-    EditorPanel, ExecuteQuery, FormatQuery, SaveFile, ToggleCommentLines, ToggleEditorReplace,
-    ToggleEditorSearch,
+    CutEditorLine, EditorPanel, ExecuteQuery, FormatQuery, IndentLines, OutdentLines, SaveFile,
+    ToggleCommentLines, ToggleEditorReplace, ToggleEditorSearch,
 };
 pub use query_selector::{
     ConfirmSelectedQuery, QueryChoice, QuerySelected, QuerySelector, SelectNextQuery,

@@ -17,10 +17,10 @@ mod workspace;
 
 use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
-    CloseActiveTab as EditorCloseActiveTab, ConfirmSelectedQuery, CycleTabBackward,
-    CycleTabForward, ExecuteQuery, FormatQuery, NavigateBack, NavigateForward, SaveFile,
-    SelectNextQuery, SelectPreviousQuery, ToggleCommentLines, ToggleEditorReplace,
-    ToggleEditorSearch,
+    CloseActiveTab as EditorCloseActiveTab, ConfirmSelectedQuery, CutEditorLine, CycleTabBackward,
+    CycleTabForward, ExecuteQuery, FormatQuery, IndentLines, NavigateBack, NavigateForward,
+    OutdentLines, SaveFile, SelectNextQuery, SelectPreviousQuery, ToggleCommentLines,
+    ToggleEditorReplace, ToggleEditorSearch,
 };
 use ui::panels::file_search::ToggleFileSearch;
 use ui::panels::project_search::ToggleProjectSearch;
@@ -72,6 +72,9 @@ fn app_menus(cx: &gpui::App) -> Vec<Menu> {
             MenuItem::action("Replace", ToggleEditorReplace),
             MenuItem::separator(),
             MenuItem::action("Toggle Comment", ToggleCommentLines),
+            MenuItem::action("Indent Lines", IndentLines),
+            MenuItem::action("Outdent Lines", OutdentLines),
+            MenuItem::action("Cut Line", CutEditorLine),
             MenuItem::separator(),
             MenuItem::action("Format Query", FormatQuery),
             MenuItem::separator(),
@@ -151,6 +154,9 @@ fn main() {
             KeyBinding::new("cmd-s", SaveFile, Some("Input")),
             KeyBinding::new("cmd-alt-l", FormatQuery, Some("Input")),
             KeyBinding::new("cmd-/", ToggleCommentLines, Some("Input")),
+            KeyBinding::new("tab", IndentLines, Some("file_editor")),
+            KeyBinding::new("shift-tab", OutdentLines, Some("file_editor")),
+            KeyBinding::new("cmd-x", CutEditorLine, Some("file_editor")),
             KeyBinding::new("shift-up", ExtendResultSelectionUp, Some("results_panel")),
             KeyBinding::new(
                 "shift-down",

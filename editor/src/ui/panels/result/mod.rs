@@ -1547,6 +1547,35 @@ impl ResultPanel {
         cx.notify();
     }
 
+    fn close_other_result_tabs(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.executions.len() || self.executions.len() <= 1 {
+            return;
+        }
+
+        let executions = std::mem::take(&mut self.executions);
+        for (execution_ix, execution) in executions.into_iter().enumerate() {
+            if execution_ix == ix {
+                self.executions.push(execution);
+            }
+        }
+        self.active_tab = 1;
+        self.scroll_to_active_tab();
+        self.rebuild_table(window, cx);
+        cx.notify();
+    }
+
+    fn close_result_tabs_for_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.executions.is_empty() {
+            return;
+        }
+
+        self.executions.clear();
+        self.active_tab = 0;
+        self.scroll_to_active_tab();
+        self.rebuild_table(window, cx);
+        cx.notify();
+    }
+
     fn export_result(&mut self, format: ExportFormat, window: &mut Window, cx: &mut Context<Self>) {
         let Some(data) = self.current_export_data(cx) else {
             return;
@@ -1967,7 +1996,7 @@ impl ResultPanel {
             self.active_tab = to_ix + 1;
         } else if from_ix < self.active_tab - 1 && to_ix >= self.active_tab - 1 {
             self.active_tab -= 1;
-        } else if from_ix > self.active_tab - 1 && to_ix <= self.active_tab - 1 {
+        } else if from_ix > self.active_tab - 1 && to_ix < self.active_tab {
             self.active_tab += 1;
         }
         self.scroll_to_active_tab();
@@ -2086,6 +2115,8 @@ impl Render for ResultPanel {
         let submit_disabled = !has_dirty_edits || self.submitting_edits;
 
         let entity = cx.entity();
+        let history_entity = entity.clone();
+        let can_close_history_others = !self.executions.is_empty();
         let history_tab = Tab::new()
             .label("History")
             .selected(self.active_tab == 0)
@@ -2094,7 +2125,19 @@ impl Render for ResultPanel {
                 this.scroll_to_active_tab();
                 this.rebuild_table(window, cx);
                 cx.notify();
-            }));
+            }))
+            .context_menu(move |menu, _window, _cx| {
+                let entity = history_entity.clone();
+                menu.item(
+                    PopupMenuItem::new("Close others")
+                        .disabled(!can_close_history_others)
+                        .on_click(move |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.close_result_tabs_for_history(window, cx);
+                            });
+                        }),
+                )
+            });
 
         let mut tab_bar = TabBar::new("results-tab-bar")
             .scroll_handle(self.tab_scroll_handle.clone())
@@ -2138,16 +2181,30 @@ impl Render for ResultPanel {
                 .iter()
                 .enumerate()
                 .fold(tab_bar, |tab_bar, (ix, execution)| {
-                    let entity = entity.clone();
+                    let entity_for_close = entity.clone();
+                    let entity_for_menu = entity.clone();
+                    let can_close_others = self.executions.len() > 1;
                     tab_bar.child(
                         Tab::new()
                             .label(format!("Result {}", execution.id))
                             .selected(self.active_tab == ix + 1)
                             .closable(true)
                             .on_close(move |window, cx| {
-                                entity.update(cx, |this, cx| {
+                                entity_for_close.update(cx, |this, cx| {
                                     this.close_result_tab(ix, window, cx);
                                 });
+                            })
+                            .context_menu(move |menu, _window, _cx| {
+                                let entity = entity_for_menu.clone();
+                                menu.item(
+                                    PopupMenuItem::new("Close others")
+                                        .disabled(!can_close_others)
+                                        .on_click(move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.close_other_result_tabs(ix, window, cx);
+                                            });
+                                        }),
+                                )
                             }),
                     )
                 });

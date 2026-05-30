@@ -391,6 +391,44 @@ impl EditorTabs {
         }
     }
 
+    fn close_other_tabs(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if ix >= self.tabs.len() || self.tabs.len() <= 1 {
+            return;
+        }
+
+        if self.active_ix != ix {
+            self.record_current_before_navigation(cx);
+        }
+
+        let tabs = std::mem::take(&mut self.tabs);
+        let mut closed_paths = Vec::new();
+        for (tab_ix, tab) in tabs.into_iter().enumerate() {
+            if tab_ix == ix {
+                self.tabs.push(tab);
+            } else if let Some(editor) = tab.as_sql() {
+                closed_paths.push(editor.read(cx).path().clone());
+            }
+        }
+
+        if !closed_paths.is_empty() {
+            let query_sessions = self.query_sessions.clone();
+            cx.spawn(async move |_this, _cx| {
+                for path in closed_paths {
+                    if let Err(error) = query_sessions.close_path(path).await {
+                        eprintln!("failed to close query session: {}", error);
+                    }
+                }
+            })
+            .detach();
+        }
+
+        self.active_ix = 0;
+        self.sync_current_navigation_point(cx);
+        self.sync_active_connection(cx);
+        self.scroll_to_active_tab(cx);
+        cx.notify();
+    }
+
     pub fn clear_tabs(&mut self, cx: &mut Context<Self>) {
         self.tabs.clear();
         self.active_ix = 0;
@@ -900,8 +938,10 @@ impl Render for EditorTabs {
             .iter()
             .enumerate()
             .fold(tab_bar, |tab_bar, (ix, tab)| {
-                let entity = entity.clone();
+                let entity_for_close = entity.clone();
+                let entity_for_menu = entity.clone();
                 let is_active = ix == self.active_ix;
+                let can_close_others = self.tabs.len() > 1;
 
                 tab_bar.child(
                     Tab::new()
@@ -910,9 +950,21 @@ impl Render for EditorTabs {
                         .selected(is_active)
                         .closable(true)
                         .on_close(move |_window, cx| {
-                            entity.update(cx, |this, cx| {
+                            entity_for_close.update(cx, |this, cx| {
                                 this.close_tab(ix, cx);
                             });
+                        })
+                        .context_menu(move |menu, _window, _cx| {
+                            let entity = entity_for_menu.clone();
+                            menu.item(
+                                PopupMenuItem::new("Close others")
+                                    .disabled(!can_close_others)
+                                    .on_click(move |_, _window, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.close_other_tabs(ix, cx);
+                                        });
+                                    }),
+                            )
                         }),
                 )
             });

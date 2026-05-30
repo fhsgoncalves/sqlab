@@ -1,14 +1,20 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext, ClickEvent, InteractiveElement, IntoElement, MouseButton,
+    AnyElement, App, AppContext, ClickEvent, Context, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
     Window, div, hsla, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, h_flex};
+use gpui_component::{
+    ActiveTheme, Icon, IconName, h_flex,
+    menu::{ContextMenuExt as _, PopupMenu},
+};
 
 #[derive(Clone)]
 struct TabDragData(usize);
+
+type TabContextMenu =
+    Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>;
 
 impl gpui::Render for TabDragData {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -30,6 +36,7 @@ pub struct Tab {
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App) + 'static>>,
     on_tab_drop: Option<Rc<dyn Fn(usize, usize, &mut Window, &mut App) + 'static>>,
+    context_menu: Option<TabContextMenu>,
 }
 
 impl Default for Tab {
@@ -46,6 +53,7 @@ impl Default for Tab {
             on_click: None,
             on_close: None,
             on_tab_drop: None,
+            context_menu: None,
         }
     }
 }
@@ -107,6 +115,14 @@ impl Tab {
         self.on_tab_drop = Some(Rc::new(on_tab_drop));
         self
     }
+
+    pub fn context_menu(
+        mut self,
+        context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+    ) -> Self {
+        self.context_menu = Some(Rc::new(context_menu));
+        self
+    }
 }
 
 impl ParentElement for Tab {
@@ -146,8 +162,9 @@ impl RenderOnce for Tab {
 
         let tab_index = self.index.unwrap_or(0);
         let on_tab_drop = self.on_tab_drop.clone();
+        let context_menu = self.context_menu.clone();
 
-        div()
+        let tab = div()
             .id(self.id.clone().unwrap_or_else(|| SharedString::from("tab")))
             .group("tab-group")
             .flex()
@@ -234,7 +251,14 @@ impl RenderOnce for Tab {
                     on_tab_drop(dragged.0, tab_index, window, cx);
                 })
                 .drag_over(|style, _: &TabDragData, _, cx| style.bg(cx.theme().accent.opacity(0.3)))
-            })
+            });
+
+        if let Some(context_menu) = context_menu {
+            tab.context_menu(move |menu, window, cx| context_menu(menu, window, cx))
+                .into_any_element()
+        } else {
+            tab.into_any_element()
+        }
     }
 }
 

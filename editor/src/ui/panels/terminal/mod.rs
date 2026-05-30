@@ -25,6 +25,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelState},
     h_flex,
+    menu::PopupMenuItem,
     scroll::{Scrollbar, ScrollbarHandle},
     v_flex,
 };
@@ -420,6 +421,22 @@ impl TerminalPanel {
         } else if self.active_ix >= self.sessions.len() {
             self.active_ix = self.sessions.len().saturating_sub(1);
         }
+        self.scroll_to_active_tab();
+        cx.notify();
+    }
+
+    fn close_other_tabs(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if ix >= self.sessions.len() || self.sessions.len() <= 1 {
+            return;
+        }
+
+        let sessions = std::mem::take(&mut self.sessions);
+        for (session_ix, session) in sessions.into_iter().enumerate() {
+            if session_ix == ix {
+                self.sessions.push(session);
+            }
+        }
+        self.active_ix = 0;
         self.scroll_to_active_tab();
         cx.notify();
     }
@@ -1347,16 +1364,30 @@ impl Render for TerminalPanel {
             .iter()
             .enumerate()
             .fold(tab_bar, |tab_bar, (ix, session)| {
-                let entity = entity.clone();
+                let entity_for_close = entity.clone();
+                let entity_for_menu = entity.clone();
+                let can_close_others = self.sessions.len() > 1;
                 tab_bar.child(
                     Tab::new()
                         .label(session.title.clone())
                         .selected(ix == active_ix)
                         .closable(true)
                         .on_close(move |_window, cx| {
-                            entity.update(cx, |this, cx| {
+                            entity_for_close.update(cx, |this, cx| {
                                 this.close_tab(ix, cx);
                             });
+                        })
+                        .context_menu(move |menu, _window, _cx| {
+                            let entity = entity_for_menu.clone();
+                            menu.item(
+                                PopupMenuItem::new("Close others")
+                                    .disabled(!can_close_others)
+                                    .on_click(move |_, _window, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.close_other_tabs(ix, cx);
+                                        });
+                                    }),
+                            )
                         }),
                 )
             });

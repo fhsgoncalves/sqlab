@@ -7,9 +7,9 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, Styled, Subscription, Task, Window, actions,
-    div, hsla, prelude::FluentBuilder, px,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, ParentElement, Render, Styled,
+    Subscription, Task, Window, actions, div, hsla, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IconName, IconNamed, Selectable, Sizable,
@@ -36,6 +36,9 @@ actions!(
         SaveFile,
         FormatQuery,
         ToggleCommentLines,
+        IndentLines,
+        OutdentLines,
+        CutEditorLine,
         ToggleEditorSearch,
         ToggleEditorReplace,
         CloseEditorSearch,
@@ -47,7 +50,9 @@ actions!(
 );
 
 const SEARCH_CONTEXT: &str = "EditorSearch";
+const FILE_EDITOR_CONTEXT: &str = "file_editor";
 const SQL_LINE_COMMENT: &str = "-- ";
+const LINE_INDENT: &str = "  ";
 
 #[derive(Clone, Debug)]
 pub enum EditorPanelEvent {
@@ -421,6 +426,42 @@ fn toggle_comment_lines(text: &str, line_range: Range<usize>) -> String {
     } else {
         comment_lines(text, line_range)
     }
+}
+
+fn indent_lines(text: &str, line_range: Range<usize>) -> String {
+    let mut output = text.to_string();
+    let replacement = map_preserving_line_endings(&text[line_range.clone()], |line| {
+        format!("{LINE_INDENT}{line}")
+    });
+    output.replace_range(line_range, &replacement);
+    output
+}
+
+fn outdent_lines(text: &str, line_range: Range<usize>) -> String {
+    let mut output = text.to_string();
+    let replacement = map_preserving_line_endings(&text[line_range.clone()], |line| {
+        if let Some(rest) = line.strip_prefix('\t') {
+            rest.to_string()
+        } else if let Some(rest) = line.strip_prefix(LINE_INDENT) {
+            rest.to_string()
+        } else if let Some(rest) = line.strip_prefix(' ') {
+            rest.to_string()
+        } else {
+            line.to_string()
+        }
+    });
+    output.replace_range(line_range, &replacement);
+    output
+}
+
+fn current_line_range_for_cut(text: &str, cursor: usize) -> Range<usize> {
+    let cursor = cursor.min(text.len());
+    let start = text[..cursor].rfind('\n').map(|ix| ix + 1).unwrap_or(0);
+    let end = text[cursor..]
+        .find('\n')
+        .map(|ix| cursor + ix + 1)
+        .unwrap_or(text.len());
+    start..end
 }
 
 impl EditorPanel {
@@ -1332,6 +1373,97 @@ impl EditorPanel {
     ) {
         self.edit_selected_lines(window, cx, toggle_comment_lines);
     }
+
+    fn editor_has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.editor.read(cx).focus_handle(cx).is_focused(window)
+    }
+
+    fn on_indent_lines(&mut self, _: &IndentLines, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editor_has_focus(window, cx) {
+            cx.propagate();
+            return;
+        }
+        self.edit_selected_lines(window, cx, indent_lines);
+    }
+
+    fn on_outdent_lines(&mut self, _: &OutdentLines, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editor_has_focus(window, cx) {
+            cx.propagate();
+            return;
+        }
+        self.edit_selected_lines(window, cx, outdent_lines);
+    }
+
+    fn cut_selection_or_current_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editor_has_focus(window, cx) {
+            cx.propagate();
+            return;
+        }
+
+        let (text, range) = {
+            let state = self.editor.read(cx);
+            let text = state.value().to_string();
+            let selected_range = state.selected_range();
+            let range = if selected_range.is_empty() {
+                current_line_range_for_cut(&text, state.cursor())
+            } else {
+                selected_range
+            };
+            (text, range)
+        };
+
+        if range.is_empty() {
+            return;
+        }
+
+        cx.write_to_clipboard(ClipboardItem::new_string(text[range.clone()].to_string()));
+        self.editor.update(cx, |editor, cx| {
+            editor.set_selected_range(range, cx);
+            editor.replace("", window, cx);
+        });
+    }
+
+    fn on_cut_editor_line(
+        &mut self,
+        _: &CutEditorLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cut_selection_or_current_line(window, cx);
+    }
+
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.editor_has_focus(window, cx) {
+            return;
+        }
+
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        if keystroke.key == "tab" && !modifiers.platform && !modifiers.control && !modifiers.alt {
+            if modifiers.shift {
+                self.edit_selected_lines(window, cx, outdent_lines);
+            } else {
+                self.edit_selected_lines(window, cx, indent_lines);
+            }
+            cx.stop_propagation();
+            return;
+        }
+
+        if keystroke.key == "x"
+            && modifiers.platform
+            && !modifiers.control
+            && !modifiers.alt
+            && !modifiers.shift
+        {
+            self.cut_selection_or_current_line(window, cx);
+            cx.stop_propagation();
+        }
+    }
 }
 
 impl Panel for EditorPanel {
@@ -1364,6 +1496,9 @@ impl Render for EditorPanel {
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_format_query))
             .on_action(cx.listener(Self::on_toggle_comment_lines))
+            .on_action(cx.listener(Self::on_indent_lines))
+            .on_action(cx.listener(Self::on_outdent_lines))
+            .on_action(cx.listener(Self::on_cut_editor_line))
             .on_action(cx.listener(Self::toggle_search))
             .on_action(cx.listener(Self::toggle_replace))
             .on_action(cx.listener(Self::close_search))
@@ -1371,16 +1506,19 @@ impl Render for EditorPanel {
             .on_action(cx.listener(Self::on_select_next_match))
             .on_action(cx.listener(Self::replace_current_match_action))
             .on_action(cx.listener(Self::replace_all_matches))
+            .capture_key_down(cx.listener(Self::handle_key_down))
             .when(self.search_open, |this| {
                 this.child(self.render_search_bar(cx))
             })
             .child(
-                Input::new(&self.editor)
-                    .bordered(false)
-                    .p_0()
-                    .h_full()
-                    .font_family(cx.theme().mono_font_family.clone())
-                    .text_size(cx.theme().mono_font_size),
+                div().key_context(FILE_EDITOR_CONTEXT).size_full().child(
+                    Input::new(&self.editor)
+                        .bordered(false)
+                        .p_0()
+                        .h_full()
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_size(cx.theme().mono_font_size),
+                ),
             )
     }
 }
@@ -1624,6 +1762,32 @@ mod tests {
         let range = selected_line_range(text, 0..text.len(), 0);
 
         assert_eq!(uncomment_lines(text, range), "select 1;\n\tselect 2;");
+    }
+
+    #[test]
+    fn indents_selected_lines() {
+        let text = "select 1;\nselect 2;";
+        let range = selected_line_range(text, 0..text.len(), 0);
+
+        assert_eq!(indent_lines(text, range), "  select 1;\n  select 2;");
+    }
+
+    #[test]
+    fn outdents_selected_lines() {
+        let text = "  select 1;\n\tselect 2;\n select 3;";
+        let range = selected_line_range(text, 0..text.len(), 0);
+
+        assert_eq!(
+            outdent_lines(text, range),
+            "select 1;\nselect 2;\nselect 3;"
+        );
+    }
+
+    #[test]
+    fn cut_line_range_includes_trailing_newline() {
+        let text = "select 1;\nselect 2;\nselect 3;";
+
+        assert_eq!(current_line_range_for_cut(text, 12), 10..20);
     }
 
     #[test]

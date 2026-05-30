@@ -121,7 +121,7 @@ fn configure_native_store() -> keyring_core::Result<()> {
         use apple_native_keyring_store::keychain::Store;
 
         set_default_store(Store::new_with_configuration(&config)?);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
