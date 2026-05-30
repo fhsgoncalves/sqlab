@@ -16,10 +16,10 @@ sq/lab is a SQL editor written in Rust using GPUI.
 """
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
-gpui-component = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration", features = ["tree-sitter-sql"] }
-gpui-component-assets = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "e2e7a6769e693c843c82cea2dcf65917c139cc0f" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"], rev = "e2e7a6769e693c843c82cea2dcf65917c139cc0f" }
+gpui-component = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration-v2", features = ["tree-sitter-sql"] }
+gpui-component-assets = { git = "https://github.com/fhsgoncalves/gpui-component", branch = "input-decoration-v2" }
 sqlab-drivers-core = { path = "../drivers/core" }
 sqlab-drivers-postgres = { path = "../drivers/postgres" }
 sqlab-drivers-mysql = { path = "../drivers/mysql" }
