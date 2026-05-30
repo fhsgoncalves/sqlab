@@ -1642,6 +1642,7 @@ mod tests {
                 name: "users".to_string(),
                 kind: TableKind::Table,
                 columns: Vec::new(),
+                comment: None,
             }],
             ..Default::default()
         };
@@ -1726,6 +1727,7 @@ mod tests {
                     schema: "public".to_string(),
                     name: "customers".to_string(),
                     kind: TableKind::Table,
+                    comment: None,
                     columns: vec![
                         ColumnInfo {
                             name: "id".to_string(),
@@ -1738,6 +1740,7 @@ mod tests {
                             default_value: None,
                             is_generated: false,
                             generation_expression: None,
+                            comment: None,
                         },
                         ColumnInfo {
                             name: "name".to_string(),
@@ -1750,6 +1753,7 @@ mod tests {
                             default_value: None,
                             is_generated: false,
                             generation_expression: None,
+                            comment: None,
                         },
                         ColumnInfo {
                             name: "city".to_string(),
@@ -1762,6 +1766,7 @@ mod tests {
                             default_value: None,
                             is_generated: false,
                             generation_expression: None,
+                            comment: None,
                         },
                     ],
                 },
@@ -1769,6 +1774,7 @@ mod tests {
                     schema: "public".to_string(),
                     name: "orders".to_string(),
                     kind: TableKind::Table,
+                    comment: None,
                     columns: vec![
                         ColumnInfo {
                             name: "created_at".to_string(),
@@ -1781,6 +1787,7 @@ mod tests {
                             default_value: None,
                             is_generated: false,
                             generation_expression: None,
+                            comment: None,
                         },
                         ColumnInfo {
                             name: "customer_id".to_string(),
@@ -1793,6 +1800,7 @@ mod tests {
                             default_value: None,
                             is_generated: false,
                             generation_expression: None,
+                            comment: None,
                         },
                         ColumnInfo {
                             name: "id".to_string(),
@@ -1805,6 +1813,7 @@ mod tests {
                             default_value: None,
                             is_generated: false,
                             generation_expression: None,
+                            comment: None,
                         },
                         ColumnInfo {
                             name: "status".to_string(),
@@ -1817,6 +1826,7 @@ mod tests {
                             default_value: None,
                             is_generated: false,
                             generation_expression: None,
+                            comment: None,
                         },
                     ],
                 },

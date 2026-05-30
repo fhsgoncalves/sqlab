@@ -176,6 +176,7 @@ impl SQLiteDataSource {
                     TableKind::Table
                 },
                 columns,
+                comment: None,
             });
         }
 
@@ -307,6 +308,7 @@ fn sqlite_columns(
             },
             is_generated: hidden >= 2,
             generation_expression: if hidden >= 2 { default_value } else { None },
+            comment: None,
         })
     })
     .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?

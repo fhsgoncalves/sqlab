@@ -12,6 +12,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem},
+    text::TextView,
     tree::TreeItem,
     v_flex,
 };
@@ -1187,6 +1188,72 @@ impl ConnectionPanel {
         None
     }
 
+    fn show_quick_documentation(
+        &mut self,
+        node_id: String,
+        _label: String,
+        schema: sqlab_drivers_core::DatabaseSchema,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ddl) = Self::generate_ddl_for_node(&node_id, &_label, &schema) else {
+            return;
+        };
+        let title = Self::node_label_for_doc(&node_id, &_label);
+        let markdown = format!("```sql\n{}\n```", ddl);
+        let markdown_shared: SharedString = markdown.into();
+        let title_for_closure = title.clone();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            alert
+                .title(title_for_closure.clone())
+                .width(px(640.))
+                .child(
+                    TextView::markdown("quick-doc", markdown_shared.clone())
+                        .selectable(true)
+                        .text_xs()
+                        .max_h(px(480.)),
+                )
+        });
+    }
+
+    fn node_label_for_doc(node_id: &str, label: &str) -> String {
+        if node_id.contains(":table:") {
+            let table_name = node_id
+                .split(":table:")
+                .nth(1)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| label.to_string());
+            let schema_name = node_id
+                .split(":schema:")
+                .nth(1)
+                .map(|s| s.split(':').next().unwrap_or("").to_string())
+                .unwrap_or_default();
+            if schema_name.is_empty() {
+                format!("Documentation: {}", table_name)
+            } else {
+                format!("Documentation: {}.{}", schema_name, table_name)
+            }
+        } else if node_id.contains(":view:") {
+            let view_name = node_id
+                .split(":view:")
+                .nth(1)
+                .map(|s| s.split(" (").next().unwrap_or(s).to_string())
+                .unwrap_or_else(|| label.to_string());
+            let schema_name = node_id
+                .split(":schema:")
+                .nth(1)
+                .map(|s| s.split(':').next().unwrap_or("").to_string())
+                .unwrap_or_default();
+            if schema_name.is_empty() {
+                format!("Documentation: {}", view_name)
+            } else {
+                format!("Documentation: {}.{}", schema_name, view_name)
+            }
+        } else {
+            format!("Documentation: {}", label)
+        }
+    }
+
     fn schema_node_context_menu(
         node_id: String,
         _label: String,
@@ -1254,20 +1321,39 @@ impl ConnectionPanel {
                 )
             })
             .when(!is_folder_node, |menu| {
+                let copy_ddl_node_id = ddl_node_id.clone();
+                let copy_ddl_label = ddl_label.clone();
+                let copy_ddl_schema = ddl_schema.clone();
+                let doc_node_id = ddl_node_id.clone();
+                let doc_label = ddl_label.clone();
+                let doc_schema = ddl_schema.clone();
                 menu.item(
                     PopupMenuItem::new("Generate and copy DDL")
                         .icon(IconName::File)
                         .on_click({
                             move |_menu, _window, cx| {
                                 if let Some(ddl) = Self::generate_ddl_for_node(
-                                    &ddl_node_id,
-                                    &ddl_label,
-                                    &ddl_schema,
+                                    &copy_ddl_node_id,
+                                    &copy_ddl_label,
+                                    &copy_ddl_schema,
                                 ) {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(ddl));
                                 }
                             }
                         }),
+                )
+                .item(
+                    PopupMenuItem::new("Quick documentation")
+                        .icon(IconName::Info)
+                        .on_click(window.listener_for(&view, move |this, _, window, cx| {
+                            this.show_quick_documentation(
+                                doc_node_id.clone(),
+                                doc_label.clone(),
+                                doc_schema.clone(),
+                                window,
+                                cx,
+                            );
+                        })),
                 )
             })
         }

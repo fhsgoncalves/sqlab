@@ -400,6 +400,7 @@ fn build_tables(
                 TableKind::Table
             },
             columns: Vec::new(),
+            comment: None,
         })
         .collect::<Vec<_>>();
 
@@ -419,6 +420,7 @@ fn build_tables(
                 default_value: row.default_value,
                 is_generated: false,
                 generation_expression: None,
+                comment: None,
             });
         }
     }

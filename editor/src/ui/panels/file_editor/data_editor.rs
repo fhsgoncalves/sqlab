@@ -888,6 +888,7 @@ mod tests {
             name: "transactions".into(),
             kind: TableKind::Table,
             columns: vec![],
+            comment: None,
         }
     }
 
@@ -926,6 +927,7 @@ mod tests {
         let table = TableInfo {
             schema: "app".into(),
             name: "order`items".into(),
+            comment: None,
             ..table()
         };
 

@@ -216,7 +216,7 @@ impl PostgresDataSource {
         let client = self.client.as_ref().ok_or(DataSourceError::NotConnected)?;
         let configured_schema = self.config.schema.clone();
 
-        let (schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows, foreign_key_rows) = self
+        let (schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows, foreign_key_rows, table_comment_rows) = self
             .runtime
             .block_on(async {
                 let schema_rows = client
@@ -258,7 +258,8 @@ impl PostgresDataSource {
                                     else null
                                 end
                                 where t.oid = a.atttypid
-                            ), '{}'::text[]) as enum_values
+                            ), '{}'::text[]) as enum_values,
+                            pg_catalog.col_description(a.attrelid, a.attnum) as column_comment
                         from pg_catalog.pg_class c
                         join pg_catalog.pg_namespace n on n.oid = c.relnamespace
                         join pg_catalog.pg_attribute a on a.attrelid = c.oid
@@ -447,7 +448,26 @@ impl PostgresDataSource {
                     )
                     .await?;
 
-                Ok::<_, tokio_postgres::Error>((schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows, foreign_key_rows))
+                let table_comment_rows = client
+                    .query(
+                        "
+                        select
+                            n.nspname as schema_name,
+                            c.relname as table_name,
+                            pg_catalog.obj_description(c.oid, 'pg_class') as table_comment
+                        from pg_catalog.pg_class c
+                        join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+                        where c.relkind in ('r', 'p', 'v', 'm', 'f')
+                          and n.nspname !~ '^pg_'
+                          and n.nspname <> 'information_schema'
+                          and ($1 = '' or n.nspname = $1)
+                        order by n.nspname, c.relname
+                        ",
+                        &[&configured_schema],
+                    )
+                    .await?;
+
+                Ok::<_, tokio_postgres::Error>((schema_rows, column_rows, function_rows, sequence_rows, index_rows, trigger_rows, pk_rows, fk_rows, foreign_key_rows, table_comment_rows))
             })
             .map_err(|e| DataSourceError::QueryFailed(format_postgres_error(e)))?;
 
@@ -481,6 +501,23 @@ impl PostgresDataSource {
             })
             .collect();
 
+        let table_comments: std::collections::HashMap<(String, String), String> =
+            table_comment_rows
+                .iter()
+                .filter_map(|row| {
+                    let comment: Option<String> = row.get("table_comment");
+                    comment.map(|c| {
+                        (
+                            (
+                                row.get::<_, String>("schema_name"),
+                                row.get::<_, String>("table_name"),
+                            ),
+                            c,
+                        )
+                    })
+                })
+                .collect();
+
         let mut tables = Vec::<TableInfo>::new();
         for row in column_rows {
             let schema = row.get::<_, String>("schema_name");
@@ -502,6 +539,8 @@ impl PostgresDataSource {
                 None
             };
 
+            let column_comment: Option<String> = row.get("column_comment");
+
             let column = ColumnInfo {
                 name: column_name,
                 data_type: display_data_type(Database::Postgres, row.get::<_, String>("data_type")),
@@ -513,6 +552,7 @@ impl PostgresDataSource {
                 default_value: if !is_generated { default_value } else { None },
                 is_generated,
                 generation_expression,
+                comment: column_comment,
             };
 
             if let Some(table) = tables
@@ -521,11 +561,15 @@ impl PostgresDataSource {
             {
                 table.columns.push(column);
             } else {
+                let table_comment = table_comments
+                    .get(&(schema.clone(), table_name.clone()))
+                    .cloned();
                 tables.push(TableInfo {
                     schema,
                     name: table_name,
                     kind: table_kind(&relkind),
                     columns: vec![column],
+                    comment: table_comment,
                 });
             }
         }

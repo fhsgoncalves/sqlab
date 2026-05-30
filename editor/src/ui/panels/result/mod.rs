@@ -3649,6 +3649,7 @@ mod tests {
             name: name.into(),
             kind: TableKind::Table,
             columns: Vec::new(),
+            comment: None,
         }
     }
 
@@ -3793,6 +3794,7 @@ mod tests {
                     default_value: None,
                     is_generated: false,
                     generation_expression: None,
+                    comment: None,
                 },
                 sqlab_drivers_core::ColumnInfo {
                     name: "status".into(),
@@ -3805,8 +3807,10 @@ mod tests {
                     default_value: None,
                     is_generated: true,
                     generation_expression: None,
+                    comment: None,
                 },
             ],
+            comment: None,
         };
 
         let editable_table =
@@ -3841,6 +3845,7 @@ mod tests {
                     default_value: None,
                     is_generated: false,
                     generation_expression: None,
+                    comment: None,
                 },
                 sqlab_drivers_core::ColumnInfo {
                     name: "id".into(),
@@ -3853,6 +3858,7 @@ mod tests {
                     default_value: Some("gen_random_uuid()".into()),
                     is_generated: false,
                     generation_expression: None,
+                    comment: None,
                 },
                 sqlab_drivers_core::ColumnInfo {
                     name: "mood".into(),
@@ -3865,8 +3871,10 @@ mod tests {
                     default_value: None,
                     is_generated: false,
                     generation_expression: None,
+                    comment: None,
                 },
             ],
+            comment: None,
         };
 
         let editable_table = EditableTable::from_table_result_columns(

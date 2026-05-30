@@ -41,6 +41,7 @@ pub fn schema_to_rows(
                 TableKind::ForeignTable => "foreign_table",
             }
             .to_string(),
+            comment: t.comment.clone(),
         });
 
         for c in &t.columns {
@@ -58,6 +59,7 @@ pub fn schema_to_rows(
                 default_value: c.default_value.clone(),
                 is_generated: if c.is_generated { 1 } else { 0 },
                 generation_expression: c.generation_expression.clone(),
+                comment: c.comment.clone(),
             });
         }
     }
@@ -181,6 +183,7 @@ pub fn rows_to_schema(
             name: t.name,
             kind,
             columns: Vec::new(),
+            comment: t.comment,
         });
     }
 
@@ -200,6 +203,7 @@ pub fn rows_to_schema(
                 default_value: c.default_value,
                 is_generated: c.is_generated != 0,
                 generation_expression: c.generation_expression,
+                comment: c.comment,
             });
         }
     }
@@ -294,6 +298,7 @@ pub struct TableRow {
     pub schema_name: String,
     pub name: String,
     pub kind: String,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +316,7 @@ pub struct ColumnRow {
     pub default_value: Option<String>,
     pub is_generated: i32,
     pub generation_expression: Option<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -64,15 +64,15 @@ pub fn save(
 
         for t in &tables {
             conn.execute(
-                "INSERT INTO tables (connection_key, schema_name, name, kind) VALUES (?1, ?2, ?3, ?4)",
-                params![t.connection_key, t.schema_name, t.name, t.kind],
+                "INSERT INTO tables (connection_key, schema_name, name, kind, comment) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![t.connection_key, t.schema_name, t.name, t.kind, t.comment],
             )?;
         }
 
         for c in &columns {
             conn.execute(
-                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, enum_values, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.enum_values, c.nullable, c.ordinal, c.is_pk, c.is_fk, c.default_value, c.is_generated, c.generation_expression],
+                "INSERT INTO columns (connection_key, schema_name, table_name, name, data_type, enum_values, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![c.connection_key, c.schema_name, c.table_name, c.name, c.data_type, c.enum_values, c.nullable, c.ordinal, c.is_pk, c.is_fk, c.default_value, c.is_generated, c.generation_expression, c.comment],
             )?;
         }
 
@@ -183,7 +183,7 @@ fn load_schemas(conn: &rusqlite::Connection, key: &str) -> Result<Vec<SchemaRow>
 
 fn load_tables(conn: &rusqlite::Connection, key: &str) -> Result<Vec<TableRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT connection_key, schema_name, name, kind FROM tables WHERE connection_key = ?1",
+        "SELECT connection_key, schema_name, name, kind, comment FROM tables WHERE connection_key = ?1",
     )?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(TableRow {
@@ -191,6 +191,7 @@ fn load_tables(conn: &rusqlite::Connection, key: &str) -> Result<Vec<TableRow>, 
             schema_name: row.get(1)?,
             name: row.get(2)?,
             kind: row.get(3)?,
+            comment: row.get(4)?,
         })
     })?;
     rows.collect()
@@ -198,7 +199,7 @@ fn load_tables(conn: &rusqlite::Connection, key: &str) -> Result<Vec<TableRow>, 
 
 fn load_columns(conn: &rusqlite::Connection, key: &str) -> Result<Vec<ColumnRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT connection_key, schema_name, table_name, name, data_type, enum_values, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression FROM columns WHERE connection_key = ?1",
+        "SELECT connection_key, schema_name, table_name, name, data_type, enum_values, nullable, ordinal, is_pk, is_fk, default_value, is_generated, generation_expression, comment FROM columns WHERE connection_key = ?1",
     )?;
     let rows = stmt.query_map(params![key], |row| {
         Ok(ColumnRow {
@@ -215,6 +216,7 @@ fn load_columns(conn: &rusqlite::Connection, key: &str) -> Result<Vec<ColumnRow>
             default_value: row.get(10)?,
             is_generated: row.get(11)?,
             generation_expression: row.get(12)?,
+            comment: row.get(13)?,
         })
     })?;
     rows.collect()

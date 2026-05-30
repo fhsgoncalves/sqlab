@@ -249,6 +249,7 @@ pub struct TableInfo {
     pub name: String,
     pub kind: TableKind,
     pub columns: Vec<ColumnInfo>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -271,6 +272,7 @@ pub struct ColumnInfo {
     pub default_value: Option<String>,
     pub is_generated: bool,
     pub generation_expression: Option<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone)]

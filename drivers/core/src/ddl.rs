@@ -53,21 +53,37 @@ impl DdlGenerator for PostgresDdlGenerator {
             .collect();
         ddl.push_str(&columns_ddl.join(",\n"));
 
+        // Primary key constraint (multi-column)
+        let pk_columns: Vec<&ColumnInfo> = table.columns.iter().filter(|c| c.is_pk).collect();
+        if pk_columns.len() > 1 {
+            let pk_col_list: Vec<String> = pk_columns
+                .iter()
+                .map(|c| quote_identifier(&c.name))
+                .collect();
+            ddl.push_str(&format!(
+                ",\n    CONSTRAINT {}_pkey PRIMARY KEY ({})",
+                quote_identifier(&table.name),
+                pk_col_list.join(", ")
+            ));
+        }
+
         // Foreign key constraints
         let fk_constraints: Vec<String> = schema
             .foreign_keys
             .iter()
-            .filter(|fk| {
-                fk.source_schema == table.schema
-                    && fk.source_table == table.name
-                    && fk.source_columns.len() == 1
-            })
+            .filter(|fk| fk.source_schema == table.schema && fk.source_table == table.name)
             .filter_map(|fk| {
-                let source_column = fk.source_columns.first()?;
+                if fk.source_columns.is_empty() {
+                    return None;
+                }
                 Some(format!(
                     "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
                     quote_identifier(&fk.name),
-                    quote_identifier(source_column),
+                    fk.source_columns
+                        .iter()
+                        .map(|c| quote_identifier(c))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     qualified_name(&fk.target_schema, &fk.target_table),
                     fk.target_columns
                         .iter()
@@ -85,7 +101,35 @@ impl DdlGenerator for PostgresDdlGenerator {
 
         ddl.push_str("\n);\n");
 
-        // Add comments if table is a foreign table
+        // Non-primary-key indexes
+        for idx in &schema.indexes {
+            if idx.schema == table.schema && idx.table_name == table.name && !idx.is_primary {
+                ddl.push('\n');
+                ddl.push_str(&self.generate_index_ddl(idx));
+            }
+        }
+
+        // Table comment
+        if let Some(comment) = &table.comment {
+            ddl.push_str(&format!(
+                "\nCOMMENT ON TABLE {} IS {};\n",
+                tbl_qualified_name,
+                quote_string(comment)
+            ));
+        }
+
+        // Column comments
+        for col in &table.columns {
+            if let Some(comment) = &col.comment {
+                ddl.push_str(&format!(
+                    "COMMENT ON COLUMN {} IS {};\n",
+                    qualified_name(&table.schema, &format!("{}.{}", table.name, col.name)),
+                    quote_string(comment)
+                ));
+            }
+        }
+
+        // Add note for foreign tables
         if matches!(table.kind, TableKind::ForeignTable) {
             ddl.push_str(&format!(
                 "-- Note: {} is a foreign table\n",
@@ -330,7 +374,7 @@ fn generate_column_definition(
         def.push_str(&format!(" DEFAULT {}", default));
     }
 
-    // Primary key (inline for single-column PKs)
+    // Primary key (inline for single-column PKs only)
     if col.is_pk {
         let pk_columns: Vec<&ColumnInfo> = table.columns.iter().filter(|c| c.is_pk).collect();
         if pk_columns.len() == 1 {
@@ -483,6 +527,10 @@ fn qualified_name(schema: &str, name: &str) -> String {
     format!("{}.{}", quote_identifier(schema), quote_identifier(name))
 }
 
+fn quote_string(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
 impl DdlGenerator for MySqlDdlGenerator {
     fn generate_schema_ddl(&self, schema: &SchemaInfo) -> String {
         format!(
@@ -492,7 +540,44 @@ impl DdlGenerator for MySqlDdlGenerator {
     }
 
     fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
-        generic_table_ddl(schema, table, quote_mysql_identifier, mysql_qualified_name)
+        let mut ddl =
+            generic_table_ddl(schema, table, quote_mysql_identifier, mysql_qualified_name);
+
+        // Non-primary-key indexes
+        for idx in &schema.indexes {
+            if idx.schema == table.schema && idx.table_name == table.name && !idx.is_primary {
+                ddl.push('\n');
+                ddl.push_str(&self.generate_index_ddl(idx));
+            }
+        }
+
+        // Table comment
+        if let Some(comment) = &table.comment {
+            if !comment.is_empty() {
+                ddl.push_str(&format!(
+                    "\nALTER TABLE {} COMMENT = {};\n",
+                    mysql_qualified_name(&table.schema, &table.name),
+                    quote_string(comment)
+                ));
+            }
+        }
+
+        // Column comments
+        for col in &table.columns {
+            if let Some(comment) = &col.comment {
+                if !comment.is_empty() {
+                    ddl.push_str(&format!(
+                        "ALTER TABLE {} MODIFY COLUMN {} {} COMMENT {};\n",
+                        mysql_qualified_name(&table.schema, &table.name),
+                        quote_mysql_identifier(&col.name),
+                        format_column_type(col),
+                        quote_string(comment)
+                    ));
+                }
+            }
+        }
+
+        ddl
     }
 
     fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
@@ -540,7 +625,16 @@ impl DdlGenerator for SQLiteDdlGenerator {
     }
 
     fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
-        generic_table_ddl(schema, table, quote_identifier, sqlite_qualified_name)
+        let mut ddl = generic_table_ddl(schema, table, quote_identifier, sqlite_qualified_name);
+
+        for idx in &schema.indexes {
+            if idx.schema == table.schema && idx.table_name == table.name && !idx.is_primary {
+                ddl.push('\n');
+                ddl.push_str(&self.generate_index_ddl(idx));
+            }
+        }
+
+        ddl
     }
 
     fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
@@ -586,7 +680,16 @@ impl DdlGenerator for DuckDbDdlGenerator {
     }
 
     fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
-        generic_table_ddl(schema, table, quote_identifier, duckdb_qualified_name)
+        let mut ddl = generic_table_ddl(schema, table, quote_identifier, duckdb_qualified_name);
+
+        for idx in &schema.indexes {
+            if idx.schema == table.schema && idx.table_name == table.name && !idx.is_primary {
+                ddl.push('\n');
+                ddl.push_str(&self.generate_index_ddl(idx));
+            }
+        }
+
+        ddl
     }
 
     fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
@@ -628,7 +731,16 @@ impl DdlGenerator for DatabendDdlGenerator {
     }
 
     fn generate_table_ddl(&self, schema: &DatabaseSchema, table: &TableInfo) -> String {
-        generic_table_ddl(schema, table, quote_identifier, databend_qualified_name)
+        let mut ddl = generic_table_ddl(schema, table, quote_identifier, databend_qualified_name);
+
+        for idx in &schema.indexes {
+            if idx.schema == table.schema && idx.table_name == table.name && !idx.is_primary {
+                ddl.push('\n');
+                ddl.push_str(&self.generate_index_ddl(idx));
+            }
+        }
+
+        ddl
     }
 
     fn generate_view_ddl(&self, _schema: &DatabaseSchema, table: &TableInfo) -> String {
@@ -697,6 +809,17 @@ fn generic_table_ddl(
             def
         })
         .collect::<Vec<_>>();
+
+    // Multi-column primary key constraint
+    let pk_columns: Vec<&ColumnInfo> = table.columns.iter().filter(|c| c.is_pk).collect();
+    if pk_columns.len() > 1 {
+        let pk_col_list: Vec<String> = pk_columns.iter().map(|c| quote(&c.name)).collect();
+        definitions.push(format!(
+            "    CONSTRAINT {}_pkey PRIMARY KEY ({})",
+            quote(&table.name),
+            pk_col_list.join(", ")
+        ));
+    }
 
     definitions.extend(
         schema

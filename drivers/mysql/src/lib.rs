@@ -204,20 +204,20 @@ impl MySqlDataSource {
         let column_rows = conn
             .query::<MySqlColumnRow, _>(format!(
                 "SELECT table_schema, table_name, column_name, column_type, is_nullable,
-                        ordinal_position, column_default, extra, column_key
-                 FROM information_schema.columns
-                 WHERE {table_schema_predicate}
-                 ORDER BY table_schema, table_name, ordinal_position"
+                         ordinal_position, column_default, extra, column_key, column_comment
+                  FROM information_schema.columns
+                  WHERE {table_schema_predicate}
+                  ORDER BY table_schema, table_name, ordinal_position"
             ))
             .await
             .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
 
         let table_rows = conn
-            .query::<(String, String, String), _>(format!(
-                "SELECT table_schema, table_name, table_type
-                 FROM information_schema.tables
-                 WHERE {table_schema_predicate}
-                 ORDER BY table_schema, table_name"
+            .query::<MySqlTableRow, _>(format!(
+                "SELECT table_schema, table_name, table_type, table_comment
+                  FROM information_schema.tables
+                  WHERE {table_schema_predicate}
+                  ORDER BY table_schema, table_name"
             ))
             .await
             .map_err(|e| DataSourceError::QueryFailed(e.to_string()))?;
@@ -455,7 +455,9 @@ type MySqlColumnRow = (
     Option<String>,
     String,
     String,
+    Option<String>,
 );
+type MySqlTableRow = (String, String, String, Option<String>);
 type MySqlForeignKeyRow = (
     String,
     String,
@@ -479,13 +481,13 @@ type MySqlRoutineRow = (
 );
 
 fn build_tables(
-    table_rows: Vec<(String, String, String)>,
+    table_rows: Vec<MySqlTableRow>,
     column_rows: Vec<MySqlColumnRow>,
     foreign_keys: &[ForeignKeyInfo],
 ) -> Vec<TableInfo> {
     let mut tables = table_rows
         .into_iter()
-        .map(|(schema, name, kind)| TableInfo {
+        .map(|(schema, name, kind, comment)| TableInfo {
             schema,
             name,
             kind: if kind.eq_ignore_ascii_case("VIEW") {
@@ -494,6 +496,7 @@ fn build_tables(
                 TableKind::Table
             },
             columns: Vec::new(),
+            comment: comment.filter(|c| !c.is_empty()),
         })
         .collect::<Vec<_>>();
 
@@ -519,6 +522,7 @@ fn build_tables(
                 default_value: if is_generated { None } else { row.6.clone() },
                 is_generated,
                 generation_expression: if is_generated { row.6 } else { None },
+                comment: row.9.filter(|c| !c.is_empty()),
             });
         }
     }

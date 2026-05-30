@@ -190,6 +190,11 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute("ALTER TABLE functions ADD COLUMN owner TEXT", [])
         .ok();
 
+    conn.execute("ALTER TABLE tables ADD COLUMN comment TEXT", [])
+        .ok();
+    conn.execute("ALTER TABLE columns ADD COLUMN comment TEXT", [])
+        .ok();
+
     // Migrate functions table to ensure arguments is NOT NULL (fixes overloaded function support)
     conn.execute("DROP TABLE IF EXISTS functions_new", []).ok();
     conn.execute(

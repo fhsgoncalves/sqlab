@@ -2897,6 +2897,7 @@ mod tests {
             default_value: None,
             is_generated: false,
             generation_expression: None,
+            comment: None,
         }
     }
 
@@ -2906,6 +2907,7 @@ mod tests {
             name: name.into(),
             kind: TableKind::Table,
             columns: vec![column("id", true, false), column("parent_id", false, true)],
+            comment: None,
         }
     }
 
