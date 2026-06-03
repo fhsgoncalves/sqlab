@@ -76,7 +76,7 @@ fn recent_folders_path() -> PathBuf {
     app_data_dir().join("recent_folders.json")
 }
 
-fn load_recent_folders() -> Vec<PathBuf> {
+pub(crate) fn load_recent_folders() -> Vec<PathBuf> {
     let Ok(content) = std::fs::read_to_string(recent_folders_path()) else {
         return Vec::new();
     };
@@ -695,7 +695,7 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(
-        root_path: PathBuf,
+        root_path: Option<PathBuf>,
         initial_file: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -748,9 +748,14 @@ impl Workspace {
                 this.editor_tabs.update(cx, |tabs, cx| {
                     tabs.clear_tabs(cx);
                 });
-                let root = this.file_tree_panel.read(cx).root().clone();
+                let Some(root) = this.file_tree_panel.read(cx).root().cloned() else {
+                    return;
+                };
                 this.terminal_panel.update(cx, |terminal, _cx| {
                     terminal.set_working_directory(root.clone());
+                });
+                this.terminal_panel.update(cx, |terminal, cx| {
+                    terminal.ensure_has_tab(cx);
                 });
                 file_search_for_root.update(cx, |search, cx| {
                     search.set_root(root.clone(), cx);
@@ -1001,10 +1006,12 @@ impl Workspace {
         if let Some(file) = initial_file {
             this.open_file(file, window, cx);
         }
-        let folders = add_recent_folder(root_path);
-        this.recent_folders.update(cx, |recent, cx| {
-            recent.set_folders(folders, cx);
-        });
+        if let Some(root_path) = root_path {
+            let folders = add_recent_folder(root_path);
+            this.recent_folders.update(cx, |recent, cx| {
+                recent.set_folders(folders, cx);
+            });
+        }
 
         this
     }
@@ -1844,7 +1851,7 @@ impl Workspace {
 
         if mode == BottomPanelMode::Terminal {
             self.terminal_panel.update(cx, |panel, cx| {
-                panel.ensure_has_tab(window, cx);
+                panel.ensure_has_tab(cx);
             });
         }
 

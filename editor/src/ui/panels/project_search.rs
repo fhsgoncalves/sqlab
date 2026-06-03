@@ -85,7 +85,7 @@ pub struct ProjectSearch {
     search_input: Entity<InputState>,
     replace_input: Entity<InputState>,
     preview_input: Entity<InputState>,
-    root: PathBuf,
+    root: Option<PathBuf>,
     results: Vec<SearchResult>,
     filtered_results: Vec<usize>,
     selected_ix: usize,
@@ -117,7 +117,7 @@ pub enum ProjectSearchEvent {
 impl EventEmitter<ProjectSearchEvent> for ProjectSearch {}
 
 impl ProjectSearch {
-    pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search in project..."));
@@ -218,7 +218,7 @@ impl ProjectSearch {
     }
 
     pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.root = root;
+        self.root = Some(root);
         self.results.clear();
         self.filtered_results.clear();
         self.results_truncated = false;
@@ -258,7 +258,16 @@ impl ProjectSearch {
         self.searching = true;
         cx.notify();
 
-        let root = self.root.clone();
+        let Some(root) = self.root.clone() else {
+            self.results.clear();
+            self.filtered_results.clear();
+            self.results_truncated = false;
+            self.selected_ix = 0;
+            self.searching = false;
+            self.pending_search_task = None;
+            cx.notify();
+            return;
+        };
         let query_clone = query.clone();
         let case_sensitive = self.case_sensitive;
         let use_regex = self.use_regex;
@@ -899,7 +908,11 @@ impl ProjectSearch {
         self.filtered_results
             .get(self.selected_ix)
             .and_then(|ix| self.results.get(*ix))
-            .map(|result| PreviewData::from_result(&self.root, result))
+            .and_then(|result| {
+                self.root
+                    .as_deref()
+                    .map(|root| PreviewData::from_result(root, result))
+            })
     }
 
     fn queue_preview_update(
@@ -956,7 +969,7 @@ impl ProjectSearch {
         let line_number_str = format!("{:>4}", result.line_number);
         let relative_path = result
             .file
-            .strip_prefix(&self.root)
+            .strip_prefix(self.root.as_deref().unwrap_or(&result.file))
             .unwrap_or(&result.file)
             .to_string_lossy()
             .to_string();

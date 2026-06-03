@@ -40,7 +40,7 @@ use ui::panels::terminal::{
 use workspace::{
     CloseRecentFolders, ConfirmRecentFolder, ConfirmSelectedConnection, OpenFolder,
     OpenRecentFolders, SelectNextConnection, SelectNextRecentFolder, SelectPreviousConnection,
-    SelectPreviousRecentFolder, ToggleSearchReplace, Workspace,
+    SelectPreviousRecentFolder, ToggleSearchReplace, Workspace, load_recent_folders,
 };
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
@@ -109,18 +109,16 @@ fn main() {
         let path = PathBuf::from(arg);
         if path.is_file() {
             (
-                path.parent().unwrap_or(&path).to_path_buf(),
+                Some(path.parent().unwrap_or(&path).to_path_buf()),
                 Some(path.clone()),
             )
         } else {
-            (path, None)
+            (Some(path), None)
         }
     } else {
-        (
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            None,
-        )
+        (load_recent_folders().into_iter().next(), None)
     };
+    let prompt_for_initial_folder = root_path.is_none();
 
     app.run(move |cx| {
         gpui_component::init(cx);
@@ -239,8 +237,8 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                let workspace =
-                    cx.new(|cx| Workspace::new(root_path, initial_file.clone(), window, cx));
+                let workspace = cx
+                    .new(|cx| Workspace::new(root_path.clone(), initial_file.clone(), window, cx));
                 let workspace_for_open_folder = workspace.downgrade();
                 cx.on_action(move |_: &OpenFolder, cx| {
                     _ = workspace_for_open_folder.update_in(cx, |workspace, _window, cx| {
@@ -253,6 +251,14 @@ fn main() {
                         workspace.open_recent_folders(window, cx);
                     });
                 });
+                if prompt_for_initial_folder {
+                    let workspace_for_initial_picker = workspace.downgrade();
+                    cx.defer(move |cx| {
+                        _ = workspace_for_initial_picker.update(cx, |workspace, cx| {
+                            workspace.open_folder_picker(cx);
+                        });
+                    });
+                }
                 cx.new(|cx| Root::new(workspace, window, cx))
             },
         ) {

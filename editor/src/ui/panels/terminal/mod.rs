@@ -211,7 +211,11 @@ impl Drop for TerminalBackend {
 }
 
 impl TerminalPanel {
-    pub fn new(working_directory: PathBuf, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        working_directory: Option<PathBuf>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (event_tx, event_rx) = async_channel::unbounded();
         let last_size = TerminalSize {
             columns: 80,
@@ -228,7 +232,7 @@ impl TerminalPanel {
             event_rx: Some(event_rx),
             dock_area: None,
             last_size,
-            working_directory: Some(working_directory),
+            working_directory,
             selection: None,
             selecting: false,
             is_zoomed: false,
@@ -236,7 +240,9 @@ impl TerminalPanel {
             tab_scroll_handle: ScrollHandle::default(),
         };
         panel.start_event_task(cx);
-        panel.new_tab(_window, cx);
+        if panel.working_directory.is_some() {
+            panel.new_tab(cx);
+        }
         panel
     }
 
@@ -320,7 +326,10 @@ impl TerminalPanel {
         self.set_zoomed(!self.is_zoomed, window, cx);
     }
 
-    pub fn new_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn new_tab(&mut self, cx: &mut Context<Self>) {
+        if self.working_directory.is_none() {
+            return;
+        }
         let id = self.next_session_id;
         self.next_session_id += 1;
         self.sessions.push(TerminalSession::new(
@@ -334,9 +343,9 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    pub fn ensure_has_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn ensure_has_tab(&mut self, cx: &mut Context<Self>) {
         if self.sessions.is_empty() {
-            self.new_tab(window, cx);
+            self.new_tab(cx);
         }
     }
 
@@ -452,10 +461,10 @@ impl TerminalPanel {
     fn on_new_terminal_tab(
         &mut self,
         _: &NewTerminalTab,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.new_tab(window, cx);
+        self.new_tab(cx);
     }
 
     fn on_cycle_tab_forward(
@@ -599,11 +608,11 @@ impl TerminalPanel {
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if event.keystroke.modifiers.platform && event.keystroke.key == "t" {
-            self.new_tab(window, cx);
+            self.new_tab(cx);
             cx.stop_propagation();
             return;
         }
@@ -1353,8 +1362,8 @@ impl Render for TerminalPanel {
                             .xsmall()
                             .ghost()
                             .tooltip("New Terminal")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.new_tab(window, cx);
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.new_tab(cx);
                             })),
                     ),
             );

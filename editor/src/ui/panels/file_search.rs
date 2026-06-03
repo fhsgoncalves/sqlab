@@ -41,7 +41,7 @@ pub struct FileSearch {
     filtered_indices: Vec<usize>,
     selected_ix: usize,
     visible: bool,
-    root: PathBuf,
+    root: Option<PathBuf>,
     include_ignored: bool,
     case_sensitive: bool,
     use_regex: bool,
@@ -59,11 +59,14 @@ pub enum FileSearchEvent {
 impl EventEmitter<FileSearchEvent> for FileSearch {}
 
 impl FileSearch {
-    pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search files by name..."));
 
-        let all_files = Self::collect_files(&root, false);
+        let all_files = root
+            .as_deref()
+            .map(|root| Self::collect_files(root, false))
+            .unwrap_or_default();
 
         let input_subscription = cx.subscribe_in(&input, window, {
             move |this: &mut FileSearch, _input, event: &InputEvent, window, cx| match event {
@@ -111,7 +114,11 @@ impl FileSearch {
 
     fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = true;
-        self.all_files = Self::collect_files(&self.root, self.include_ignored);
+        self.all_files = self
+            .root
+            .as_deref()
+            .map(|root| Self::collect_files(root, self.include_ignored))
+            .unwrap_or_default();
         self.filter_results(cx);
         cx.notify();
         window.focus(&self.input.read(cx).focus_handle(cx), cx);
@@ -137,8 +144,12 @@ impl FileSearch {
     }
 
     pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.root = root;
-        self.all_files = Self::collect_files(&self.root, self.include_ignored);
+        self.root = Some(root);
+        self.all_files = self
+            .root
+            .as_deref()
+            .map(|root| Self::collect_files(root, self.include_ignored))
+            .unwrap_or_default();
         self.filter_results(cx);
         cx.notify();
     }
@@ -189,7 +200,7 @@ impl FileSearch {
             .enumerate()
             .map(|(i, path)| {
                 let relative = path
-                    .strip_prefix(&self.root)
+                    .strip_prefix(self.root.as_deref().unwrap_or(path))
                     .unwrap_or(path)
                     .to_string_lossy();
                 let file_name = path
@@ -263,7 +274,7 @@ impl FileSearch {
     }
 
     fn relative_path(&self, path: &Path) -> String {
-        path.strip_prefix(&self.root)
+        path.strip_prefix(self.root.as_deref().unwrap_or(path))
             .unwrap_or(path)
             .to_string_lossy()
             .to_string()
@@ -468,7 +479,7 @@ impl FileSearch {
 
         let dir_path = path
             .parent()
-            .and_then(|p| p.strip_prefix(&self.root).ok())
+            .and_then(|p| p.strip_prefix(self.root.as_deref().unwrap_or(p)).ok())
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 

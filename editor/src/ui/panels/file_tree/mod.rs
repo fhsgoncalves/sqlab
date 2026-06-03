@@ -92,7 +92,7 @@ impl Render for DragPreview {
 pub struct FileTreePanel {
     focus_handle: FocusHandle,
     context_target: Option<PathBuf>,
-    root: PathBuf,
+    root: Option<PathBuf>,
     items: Vec<TreeItem>,
     folder_ids: HashSet<String>,
     cut_buffer: Option<PathBuf>,
@@ -130,8 +130,11 @@ impl gpui_component::dock::Panel for FileTreePanel {
 }
 
 impl FileTreePanel {
-    pub fn new(root: PathBuf, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (items, folder_ids) = build_file_items(&root, &HashSet::new());
+    pub fn new(root: Option<PathBuf>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (items, folder_ids) = root
+            .as_deref()
+            .map(|root| build_file_items(root, &HashSet::new()))
+            .unwrap_or_default();
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -148,8 +151,8 @@ impl FileTreePanel {
         }
     }
 
-    pub fn root(&self) -> &PathBuf {
-        &self.root
+    pub fn root(&self) -> Option<&PathBuf> {
+        self.root.as_ref()
     }
 
     pub fn set_active_editor_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -158,7 +161,7 @@ impl FileTreePanel {
     }
 
     pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.root = root;
+        self.root = Some(root);
         self.refresh_tree(cx);
         cx.emit(RootChangedEvent);
     }
@@ -166,9 +169,14 @@ impl FileTreePanel {
     fn refresh_tree(&mut self, cx: &mut Context<Self>) {
         let mut expanded_ids = HashSet::new();
         Self::collect_expanded_ids(&self.items, &mut expanded_ids);
-        let (items, folder_ids) = build_file_items(&self.root, &expanded_ids);
-        self.items = items;
-        self.folder_ids = folder_ids;
+        if let Some(root) = self.root.as_deref() {
+            let (items, folder_ids) = build_file_items(root, &expanded_ids);
+            self.items = items;
+            self.folder_ids = folder_ids;
+        } else {
+            self.items.clear();
+            self.folder_ids.clear();
+        }
         cx.notify();
     }
 
@@ -226,17 +234,23 @@ impl FileTreePanel {
     }
 
     fn on_action_new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {
-        let target = self
+        let Some(target) = self
             .selected_or_context_target()
-            .unwrap_or_else(|| self.root.clone());
+            .or_else(|| self.root.clone())
+        else {
+            return;
+        };
         let parent = self.parent_for(&target);
         self.start_inline_new(parent, PendingNewKind::File, window, cx);
     }
 
     fn on_action_new_folder(&mut self, _: &NewFolder, window: &mut Window, cx: &mut Context<Self>) {
-        let target = self
+        let Some(target) = self
             .selected_or_context_target()
-            .unwrap_or_else(|| self.root.clone());
+            .or_else(|| self.root.clone())
+        else {
+            return;
+        };
         let parent = self.parent_for(&target);
         self.start_inline_new(parent, PendingNewKind::Folder, window, cx);
     }
@@ -725,8 +739,8 @@ impl FileTreePanel {
         if let Err(e) = std::fs::rename(&target, &new_path) {
             println!("Failed to rename: {}", e);
         } else {
-            if self.root == target {
-                self.root = new_path.clone();
+            if self.root.as_ref() == Some(&target) {
+                self.root = Some(new_path.clone());
                 cx.emit(RootChangedEvent);
             }
             self.selected_id = Some(new_path.to_string_lossy().to_string());
