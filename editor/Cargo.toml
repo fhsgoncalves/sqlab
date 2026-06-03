@@ -4,6 +4,7 @@ version = "0.5.0"
 edition = "2024"
 description = "sq/lab is a SQL editor written in Rust using GPUI."
 repository = "https://github.com/fhsgoncalves/sqlab"
+authors = ["Fernando Goncalves"]
 
 [package.metadata.bundle]
 name = "sqlab"
@@ -14,6 +15,12 @@ short_description = "sq/lab is a SQL editor written in Rust using GPUI."
 long_description = """
 sq/lab is a SQL editor written in Rust using GPUI.
 """
+
+[package.metadata.wix]
+upgrade-guid = "E36926E6-3C2B-43CE-ADE1-023908F7DB5E"
+path-guid = "55759596-0493-46C5-B4C1-70262A11CB12"
+license = false
+eula = false
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "e2e7a6769e693c843c82cea2dcf65917c139cc0f" }

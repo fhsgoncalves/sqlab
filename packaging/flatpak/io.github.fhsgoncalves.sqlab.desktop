@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=sqlab
+Comment=SQL editor written in Rust using GPUI
+Exec=sqlab
+Icon=io.github.fhsgoncalves.sqlab
+Terminal=false
+Categories=Development;Database;
+StartupNotify=true

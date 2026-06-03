@@ -139,11 +139,27 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      - name: Install Flatpak packaging tools
+        if: ${{ contains(join(matrix.targets, ','), 'unknown-linux-gnu') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      - name: Build macOS DMG
+        if: ${{ contains(join(matrix.targets, ','), 'aarch64-apple-darwin') }}
+        shell: bash
+        run: |
+          cargo install cargo-bundle --locked --version 0.10.0
+          scripts/package-macos-dmg.sh aarch64-apple-darwin
+      - name: Build Linux Flatpak
+        if: ${{ contains(join(matrix.targets, ','), 'unknown-linux-gnu') }}
+        shell: bash
+        run: |
+          scripts/package-flatpak.sh ${{ join(matrix.targets, ' ') }}
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
@@ -154,6 +170,9 @@ jobs:
           # Parse out what we just built and upload it to scratch storage
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
           dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
+          if ls target/distrib/*.dmg target/distrib/*.flatpak target/distrib/*.dmg.sha256 target/distrib/*.flatpak.sha256 >/dev/null 2>&1; then
+            ls target/distrib/*.dmg target/distrib/*.flatpak target/distrib/*.dmg.sha256 target/distrib/*.flatpak.sha256 2>/dev/null
+          fi
           echo "EOF" >> "$GITHUB_OUTPUT"
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
@@ -274,7 +293,9 @@ jobs:
           RELEASE_COMMIT: "${{ github.sha }}"
         run: |
           # Write and read notes from a file to avoid quoting breaking things
-          echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
+          cat docs/release-installation.md > $RUNNER_TEMP/notes.txt
+          printf '\n' >> $RUNNER_TEMP/notes.txt
+          printf '%s\n' "$ANNOUNCEMENT_BODY" | awk 'BEGIN { emit = 0 } /^## Download / { emit = 1 } emit { print }' >> $RUNNER_TEMP/notes.txt
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.fhsgoncalves.sqlab</id>
+  <name>sqlab</name>
+  <summary>SQL editor written in Rust using GPUI</summary>
+  <developer_name>Fernando Goncalves</developer_name>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">io.github.fhsgoncalves.sqlab.desktop</launchable>
+  <url type="homepage">https://github.com/fhsgoncalves/sqlab</url>
+  <description>
+    <p>sqlab is a SQL editor written in Rust using GPUI.</p>
+  </description>
+</component>
