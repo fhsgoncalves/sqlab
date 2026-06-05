@@ -31,6 +31,8 @@ runtime: org.freedesktop.Platform
 runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
 command: ${APP_NAME}
+# Standalone bundles do not need a repository AppStream index.
+appstream-compose: false
 
 finish-args:
   - --share=ipc
