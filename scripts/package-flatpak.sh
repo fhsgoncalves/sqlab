@@ -23,7 +23,7 @@ mkdir -p "${INPUT_DIR}" "${REPO_DIR}"
 tar -xf "${ARCHIVE}" --strip-components 1 -C "${INPUT_DIR}"
 install -Dm644 packaging/flatpak/${APP_ID}.desktop "${INPUT_DIR}/${APP_ID}.desktop"
 install -Dm644 packaging/flatpak/${APP_ID}.metainfo.xml "${INPUT_DIR}/${APP_ID}.metainfo.xml"
-install -Dm644 assets/app-icon.png "${INPUT_DIR}/${APP_ID}.png"
+install -Dm644 packaging/flatpak/${APP_ID}.png "${INPUT_DIR}/${APP_ID}.png"
 
 cat > "${MANIFEST}" <<EOF
 app-id: ${APP_ID}
@@ -49,7 +49,7 @@ modules:
       - install -Dm755 ${APP_NAME} /app/bin/${APP_NAME}
       - install -Dm644 ${APP_ID}.desktop /app/share/applications/${APP_ID}.desktop
       - install -Dm644 ${APP_ID}.metainfo.xml /app/share/metainfo/${APP_ID}.metainfo.xml
-      - install -Dm644 ${APP_ID}.png /app/share/icons/hicolor/1024x1024/apps/${APP_ID}.png
+      - install -Dm644 ${APP_ID}.png /app/share/icons/hicolor/512x512/apps/${APP_ID}.png
     sources:
       - type: dir
         path: input
