@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, StatefulInteractiveElement, Styled, Window,
-    actions, div, prelude::FluentBuilder, px,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Window, actions, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -24,15 +24,6 @@ actions!(
 );
 
 const CONTEXT: &str = "FileSearch";
-
-pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("up", SelectPreviousFile, Some(CONTEXT)),
-        KeyBinding::new("down", SelectNextFile, Some(CONTEXT)),
-        KeyBinding::new("enter", ConfirmFileSearch, Some(CONTEXT)),
-        KeyBinding::new("escape", CloseFileSearch, Some(CONTEXT)),
-    ]);
-}
 
 pub struct FileSearch {
     input: Entity<InputState>,

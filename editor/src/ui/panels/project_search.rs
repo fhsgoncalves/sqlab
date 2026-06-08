@@ -5,8 +5,8 @@ use std::{
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, ScrollHandle, StatefulInteractiveElement,
-    Styled, Task, Window, actions, div, point, prelude::FluentBuilder, px,
+    IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, Task,
+    Window, actions, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::IconName;
 use gpui_component::button::{Button, ButtonVariants};
@@ -40,15 +40,6 @@ const RESULT_ROW_HEIGHT: f32 = 58.0;
 const SEARCH_DEBOUNCE: Duration = Duration::from_secs(1);
 const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 2_000;
-
-pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("up", SelectPreviousResult, Some(CONTEXT)),
-        KeyBinding::new("down", SelectNextResult, Some(CONTEXT)),
-        KeyBinding::new("enter", ConfirmProjectSearch, Some(CONTEXT)),
-        KeyBinding::new("escape", CloseProjectSearch, Some(CONTEXT)),
-    ]);
-}
 
 #[derive(Clone, Debug)]
 pub struct SearchResult {

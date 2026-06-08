@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, Window,
-    actions, div, hsla, point, prelude::FluentBuilder, px,
+    IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle, StatefulInteractiveElement,
+    Styled, Window, actions, div, hsla, point, prelude::FluentBuilder, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::{
@@ -38,6 +38,7 @@ use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEven
 use crate::ui::panels::project_search::{ProjectSearch, ProjectSearchEvent, ToggleProjectSearch};
 use crate::ui::panels::result::ResultPanel;
 use crate::ui::panels::terminal::TerminalPanel;
+use crate::ui::settings_page::SettingsPage;
 use sqlab_drivers_core::{
     ColumnMetadata, ConnectionStatus, DataSourceConfig, DataSourceError, QueryExecutionOptions,
     QueryResult, manager::DataSourceManager,
@@ -48,6 +49,7 @@ actions!(
     [
         OpenFolder,
         OpenRecentFolders,
+        OpenSettings,
         CloseRecentFolders,
         ConfirmRecentFolder,
         SelectPreviousRecentFolder,
@@ -689,6 +691,7 @@ pub struct Workspace {
     app_menu_bar: Entity<AppMenuBar>,
     focus_handle: FocusHandle,
     terminal_panel: Entity<TerminalPanel>,
+    settings_page: Option<Entity<SettingsPage>>,
     bottom_panel_size: gpui::Pixels,
     connection_fingerprints: HashMap<String, String>,
 }
@@ -961,6 +964,7 @@ impl Workspace {
             app_menu_bar,
             focus_handle,
             terminal_panel,
+            settings_page: None,
             bottom_panel_size,
             connection_fingerprints: connection_fingerprints(
                 data_source_manager.read(cx).configs(),
@@ -1138,6 +1142,40 @@ impl Workspace {
                 menu_bar.reload(cx);
             });
         });
+    }
+
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(settings_page) = &self.settings_page {
+            window.focus(&settings_page.read(cx).focus_handle(cx), cx);
+            return;
+        }
+
+        let settings_page = cx.new(|cx| SettingsPage::new(window, cx));
+        window.focus(&settings_page.read(cx).focus_handle(cx), cx);
+        self.settings_page = Some(settings_page);
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_page = None;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn on_settings_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.keystroke.key == "escape" {
+            self.close_settings(window, cx);
+            cx.stop_propagation();
+        }
+    }
+
+    fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(window, cx);
     }
 
     pub(crate) fn open_recent_folders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2098,6 +2136,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_search_replace))
             .on_action(cx.listener(Self::on_toggle_bottom_panel_mode))
             .on_action(cx.listener(Self::on_switch_theme))
+            .on_action(cx.listener(Self::on_open_settings))
             .child(
                 TitleBar::new().child(
                     h_flex()
@@ -2254,6 +2293,84 @@ impl Render for Workspace {
                                                 cx.stop_propagation();
                                             })
                                             .child(self.project_search.clone()),
+                                    ),
+                            )
+                    })
+                    .when_some(self.settings_page.clone(), |overlay, settings_page| {
+                        overlay
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .inset_0()
+                                    .bg(hsla(0.0, 0.0, 0.0, 0.38))
+                                    .occlude()
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.close_settings(window, cx);
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .inset_0()
+                                    .p_6()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        v_flex()
+                                            .occlude()
+                                            .w_full()
+                                            .h_full()
+                                            .max_w(px(1180.))
+                                            .max_h(px(760.))
+                                            .capture_key_down(
+                                                cx.listener(Self::on_settings_key_down),
+                                            )
+                                            .rounded(cx.theme().radius)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .bg(cx.theme().background)
+                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation();
+                                            })
+                                            .child(
+                                                h_flex()
+                                                    .h(px(42.))
+                                                    .flex_none()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .px_4()
+                                                    .border_b_1()
+                                                    .border_color(cx.theme().border)
+                                                    .child(
+                                                        div()
+                                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                            .child("Settings"),
+                                                    )
+                                                    .child(
+                                                        Button::new("settings-popup-close")
+                                                            .icon(IconName::Close)
+                                                            .xsmall()
+                                                            .ghost()
+                                                            .tooltip("Close Settings")
+                                                            .on_click(cx.listener(
+                                                                |this, _, window, cx| {
+                                                                    this.close_settings(window, cx);
+                                                                },
+                                                            )),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .overflow_hidden()
+                                                    .child(settings_page.clone()),
+                                            ),
                                     ),
                             )
                     }),

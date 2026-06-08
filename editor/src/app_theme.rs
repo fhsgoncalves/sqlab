@@ -1,6 +1,7 @@
-use gpui::{Action, App, Menu, MenuItem, SharedString, Window};
+use gpui::{Action, App, SharedString, Window};
 use gpui_component::{Theme, ThemeRegistry};
 
+use crate::app_settings::AppSettings;
 use crate::schema_cache::db;
 
 const THEME_SETTING_KEY: &str = "theme";
@@ -133,25 +134,14 @@ pub fn apply_theme_by_name(theme_name: &str, window: Option<&mut Window>, cx: &m
 }
 
 pub fn persist_selected_theme(theme_name: &str) {
+    let mut settings = AppSettings::load();
+    settings.theme = Some(theme_name.to_string());
+    settings.save();
+
     if let Err(error) = db::with_conn(|conn| db::save_setting(conn, THEME_SETTING_KEY, theme_name))
     {
         eprintln!("Failed to persist selected theme: {}", error);
     }
-}
-
-pub fn themes_menu_item(cx: &App) -> MenuItem {
-    let current_theme_name = Theme::global(cx).theme_name().clone();
-    let items = ThemeRegistry::global(cx)
-        .sorted_themes()
-        .into_iter()
-        .map(|theme| {
-            let theme_name = theme.name.clone();
-            MenuItem::action(theme_name.clone(), SwitchTheme(theme_name.clone()))
-                .checked(theme_name == current_theme_name)
-        })
-        .collect::<Vec<_>>();
-
-    MenuItem::submenu(Menu::new("Themes").items(items))
 }
 
 fn load_bundled_themes(cx: &mut App) {
@@ -190,6 +180,10 @@ fn paired_sq_lab_theme_name(theme_name: &str) -> Option<&'static str> {
 }
 
 fn load_saved_theme_name() -> Option<String> {
+    if let Some(theme_name) = AppSettings::load().theme {
+        return Some(theme_name);
+    }
+
     match db::with_conn(|conn| db::load_setting(conn, THEME_SETTING_KEY)) {
         Ok(theme_name) => theme_name,
         Err(error) => {

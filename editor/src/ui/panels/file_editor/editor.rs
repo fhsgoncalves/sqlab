@@ -8,8 +8,8 @@ use std::{
 
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, ParentElement, Render, Styled,
-    Subscription, Task, Window, actions, div, hsla, prelude::FluentBuilder, px,
+    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Styled, Subscription,
+    Task, Window, actions, div, hsla, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IconName, IconNamed, Selectable, Sizable,
@@ -57,18 +57,6 @@ const LINE_INDENT: &str = "  ";
 #[derive(Clone, Debug)]
 pub enum EditorPanelEvent {
     CursorMoved,
-}
-
-pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("escape", CloseEditorSearch, Some(SEARCH_CONTEXT)),
-        KeyBinding::new("enter", SelectNextEditorMatch, Some(SEARCH_CONTEXT)),
-        KeyBinding::new(
-            "shift-enter",
-            SelectPreviousEditorMatch,
-            Some(SEARCH_CONTEXT),
-        ),
-    ]);
 }
 
 pub struct EditorPanel {

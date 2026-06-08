@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Render, SharedString,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, actions, div, hsla, prelude::FluentBuilder,
 };
 use gpui_component::{
@@ -36,19 +36,6 @@ actions!(
 );
 
 const CONTEXT: &str = "FileTree";
-
-pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("up", SelectPreviousItem, Some(CONTEXT)),
-        KeyBinding::new("down", SelectNextItem, Some(CONTEXT)),
-        KeyBinding::new("left", CollapseSelectedItem, Some(CONTEXT)),
-        KeyBinding::new("right", ExpandSelectedItem, Some(CONTEXT)),
-        KeyBinding::new("enter", OpenSelectedFile, Some(CONTEXT)),
-        KeyBinding::new("f2", RenameFile, Some(CONTEXT)),
-        KeyBinding::new("cmd-c", CopySelectedName, Some(CONTEXT)),
-        KeyBinding::new("escape", CancelInlineEdit, Some(CONTEXT)),
-    ]);
-}
 
 #[derive(Clone, Debug)]
 pub struct OpenFileEvent {

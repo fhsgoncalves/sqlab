@@ -1,47 +1,30 @@
 use std::{path::PathBuf, sync::Arc};
 
-use gpui::{
-    AppContext, Bounds, KeyBinding, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions, px, size,
-};
-use gpui_component::dock::ClosePanel;
+use gpui::{AppContext, Bounds, Menu, MenuItem, QuitMode, WindowBounds, WindowOptions, px, size};
 use gpui_component::{GlobalState, Root};
 
+mod app_settings;
 mod app_theme;
 mod assets;
 mod credentials;
 mod drivers;
+mod keymap;
 mod query_session;
 mod schema_cache;
 mod ui;
 mod workspace;
 
-use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
-    CloseActiveTab as EditorCloseActiveTab, ConfirmSelectedQuery, CutEditorLine, CycleTabBackward,
-    CycleTabForward, ExecuteQuery, FormatQuery, IndentLines, NavigateBack, NavigateForward,
-    OutdentLines, SaveFile, SelectNextQuery, SelectPreviousQuery, ToggleCommentLines,
-    ToggleEditorReplace, ToggleEditorSearch,
+    CloseActiveTab as EditorCloseActiveTab, CutEditorLine, ExecuteQuery, FormatQuery, IndentLines,
+    NavigateBack, NavigateForward, OutdentLines, SaveFile, ToggleCommentLines, ToggleEditorReplace,
+    ToggleEditorSearch,
 };
-use ui::panels::file_search::ToggleFileSearch;
 use ui::panels::project_search::ToggleProjectSearch;
 use ui::panels::result::{
-    CloseActiveTab as ResultCloseActiveTab, CopyResultSelection,
-    CycleTabBackward as ResultCycleTabBackward, CycleTabForward as ResultCycleTabForward,
-    EditResultCell, ExtendResultSelectionDown, ExtendResultSelectionLeft,
-    ExtendResultSelectionRight, ExtendResultSelectionUp, SelectResultCellDown,
-    SelectResultCellLeft, SelectResultCellRight, SelectResultCellUp, SelectResultFirstCellColumn,
-    SelectResultLastCellColumn,
+    CloseActiveTab as ResultCloseActiveTab, CopyResultSelection, EditResultCell,
 };
-use ui::panels::terminal::{
-    CloseActiveTab as TerminalCloseActiveTab, CopyTerminalSelection,
-    CycleTabBackward as TerminalCycleTabBackward, CycleTabForward as TerminalCycleTabForward,
-    NewTerminalTab, Paste,
-};
-use workspace::{
-    CloseRecentFolders, ConfirmRecentFolder, ConfirmSelectedConnection, OpenFolder,
-    OpenRecentFolders, SelectNextConnection, SelectNextRecentFolder, SelectPreviousConnection,
-    SelectPreviousRecentFolder, ToggleSearchReplace, Workspace, load_recent_folders,
-};
+use ui::panels::terminal::{CloseActiveTab as TerminalCloseActiveTab, CopyTerminalSelection};
+use workspace::{OpenFolder, OpenRecentFolders, OpenSettings, Workspace, load_recent_folders};
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
     let bytes = include_bytes!("../assets/app-icon.png");
@@ -54,9 +37,9 @@ fn app_icon() -> Option<Arc<image::RgbaImage>> {
     }
 }
 
-fn app_menus(cx: &gpui::App) -> Vec<Menu> {
+fn app_menus(_cx: &gpui::App) -> Vec<Menu> {
     vec![
-        Menu::new("sq/lab").items(vec![app_theme::themes_menu_item(cx)]),
+        Menu::new("sq/lab").items(vec![MenuItem::action("Settings...", OpenSettings)]),
         Menu::new("File").items(vec![
             MenuItem::action("Open Recent Folder...", OpenRecentFolders),
             MenuItem::action("Open Folder...", OpenFolder),
@@ -122,10 +105,6 @@ fn main() {
 
     app.run(move |cx| {
         gpui_component::init(cx);
-        ui::panels::file_tree::init(cx);
-        ui::panels::file_editor::editor::init(cx);
-        ui::panels::file_search::init(cx);
-        ui::panels::project_search::init(cx);
 
         app_theme::init(cx);
 
@@ -137,87 +116,7 @@ fn main() {
             }
         });
 
-        cx.bind_keys(vec![
-            KeyBinding::new("cmd-w", ClosePanel, None),
-            KeyBinding::new("cmd-w", EditorCloseActiveTab, Some("editor_tabs")),
-            KeyBinding::new("cmd-w", TerminalCloseActiveTab, Some("terminal_panel")),
-            KeyBinding::new("cmd-w", ResultCloseActiveTab, Some("results_panel")),
-            KeyBinding::new("cmd-o", OpenRecentFolders, None),
-            KeyBinding::new("cmd-shift-o", OpenFolder, None),
-            KeyBinding::new("cmd-e", ToggleFileSearch, None),
-            KeyBinding::new("cmd-f", ToggleEditorSearch, Some("Input")),
-            KeyBinding::new("cmd-shift-f", ToggleProjectSearch, None),
-            KeyBinding::new("cmd-shift-h", ToggleSearchReplace, None),
-            KeyBinding::new("cmd-enter", ExecuteQuery, Some("Input")),
-            KeyBinding::new("cmd-s", SaveFile, Some("Input")),
-            KeyBinding::new("cmd-alt-l", FormatQuery, Some("Input")),
-            KeyBinding::new("cmd-/", ToggleCommentLines, Some("Input")),
-            KeyBinding::new("tab", IndentLines, Some("file_editor")),
-            KeyBinding::new("shift-tab", OutdentLines, Some("file_editor")),
-            KeyBinding::new("cmd-x", CutEditorLine, Some("file_editor")),
-            KeyBinding::new("shift-up", ExtendResultSelectionUp, Some("results_panel")),
-            KeyBinding::new(
-                "shift-down",
-                ExtendResultSelectionDown,
-                Some("results_panel"),
-            ),
-            KeyBinding::new(
-                "shift-left",
-                ExtendResultSelectionLeft,
-                Some("results_panel"),
-            ),
-            KeyBinding::new(
-                "shift-right",
-                ExtendResultSelectionRight,
-                Some("results_panel"),
-            ),
-            KeyBinding::new("shift-up", ExtendResultSelectionUp, Some("DataTable")),
-            KeyBinding::new("shift-down", ExtendResultSelectionDown, Some("DataTable")),
-            KeyBinding::new("shift-left", ExtendResultSelectionLeft, Some("DataTable")),
-            KeyBinding::new("shift-right", ExtendResultSelectionRight, Some("DataTable")),
-            KeyBinding::new("left", SelectResultCellLeft, Some("DataTable")),
-            KeyBinding::new("right", SelectResultCellRight, Some("DataTable")),
-            KeyBinding::new("home", SelectResultFirstCellColumn, Some("DataTable")),
-            KeyBinding::new("end", SelectResultLastCellColumn, Some("DataTable")),
-            KeyBinding::new("up", SelectResultCellUp, Some("DataTable")),
-            KeyBinding::new("down", SelectResultCellDown, Some("DataTable")),
-            KeyBinding::new("enter", EditResultCell, Some("DataTable")),
-            KeyBinding::new("cmd-j", ToggleBottomPanelMode, None),
-            KeyBinding::new("cmd-t", NewTerminalTab, Some("terminal_panel")),
-            KeyBinding::new("cmd-c", CopyTerminalSelection, Some("terminal_panel")),
-            KeyBinding::new("cmd-v", Paste, Some("terminal_panel")),
-            KeyBinding::new("cmd-c", CopyResultSelection, None),
-            KeyBinding::new("ctrl-tab", CycleTabForward, None),
-            KeyBinding::new("ctrl-shift-tab", CycleTabBackward, None),
-            KeyBinding::new("cmd-[", NavigateBack, None),
-            KeyBinding::new("cmd-]", NavigateForward, None),
-            KeyBinding::new("ctrl-tab", TerminalCycleTabForward, Some("terminal_panel")),
-            KeyBinding::new(
-                "ctrl-shift-tab",
-                TerminalCycleTabBackward,
-                Some("terminal_panel"),
-            ),
-            KeyBinding::new("ctrl-tab", ResultCycleTabForward, Some("results_panel")),
-            KeyBinding::new(
-                "ctrl-shift-tab",
-                ResultCycleTabBackward,
-                Some("results_panel"),
-            ),
-            KeyBinding::new("up", SelectPreviousQuery, None),
-            KeyBinding::new("down", SelectNextQuery, None),
-            KeyBinding::new("enter", ConfirmSelectedQuery, None),
-            KeyBinding::new("up", SelectPreviousConnection, Some("ConnectionSelector")),
-            KeyBinding::new("down", SelectNextConnection, Some("ConnectionSelector")),
-            KeyBinding::new(
-                "enter",
-                ConfirmSelectedConnection,
-                Some("ConnectionSelector"),
-            ),
-            KeyBinding::new("up", SelectPreviousRecentFolder, Some("RecentFolders")),
-            KeyBinding::new("down", SelectNextRecentFolder, Some("RecentFolders")),
-            KeyBinding::new("enter", ConfirmRecentFolder, Some("RecentFolders")),
-            KeyBinding::new("escape", CloseRecentFolders, Some("RecentFolders")),
-        ]);
+        keymap::register(cx);
         set_app_menus(cx);
         cx.activate(true);
         cx.set_quit_mode(QuitMode::LastWindowClosed);
@@ -249,6 +148,12 @@ fn main() {
                 cx.on_action(move |_: &OpenRecentFolders, cx| {
                     _ = workspace_for_recent_folders.update_in(cx, |workspace, window, cx| {
                         workspace.open_recent_folders(window, cx);
+                    });
+                });
+                let workspace_for_settings = workspace.downgrade();
+                cx.on_action(move |_: &OpenSettings, cx| {
+                    _ = workspace_for_settings.update_in(cx, |workspace, window, cx| {
+                        workspace.open_settings(window, cx);
                     });
                 });
                 if prompt_for_initial_folder {
