@@ -1843,6 +1843,17 @@ impl Workspace {
         self.toggle_bottom_panel(BottomPanelMode::Terminal, window, cx);
     }
 
+    fn restore_focus_to_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle, cx);
+        let editor_tabs = self.editor_tabs.clone();
+        cx.defer_in(window, move |_, window, cx| {
+            if let Some(editor) = editor_tabs.read(cx).active_editor() {
+                let fh = editor.read(cx).editor_focus_handle(cx);
+                window.focus(&fh, cx);
+            }
+        });
+    }
+
     fn toggle_bottom_panel(
         &mut self,
         mode: BottomPanelMode,
@@ -1862,6 +1873,7 @@ impl Workspace {
                 }
                 dock_area.remove_bottom_dock(window, cx);
             });
+            self.restore_focus_to_editor(window, cx);
             return;
         }
 
@@ -1959,13 +1971,7 @@ impl Workspace {
                 self.dock_area.update(cx, |dock_area, cx| {
                     dock_area.toggle_dock(placement, window, cx);
                 });
-                let editor_tabs = self.editor_tabs.clone();
-                cx.defer_in(window, move |_, window, cx| {
-                    if let Some(editor) = editor_tabs.read(cx).active_editor() {
-                        let fh = editor.read(cx).editor_focus_handle(cx);
-                        window.focus(&fh, cx);
-                    }
-                });
+                self.restore_focus_to_editor(window, cx);
                 self.editor_tabs.update(cx, |tabs, cx| {
                     tabs.sync_zoomed_side_docks(cx);
                 });
