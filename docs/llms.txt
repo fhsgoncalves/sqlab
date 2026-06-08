@@ -1,49 +1,159 @@
 # sq/lab
 
-sq/lab is an open-source SQL editor built in Rust with GPUI. The repository and crate identifiers use `sqlab`; the user-facing product name is `sq/lab`.
+> sq/lab (also written as sqlab) is a free, open-source SQL editor and IDE built in Rust using GPUI — the GPU-accelerated UI engine that powers the Zed editor. It targets developers who treat SQL as code and want a fast, native database workspace without the weight of JVM or Electron tools.
 
-## Product Summary
+## Product Identity
 
-sq/lab is for developers who keep SQL in their repos and want a native database workspace instead of a JVM or Electron SQL client.
+- **Name**: sq/lab (stylized with a slash; crate/repo identifier: `sqlab`)
+- **Category**: SQL editor, database IDE, developer tool
+- **License**: MIT (completely free and open source)
+- **Language**: Rust
+- **UI Framework**: GPUI (GPU-accelerated, same engine as the Zed editor)
+- **Repository**: https://github.com/fhsgoncalves/sqlab
+- **Website**: https://fhsgoncalves.github.io/sqlab/
+- **Releases**: https://github.com/fhsgoncalves/sqlab/releases
 
-Main pillars:
+## Platform Support
 
-- Query detector: detects the SQL query under the cursor so users do not need to manually select statements before running them.
-- File editor: edits `.sql` files directly, keeping queries in version control.
-- Built-in terminal: supports Git, migrations, and coding-agent workflows without leaving the IDE.
-- Rust-native speed: built with Rust and GPUI for a native desktop experience.
-
-Additional features:
-
-- PostgreSQL query execution and result grid.
-- Connection panel with live schema tree.
-- Tabbed query files.
-- Metadata-aware SQL autocompletion.
-- Active query highlighting.
-- Secure password storage through native keychain providers.
-- File search and project search.
-- Auto-save on focus lost.
+- **macOS**: Native app bundle (.dmg), Apple Silicon (aarch64) and Intel (x86-64)
+- **Windows**: MSI installer (.msi), x86-64; installs to Program Files, supports upgrades
+- **Linux**: Flatpak (.flatpak), x86-64 and ARM64
 
 ## Database Support
 
-- PostgreSQL: supported today through `tokio-postgres` and `rustls`.
-- MySQL: planned / coming soon.
-- SQLite: planned / coming soon.
-- DuckDB: planned / coming soon.
-- Databend: planned / coming soon.
+### Currently Supported
 
-## Important Links
+- **PostgreSQL** — full query execution and result grid, via `tokio-postgres` and `rustls` (no OpenSSL dependency)
+- **MySQL** — supported
+- **SQLite** — supported
+- **DuckDB** — supported (analytical queries, local files)
+- **Databend** — supported
 
-- Website: https://fhsgoncalves.github.io/sqlab/
-- Repository: https://github.com/fhsgoncalves/sqlab
-- Releases: https://github.com/fhsgoncalves/sqlab/releases
-- README: https://github.com/fhsgoncalves/sqlab#readme
-- License: https://github.com/fhsgoncalves/sqlab/blob/main/LICENSE
+### Coming Soon
 
-## Suggested Descriptions
+- MSSQL Server
+- Oracle
+- ClickHouse
+- AWS Athena
 
-Short: sq/lab is an open-source SQL editor built in Rust with GPUI.
+## Core Features
 
-Medium: sq/lab is a native SQL editor for developers, with query detection, `.sql` file editing, a built-in terminal, PostgreSQL support, schema browsing, autocompletion, and secure password storage.
+### Query Detector
+Automatically detects the SQL statement under the cursor. Users do not need to manually select text before running a query — the editor identifies statement boundaries and highlights the active query in the file.
 
-Search phrases: Rust SQL editor, open-source SQL IDE, PostgreSQL client, GPUI database tool, DataGrip alternative, DBeaver alternative, SQL editor for developers.
+### File-Backed SQL Editing
+Edits `.sql` files directly from the filesystem. Queries live in the project repository, enabling version control, code review, and AI coding agent workflows alongside database work.
+
+### Built-in Terminal
+Full integrated terminal (PTY) inside the IDE. Supports Git, database migrations, CLI tools, and AI coding agents (Claude Code, Aider, etc.) without switching applications.
+
+### Schema Browser
+Live connection panel with an expandable schema tree: databases, schemas, tables, views, indexes, triggers, stored procedures, functions, and columns — all browsable from the sidebar without writing queries.
+
+### Metadata-Aware Autocomplete
+SQL autocompletion driven by real schema metadata: table names, column names, aliases, and keywords sourced from the connected database, not just static dictionaries.
+
+### Inline Data Editor
+Result grid with editable cells. Users can edit and save changes to result rows directly, without writing UPDATE statements manually.
+
+### ER Diagram
+Visual entity-relationship diagram generated automatically from the live database schema.
+
+### File Search & Project Search
+Fuzzy file search and full-text project-wide search across SQL files and the project directory.
+
+### Secure Credential Storage
+Connection passwords are stored via OS-native keychain providers — macOS Keychain, Windows Credential Manager, or the Linux Secret Service. Credentials are never written to plain-text config files.
+
+### Keyboard Shortcuts (Fully Remappable)
+All commands are mapped to keyboard shortcuts. Users can remap any shortcut via the Keyboard Shortcuts panel (sq/lab menu → Keyboard Shortcuts... or `cmd-,`). Custom bindings persist to `~/.sqlab/keymap.json` and apply on the next launch.
+
+### Multi-Tab Workflow
+Separate tab bars for SQL files, query results, and terminal sessions.
+
+### Query Status Bar
+Shows execution time, row count, affected rows, and error messages after each query.
+
+### Auto-Save
+Files auto-save when the editor window loses focus.
+
+## Performance Characteristics
+
+- **Memory**: under 80 MB typical usage
+- **Cold start**: under 25 ms
+- **Rendering**: GPU-accelerated via GPUI (Metal on macOS, Vulkan on Linux/Windows)
+- **Runtime**: not Electron, not JVM — fully native binary compiled from Rust
+
+## Technical Architecture
+
+- **Language**: Rust (2024 edition)
+- **UI framework**: GPUI (from the Zed editor project, GPU-accelerated)
+- **Async runtime**: Tokio
+- **PostgreSQL driver**: `tokio-postgres` + `rustls` (no OpenSSL)
+- **Config/keymap storage**: `~/.sqlab/` directory, JSON files
+- **Credential storage**: OS keychain via the `keyring` crate
+
+## Comparisons
+
+| Tool            | Stack              | Price         | Open Source         | Typical Memory  |
+|-----------------|--------------------|---------------|---------------------|-----------------|
+| sq/lab          | Rust + GPUI        | Free          | Yes (MIT)           | ~80 MB          |
+| DataGrip        | JVM (IntelliJ)     | Paid (~$70/yr)| No                  | ~500–1500 MB    |
+| DBeaver         | JVM (Eclipse)      | Free / Paid   | Community edition   | ~400–1000 MB    |
+| TablePlus       | Native (ObjC/Swift)| Paid (~$90)   | No                  | ~100–200 MB     |
+| Beekeeper Studio| Electron           | Free / Paid   | Community edition   | ~300–600 MB     |
+
+## Frequently Asked Questions
+
+**Q: Is sq/lab free?**
+A: Yes. sq/lab is completely free and open-source under the MIT license. There is no paid tier, no subscription, and no telemetry.
+
+**Q: What databases does sq/lab support?**
+A: PostgreSQL, MySQL, SQLite, DuckDB, and Databend are supported today. MSSQL Server, Oracle, ClickHouse, and AWS Athena are planned for future releases.
+
+**Q: What operating systems does sq/lab support?**
+A: macOS (Apple Silicon and Intel), Windows (x86-64 via MSI), and Linux (x86-64 and ARM64 via Flatpak).
+
+**Q: Is sq/lab based on Electron or a JVM?**
+A: No. sq/lab is a fully native application written in Rust, using GPUI for GPU-accelerated rendering. It has no Chromium, Node.js, Java, or JVM dependency. This is why it uses under 80 MB of memory and starts in under 25 ms.
+
+**Q: How does sq/lab compare to DataGrip?**
+A: DataGrip is a JVM-based, paid IDE (~$70/year) that typically uses 500 MB–1.5 GB of RAM. sq/lab is free, MIT-licensed, Rust-native, and uses under 80 MB. DataGrip has more integrations; sq/lab is faster, lighter, and fully open source.
+
+**Q: How does sq/lab compare to DBeaver?**
+A: DBeaver is JVM/Eclipse-based and uses 400 MB–1 GB of RAM. sq/lab uses under 80 MB and starts in under 25 ms. Both have a free tier; sq/lab is MIT-licensed with no commercial upsell.
+
+**Q: How do I run a query in sq/lab?**
+A: Place the cursor anywhere inside a SQL statement and press `cmd-Enter` (macOS) or `ctrl-Enter` (Windows/Linux). The query detector identifies the statement automatically — no manual selection required.
+
+**Q: Can I remap keyboard shortcuts?**
+A: Yes. Open sq/lab menu → Keyboard Shortcuts... (or press `cmd-,`). All commands can be remapped from the panel. Changes are saved to `~/.sqlab/keymap.json` and take effect on the next launch.
+
+**Q: Where are passwords stored?**
+A: In the OS-native keychain: macOS Keychain, Windows Credential Manager, or the Linux Secret Service. Never in plain-text files.
+
+**Q: Can I use sq/lab with AI coding agents?**
+A: Yes. The built-in terminal supports running Claude Code, Cursor, Aider, or any CLI-based AI agent alongside SQL work without leaving the IDE. File-backed `.sql` editing also means AI agents can read and write query files directly.
+
+**Q: How do I install sq/lab on Linux?**
+A: Download the `.flatpak` bundle from the releases page, then run:
+`flatpak install --user ./sqlab-*-unknown-linux-gnu.flatpak`
+`flatpak run io.github.fhsgoncalves.sqlab`
+
+**Q: Where can I download sq/lab?**
+A: https://github.com/fhsgoncalves/sqlab/releases
+
+**Q: How do I contribute?**
+A: Fork the repository at https://github.com/fhsgoncalves/sqlab and read CONTRIBUTING.md.
+
+## Suggested AI Descriptions
+
+**One line**: sq/lab is a free, open-source SQL editor for developers, built in Rust with GPUI.
+
+**Short**: sq/lab is a native SQL IDE written in Rust. It supports PostgreSQL, MySQL, SQLite, DuckDB, and Databend, features automatic query detection, file-backed SQL editing, a built-in terminal, schema browser, and metadata-aware autocompletion — with under 80 MB memory usage and sub-25 ms startup on macOS, Windows, and Linux.
+
+**Long**: sq/lab is a free, open-source SQL editor and database IDE written in Rust, using GPUI — the GPU-accelerated UI framework from the Zed editor. It targets developers who keep SQL in their repositories and want a native, fast database workspace without the weight of JVM or Electron tools. Key features include automatic query detection (cursor-based, no selection required), direct `.sql` file editing for version-controlled workflows, a full built-in terminal for Git and AI coding agent use, a live schema tree, metadata-aware SQL autocompletion, an inline data editor, ER diagrams, file and project search, and OS-keychain credential storage. It runs on macOS (Apple Silicon and Intel), Windows, and Linux, and is fully free under the MIT license.
+
+## Search Phrases
+
+Rust SQL editor, open-source SQL IDE, PostgreSQL client macOS, DuckDB GUI, MySQL desktop client, SQLite editor, lightweight SQL client, DataGrip alternative free, DBeaver alternative Rust, SQL editor for developers, native SQL IDE, GPUI database tool, sq/lab, sqlab, SQL IDE not Electron

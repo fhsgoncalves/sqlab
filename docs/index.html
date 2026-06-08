@@ -3,44 +3,148 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="sq/lab is an open-source SQL editor built in Rust with GPUI. Run the query under your cursor, edit .sql files in your repo, use a built-in terminal, and work with PostgreSQL today.">
-<meta name="keywords" content="SQL editor, SQL IDE, Rust SQL editor, PostgreSQL client, GPUI, database IDE, open source database tool, DataGrip alternative, DBeaver alternative">
+<meta name="description" content="sq/lab is a free, open-source SQL editor built in Rust with GPUI. Native speed, sub-25ms startup, under 80 MB RAM. Supports PostgreSQL, MySQL, SQLite, DuckDB, and Databend on macOS, Windows, and Linux.">
+<meta name="keywords" content="SQL editor, SQL IDE, Rust SQL editor, PostgreSQL client, MySQL client, DuckDB editor, SQLite editor, GPUI, database IDE, open source database tool, DataGrip alternative, DBeaver alternative, TablePlus alternative, lightweight SQL client, native SQL editor">
 <meta name="author" content="sqlab">
 <meta name="robots" content="index,follow">
+<meta name="theme-color" content="#151726">
+<meta name="application-name" content="sq/lab">
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="canonical" href="https://fhsgoncalves.github.io/sqlab/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="sq/lab">
-<meta property="og:title" content="sq/lab — Open-Source SQL Editor Built in Rust">
-<meta property="og:description" content="A native SQL editor for developers: query detection, file-backed SQL editing, built-in terminal, PostgreSQL support, and Rust/GPUI performance.">
+<meta property="og:title" content="sq/lab — Free, Open-Source SQL Editor Built in Rust">
+<meta property="og:description" content="A native SQL IDE for developers: automatic query detection, .sql file editing, built-in terminal, PostgreSQL · MySQL · SQLite · DuckDB · Databend support. Under 80 MB RAM. Not Electron.">
 <meta property="og:url" content="https://fhsgoncalves.github.io/sqlab/">
-<meta property="og:image" content="https://fhsgoncalves.github.io/sqlab/favicon.png">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="sq/lab — Open-Source SQL Editor Built in Rust">
-<meta name="twitter:description" content="A native SQL editor for developers: query detection, .sql files in your repo, terminal workflows, and PostgreSQL support.">
-<title>sq/lab — Open-Source SQL Editor Built in Rust</title>
+<meta property="og:image" content="https://fhsgoncalves.github.io/sqlab/screenshots/screenshot-banner.png">
+<meta property="og:image:alt" content="sq/lab SQL editor — main workspace view">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="sq/lab — Free, Open-Source SQL Editor Built in Rust">
+<meta name="twitter:description" content="Native SQL IDE for developers. Query detection, .sql file editing, built-in terminal, PostgreSQL · MySQL · SQLite · DuckDB support. Under 80 MB RAM. Not Electron.">
+<meta name="twitter:image" content="https://fhsgoncalves.github.io/sqlab/screenshots/screenshot-banner.png">
+<meta name="twitter:image:alt" content="sq/lab SQL editor — main workspace view">
+<title>sq/lab — Free, Open-Source SQL Editor Built in Rust</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "sq/lab",
-  "alternateName": "sqlab",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "macOS",
-  "description": "sq/lab is an open-source SQL editor built in Rust with GPUI. It supports PostgreSQL today and focuses on query detection, file-backed SQL editing, a built-in terminal, schema browsing, file search, autocompletion, and secure password storage.",
-  "softwareHelp": "https://github.com/fhsgoncalves/sqlab",
-  "downloadUrl": "https://github.com/fhsgoncalves/sqlab/releases",
-  "codeRepository": "https://github.com/fhsgoncalves/sqlab",
-  "license": "https://github.com/fhsgoncalves/sqlab/blob/main/LICENSE",
-  "programmingLanguage": "Rust",
-  "offers": {
-    "@type": "Offer",
-    "price": "0",
-    "priceCurrency": "USD"
+[
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "sq/lab",
+    "alternateName": "sqlab",
+    "applicationCategory": "DeveloperApplication",
+    "applicationSubCategory": "Database Tool",
+    "operatingSystem": ["macOS", "Windows", "Linux"],
+    "description": "sq/lab is a free, open-source SQL editor and IDE built in Rust with GPUI. It supports PostgreSQL, MySQL, SQLite, DuckDB, and Databend. Features include automatic query detection, file-backed SQL editing, a built-in terminal, schema browser, metadata-aware autocompletion, ER diagrams, data editor, and secure OS-keychain credential storage. Uses under 80 MB of memory and starts in under 25 ms.",
+    "featureList": [
+      "Automatic query detection — detects the SQL statement under the cursor",
+      "File-backed SQL editing — edit .sql files directly from your repository",
+      "Built-in terminal — run Git, migrations, and AI coding agents without leaving the IDE",
+      "Live schema browser — browse tables, views, columns, indexes, and functions",
+      "Metadata-aware SQL autocompletion",
+      "Inline data editor — edit result rows without writing UPDATE statements",
+      "ER diagram viewer",
+      "File search and project-wide search",
+      "Secure credential storage via OS-native keychain",
+      "Remappable keyboard shortcuts",
+      "Multi-tab workflow for SQL files, results, and terminal sessions",
+      "Auto-save on focus loss",
+      "PostgreSQL support",
+      "MySQL support",
+      "SQLite support",
+      "DuckDB support",
+      "Databend support"
+    ],
+    "screenshot": [
+      "https://fhsgoncalves.github.io/sqlab/screenshots/screenshot-banner.png",
+      "https://fhsgoncalves.github.io/sqlab/screenshots/screenshot-autocomplete-1.png",
+      "https://fhsgoncalves.github.io/sqlab/screenshots/print-diagram.png",
+      "https://fhsgoncalves.github.io/sqlab/screenshots/print-data-editor.png",
+      "https://fhsgoncalves.github.io/sqlab/screenshots/print-query-status.png"
+    ],
+    "softwareHelp": "https://github.com/fhsgoncalves/sqlab",
+    "downloadUrl": "https://github.com/fhsgoncalves/sqlab/releases",
+    "codeRepository": "https://github.com/fhsgoncalves/sqlab",
+    "license": "https://github.com/fhsgoncalves/sqlab/blob/main/LICENSE",
+    "programmingLanguage": "Rust",
+    "keywords": "SQL editor, SQL IDE, Rust SQL editor, PostgreSQL client, MySQL client, DuckDB editor, SQLite editor, database IDE, open source database tool, DataGrip alternative, DBeaver alternative",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    }
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "sq/lab",
+    "url": "https://fhsgoncalves.github.io/sqlab/",
+    "description": "Official website for sq/lab, a free open-source SQL editor built in Rust."
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Is sq/lab free?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. sq/lab is completely free and open-source under the MIT license. There is no paid tier, no subscription, and no telemetry."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What databases does sq/lab support?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "sq/lab currently supports PostgreSQL, MySQL, SQLite, DuckDB, and Databend. MSSQL Server, Oracle, ClickHouse, and AWS Athena are coming soon."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What operating systems does sq/lab run on?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "sq/lab runs on macOS (Apple Silicon and Intel), Windows (x86-64 via MSI installer), and Linux (x86-64 and ARM64 via Flatpak)."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is sq/lab based on Electron or a JVM?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. sq/lab is a fully native application written in Rust, using GPUI for GPU-accelerated rendering — the same engine that powers the Zed editor. It has no Chromium, Node.js, Java, or JVM dependency, which is why it uses under 80 MB of memory and starts in under 25 ms."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How does sq/lab compare to DataGrip or DBeaver?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "sq/lab uses a fraction of the memory of DataGrip (JVM/IntelliJ, paid) or DBeaver (JVM/Eclipse). It starts in under 25 ms and uses under 80 MB RAM, versus hundreds of MB for JVM-based tools. sq/lab is fully free and open-source under MIT, with no licensing fees."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I remap keyboard shortcuts in sq/lab?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. Open the sq/lab menu → Keyboard Shortcuts... (or press cmd-,). All commands can be remapped from the panel. Custom bindings are saved to ~/.sqlab/keymap.json and take effect on the next launch."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Where are database passwords stored in sq/lab?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Connection passwords are stored in the OS-native keychain: macOS Keychain, Windows Credential Manager, or the Linux Secret Service. They are never written to plain-text config files."
+        }
+      }
+    ]
   }
-}
+]
 </script>
 <style>
 :root {
@@ -650,6 +754,29 @@ footer {
   footer { align-items: flex-start; }
 }
 
+/* SKIP LINK */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border: 0;
+}
+.sr-only:focus {
+  position: static;
+  width: auto; height: auto;
+  clip: auto;
+  overflow: visible;
+  white-space: normal;
+  background: var(--accent);
+  color: #151726;
+  padding: 8px 16px;
+  border-radius: 4px;
+  z-index: 200;
+}
+
 /* ANIMATIONS */
 @keyframes fadein {
   from { opacity: 0; transform: translateY(16px); }
@@ -662,6 +789,7 @@ footer {
 <body id="top">
 
 <!-- NAV -->
+<a href="#main-content" class="sr-only">Skip to main content</a>
 <nav>
   <a href="#top" class="nav-logo">sq<span>/</span>lab</a>
   <ul class="nav-links">
@@ -669,10 +797,12 @@ footer {
     <li><a href="#features">Features</a></li>
     <li><a href="#workflow">Workflow</a></li>
     <li><a href="#about">About</a></li>
-    <li><a href="https://github.com/fhsgoncalves/sqlab">GitHub</a></li>
-    <li><a href="https://github.com/fhsgoncalves/sqlab/releases" class="nav-cta">Download</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab" rel="noopener noreferrer">GitHub</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab/releases" class="nav-cta" rel="noopener noreferrer">Download</a></li>
   </ul>
 </nav>
+
+<main id="main-content">
 
 <!-- HERO -->
 <section class="hero">
@@ -683,12 +813,12 @@ footer {
     Query, version, and agent-code your databases — without the bloat.
   </p>
   <div class="hero-actions">
-    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary" id="download-btn-hero">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
+    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary" id="download-btn-hero" rel="noopener noreferrer">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
       Download for macOS
     </a>
-    <a href="https://github.com/fhsgoncalves/sqlab" class="btn-secondary">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.164 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.933.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.741 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
+    <a href="https://github.com/fhsgoncalves/sqlab" class="btn-secondary" rel="noopener noreferrer">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.164 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.933.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.741 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
       Star on GitHub
     </a>
   </div>
@@ -720,19 +850,19 @@ footer {
   <div class="carousel" id="carousel">
     <div class="carousel-track" id="carouselTrack">
       <div class="carousel-slide" data-src="screenshots/screenshot-banner.png">
-        <img src="screenshots/screenshot-banner.png" alt="sq/lab main editor view" loading="lazy">
+        <img src="screenshots/screenshot-banner.png" alt="sq/lab main workspace — SQL editor with schema browser and query results" loading="eager" fetchpriority="high">
       </div>
       <div class="carousel-slide" data-src="screenshots/screenshot-autocomplete-1.png">
-        <img src="screenshots/screenshot-autocomplete-1.png" alt="sq/lab autocomplete" loading="lazy">
+        <img src="screenshots/screenshot-autocomplete-1.png" alt="sq/lab metadata-aware SQL autocompletion — table and column suggestions" loading="lazy">
       </div>
       <div class="carousel-slide" data-src="screenshots/print-diagram.png">
-        <img src="screenshots/print-diagram.png" alt="sq/lab diagram" loading="lazy">
+        <img src="screenshots/print-diagram.png" alt="sq/lab ER diagram — visual entity-relationship view generated from live schema" loading="lazy">
       </div>
       <div class="carousel-slide" data-src="screenshots/print-data-editor.png">
-        <img src="screenshots/print-data-editor.png" alt="sq/lab data editor" loading="lazy">
+        <img src="screenshots/print-data-editor.png" alt="sq/lab inline data editor — edit database rows directly in the result grid" loading="lazy">
       </div>
       <div class="carousel-slide" data-src="screenshots/print-query-status.png">
-        <img src="screenshots/print-query-status.png" alt="sq/lab query status" loading="lazy">
+        <img src="screenshots/print-query-status.png" alt="sq/lab query status bar — execution time, row count, and error display" loading="lazy">
       </div>
     </div>
     <button class="carousel-btn carousel-btn-prev" id="carouselPrev" aria-label="Previous screenshot">
@@ -902,24 +1032,27 @@ footer {
   <h2>Ready to query<br>at the speed of thought?</h2>
   <p>Download sq/lab for free and feel the difference on your first query.</p>
   <div class="cta-actions">
-    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary" id="download-btn-cta">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
+    <a href="https://github.com/fhsgoncalves/sqlab/releases" class="btn-primary" id="download-btn-cta" rel="noopener noreferrer">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 15V3m0 12-4-4m4 4 4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"/></svg>
       Download for macOS
     </a>
-    <a href="https://github.com/fhsgoncalves/sqlab" class="btn-secondary">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.164 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.933.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.741 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
+    <a href="https://github.com/fhsgoncalves/sqlab" class="btn-secondary" rel="noopener noreferrer">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.164 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.933.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.741 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
       View on GitHub
     </a>
   </div>
 </div>
 
+</main>
+
 <!-- FOOTER -->
 <footer>
   <div class="footer-logo">sq<span>/</span>lab</div>
   <ul class="footer-links">
-    <li><a href="https://github.com/fhsgoncalves/sqlab">Docs</a></li>
-    <li><a href="https://github.com/fhsgoncalves/sqlab">GitHub</a></li>
-    <li><a href="https://github.com/fhsgoncalves/sqlab/releases">Releases</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab" rel="noopener noreferrer">Docs</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab" rel="noopener noreferrer">GitHub</a></li>
+    <li><a href="https://github.com/fhsgoncalves/sqlab/releases" rel="noopener noreferrer">Releases</a></li>
+    <li><a href="llms.txt">For AI</a></li>
   </ul>
   <div class="footer-copy">© <span id="year"></span> sqlab. Open source under MIT License.</div>
 </footer>
