@@ -5,6 +5,15 @@ use gpui::{
     size,
 };
 use gpui_component::dock::ClosePanel;
+use gpui_component::input::{
+    Backspace, Copy, Cut, Delete, DeleteToBeginningOfLine, DeleteToEndOfLine,
+    DeleteToNextWordEnd, DeleteToPreviousWordStart, Enter, Escape as InputEscape, Indent,
+    IndentInline, MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight,
+    MoveToEnd, MoveToNextWord, MoveToStart, MoveToPreviousWord, MoveToStartOfLine,
+    MoveToEndOfLine, MoveUp, Outdent, OutdentInline, Paste as InputPaste, Redo, SelectAll,
+    SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd, SelectToPreviousWordStart, SelectToStart,
+    SelectToStartOfLine, Undo,
+};
 use gpui_component::{GlobalState, Root};
 
 mod app_theme;
@@ -56,6 +65,124 @@ fn app_icon() -> Option<Arc<image::RgbaImage>> {
     }
 }
 
+fn register_component_bindings(cx: &mut App) {
+    const INPUT: Option<&str> = Some("Input");
+    cx.bind_keys([
+        KeyBinding::new("backspace", Backspace, INPUT),
+        KeyBinding::new("shift-backspace", Backspace, INPUT),
+        KeyBinding::new("delete", Delete, INPUT),
+        KeyBinding::new("shift-delete", Delete, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-backspace", Backspace, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-backspace", DeleteToBeginningOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-delete", DeleteToEndOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-backspace", DeleteToPreviousWordStart, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-delete", DeleteToNextWordEnd, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-backspace", DeleteToPreviousWordStart, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-delete", DeleteToNextWordEnd, INPUT),
+        KeyBinding::new("enter", Enter { secondary: false, shift: false }, INPUT),
+        KeyBinding::new("shift-enter", Enter { secondary: false, shift: true }, INPUT),
+        KeyBinding::new("escape", InputEscape, INPUT),
+        KeyBinding::new("up", MoveUp, INPUT),
+        KeyBinding::new("down", MoveDown, INPUT),
+        KeyBinding::new("left", MoveLeft, INPUT),
+        KeyBinding::new("right", MoveRight, INPUT),
+        KeyBinding::new("pageup", MovePageUp, INPUT),
+        KeyBinding::new("pagedown", MovePageDown, INPUT),
+        KeyBinding::new("home", MoveHome, INPUT),
+        KeyBinding::new("end", MoveEnd, INPUT),
+        KeyBinding::new("tab", IndentInline, INPUT),
+        KeyBinding::new("shift-tab", OutdentInline, INPUT),
+        KeyBinding::new("shift-home", SelectToStartOfLine, INPUT),
+        KeyBinding::new("shift-end", SelectToEndOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-]", Indent, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-[", Outdent, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-]", Indent, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-[", Outdent, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-a", MoveHome, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-e", MoveEnd, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-shift-a", SelectToStartOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-shift-e", SelectToEndOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-left", MoveToStartOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-right", MoveToEndOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("shift-cmd-left", SelectToStartOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("shift-cmd-right", SelectToEndOfLine, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-up", MoveToStart, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-down", MoveToEnd, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-up", SelectToStart, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-down", SelectToEnd, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-left", MoveToPreviousWord, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-right", MoveToNextWord, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-shift-left", SelectToPreviousWordStart, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-shift-right", SelectToNextWordEnd, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-left", MoveToPreviousWord, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-right", MoveToNextWord, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-left", SelectToPreviousWordStart, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-right", SelectToNextWordEnd, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-a", SelectAll, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-a", SelectAll, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-c", Copy, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-c", Copy, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-x", Cut, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-x", Cut, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-v", InputPaste, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-v", InputPaste, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-z", Undo, INPUT),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-z", Redo, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-z", Undo, INPUT),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-y", Redo, INPUT),
+    ]);
+
+    // Panel-specific key bindings also wiped by clear_key_bindings.
+    ui::panels::file_tree::init(cx);
+    ui::panels::file_editor::editor::init(cx);
+    ui::panels::file_search::init(cx);
+    ui::panels::project_search::init(cx);
+    ui::panels::keymap::init(cx);
+}
+
 pub fn bind_all_keys(cx: &mut App, custom: &CustomKeymap) {
     let key = |id: &str, default: &'static str| -> String {
         custom
@@ -65,6 +192,7 @@ pub fn bind_all_keys(cx: &mut App, custom: &CustomKeymap) {
     };
 
     cx.clear_key_bindings();
+    register_component_bindings(cx);
     cx.bind_keys(vec![
         KeyBinding::new(&key("close_active_tab", "cmd-w"), ClosePanel, None),
         KeyBinding::new(
