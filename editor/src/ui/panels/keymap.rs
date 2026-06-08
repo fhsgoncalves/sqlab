@@ -3,13 +3,13 @@ use std::path::PathBuf;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, KeyDownEvent, ParentElement, Render, StatefulInteractiveElement,
-    Styled, Window, actions, div, prelude::FluentBuilder, px,
+    IntoElement, KeyBinding, KeyDownEvent, ParentElement, Render, ScrollHandle,
+    StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
 
 actions!(keymap, [ToggleKeymap, CloseKeymap]);
@@ -294,6 +294,7 @@ pub struct KeymapPanel {
     custom_keymap: CustomKeymap,
     visible: bool,
     focus_handle: FocusHandle,
+    scroll_handle: ScrollHandle,
     _search_subscription: gpui::Subscription,
 }
 
@@ -330,6 +331,7 @@ impl KeymapPanel {
             custom_keymap,
             visible: false,
             focus_handle,
+            scroll_handle: ScrollHandle::default(),
             _search_subscription: search_subscription,
         }
     }
@@ -556,10 +558,27 @@ impl Render for KeymapPanel {
                     .child(Input::new(&self.search_input)),
             )
             .child(
-                div()
+                v_flex()
                     .flex_1()
-                    .overflow_y_scrollbar()
-                    .children(self.render_grouped_rows(&filtered, cx)),
+                    .min_h(px(0.))
+                    .relative()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("keymap-scroll")
+                            .flex_1()
+                            .track_scroll(&self.scroll_handle)
+                            .overflow_y_scroll()
+                            .children(self.render_grouped_rows(&filtered, cx)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .child(Scrollbar::vertical(&self.scroll_handle)),
+                    ),
             )
             .into_any_element()
     }
