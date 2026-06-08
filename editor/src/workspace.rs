@@ -1936,15 +1936,66 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dock_area.update(cx, |dock_area, cx| {
-            dock_area.toggle_dock(placement, window, cx);
-        });
-        self.editor_tabs.update(cx, |tabs, cx| {
-            tabs.sync_zoomed_side_docks(cx);
-        });
-        self.bottom_panel.update(cx, |panel, cx| {
-            panel.sync_zoomed_side_docks(cx);
-        });
+        let is_open = self.dock_area.read(cx).is_dock_open(placement, cx);
+
+        let dock_entity = match placement {
+            DockPlacement::Left => self.dock_area.read(cx).left_dock().cloned(),
+            DockPlacement::Right => self.dock_area.read(cx).right_dock().cloned(),
+            _ => None,
+        };
+
+        let dock_focus = dock_entity
+            .as_ref()
+            .map(|dock| dock.read(cx).panel().view().focus_handle(cx));
+
+        if is_open {
+            let is_focused = dock_focus
+                .as_ref()
+                .map(|fh| fh.contains_focused(window, cx))
+                .unwrap_or(false);
+
+            if is_focused {
+                // Focused → close and return focus to editor
+                self.dock_area.update(cx, |dock_area, cx| {
+                    dock_area.toggle_dock(placement, window, cx);
+                });
+                let editor_tabs = self.editor_tabs.clone();
+                cx.defer_in(window, move |_, window, cx| {
+                    if let Some(editor) = editor_tabs.read(cx).active_editor() {
+                        let fh = editor.read(cx).editor_focus_handle(cx);
+                        window.focus(&fh, cx);
+                    }
+                });
+                self.editor_tabs.update(cx, |tabs, cx| {
+                    tabs.sync_zoomed_side_docks(cx);
+                });
+                self.bottom_panel.update(cx, |panel, cx| {
+                    panel.sync_zoomed_side_docks(cx);
+                });
+            } else {
+                // Open but not focused → just focus the active panel
+                if let Some(fh) = dock_focus {
+                    window.focus(&fh, cx);
+                }
+            }
+        } else {
+            // Closed → open it and focus the active panel
+            self.dock_area.update(cx, |dock_area, cx| {
+                dock_area.toggle_dock(placement, window, cx);
+            });
+            if let Some(dock) = dock_entity {
+                cx.defer_in(window, move |_, window, cx| {
+                    let fh = dock.read(cx).panel().view().focus_handle(cx);
+                    window.focus(&fh, cx);
+                });
+            }
+            self.editor_tabs.update(cx, |tabs, cx| {
+                tabs.sync_zoomed_side_docks(cx);
+            });
+            self.bottom_panel.update(cx, |panel, cx| {
+                panel.sync_zoomed_side_docks(cx);
+            });
+        }
     }
 
     fn toggle_bottom_panel_from_bottom_bar(
