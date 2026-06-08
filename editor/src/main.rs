@@ -51,7 +51,8 @@ use ui::panels::terminal::{
 use workspace::{
     CloseRecentFolders, ConfirmRecentFolder, ConfirmSelectedConnection, OpenFolder,
     OpenRecentFolders, SelectNextConnection, SelectNextRecentFolder, SelectPreviousConnection,
-    SelectPreviousRecentFolder, ToggleSearchReplace, Workspace, load_recent_folders,
+    SelectPreviousRecentFolder, ToggleLeftDock, ToggleResultsPanel, ToggleRightDock,
+    ToggleSearchReplace, ToggleTerminal, Workspace, load_recent_folders,
 };
 
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
@@ -362,6 +363,18 @@ pub fn bind_all_keys(cx: &mut App, custom: &CustomKeymap) {
         KeyBinding::new("enter", ConfirmRecentFolder, Some("RecentFolders")),
         KeyBinding::new("escape", CloseRecentFolders, Some("RecentFolders")),
         KeyBinding::new(&key("toggle_keymap", "cmd-,"), ToggleKeymap, None),
+        KeyBinding::new(&key("toggle_terminal", "cmd-shift-t"), ToggleTerminal, None),
+        KeyBinding::new(
+            &key("toggle_results_panel", "cmd-shift-r"),
+            ToggleResultsPanel,
+            None,
+        ),
+        KeyBinding::new(&key("toggle_left_dock", "cmd-b"), ToggleLeftDock, None),
+        KeyBinding::new(
+            &key("toggle_right_dock", "cmd-shift-b"),
+            ToggleRightDock,
+            None,
+        ),
     ]);
 }
 

@@ -56,7 +56,11 @@ actions!(
         ToggleSearchReplace,
         SelectPreviousConnection,
         SelectNextConnection,
-        ConfirmSelectedConnection
+        ConfirmSelectedConnection,
+        ToggleTerminal,
+        ToggleResultsPanel,
+        ToggleLeftDock,
+        ToggleRightDock,
     ]
 );
 
@@ -850,12 +854,15 @@ impl Workspace {
         cx.subscribe_in(
             &keymap_panel,
             window,
-            move |_this, _keymap, event: &KeymapPanelEvent, window, cx| {
+            move |this, _keymap, event: &KeymapPanelEvent, window, cx| {
                 match event {
                     KeymapPanelEvent::KeymapChanged(custom) => {
                         crate::bind_all_keys(cx, custom);
                     }
                     KeymapPanelEvent::Closed => {
+                        // Move focus to workspace root synchronously so actions (cmd-,)
+                        // remain dispatchable while the deferred editor focus hasn't fired yet.
+                        window.focus(&this.focus_handle, cx);
                         let editor_tabs = editor_tabs_for_keymap.clone();
                         cx.defer_in(window, move |_, window, cx| {
                             if let Some(editor) = editor_tabs.read(cx).active_editor() {
@@ -1953,6 +1960,22 @@ impl Workspace {
         }
     }
 
+    fn on_toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_bottom_panel_from_bottom_bar(BottomPanelMode::Terminal, window, cx);
+    }
+
+    fn on_toggle_results_panel(&mut self, _: &ToggleResultsPanel, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_bottom_panel_from_bottom_bar(BottomPanelMode::Results, window, cx);
+    }
+
+    fn on_toggle_left_dock(&mut self, _: &ToggleLeftDock, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_side_dock_from_bottom_bar(DockPlacement::Left, window, cx);
+    }
+
+    fn on_toggle_right_dock(&mut self, _: &ToggleRightDock, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_side_dock_from_bottom_bar(DockPlacement::Right, window, cx);
+    }
+
     fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (is_busy, activity_label, activity_count) = {
             let tracker = self.activity_tracker.read(cx);
@@ -2012,11 +2035,11 @@ impl Workspace {
                     })
                     .xsmall()
                     .ghost()
-                    .tooltip(if is_left_open {
-                        "Collapse Left Panel"
-                    } else {
-                        "Expand Left Panel"
-                    })
+                    .tooltip_with_action(
+                        if is_left_open { "Collapse Left Panel" } else { "Expand Left Panel" },
+                        &ToggleLeftDock,
+                        None,
+                    )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_side_dock_from_bottom_bar(DockPlacement::Left, window, cx);
                     })),
@@ -2045,7 +2068,7 @@ impl Workspace {
                             .icon(Icon::new(IconName::File).path("icons/results-table.svg"))
                             .xsmall()
                             .ghost()
-                            .tooltip("Query Results");
+                            .tooltip_with_action("Query Results", &ToggleResultsPanel, None);
 
                         let btn = if is_results_active && is_dock_open {
                             btn.text_color(active_bottom_button_fg)
@@ -2066,7 +2089,7 @@ impl Workspace {
                             .icon(Icon::new(IconName::File).path("icons/square-terminal.svg"))
                             .xsmall()
                             .ghost()
-                            .tooltip("Terminal");
+                            .tooltip_with_action("Terminal", &ToggleTerminal, None);
 
                         let btn = if is_terminal_active && is_dock_open {
                             btn.text_color(active_bottom_button_fg)
@@ -2091,11 +2114,11 @@ impl Workspace {
                             })
                             .xsmall()
                             .ghost()
-                            .tooltip(if is_right_open {
-                                "Collapse Right Panel"
-                            } else {
-                                "Expand Right Panel"
-                            })
+                            .tooltip_with_action(
+                                if is_right_open { "Collapse Right Panel" } else { "Expand Right Panel" },
+                                &ToggleRightDock,
+                                None,
+                            )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_side_dock_from_bottom_bar(
                                     DockPlacement::Right,
@@ -2335,6 +2358,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_keymap))
             .on_action(cx.listener(Self::on_toggle_search_replace))
             .on_action(cx.listener(Self::on_toggle_bottom_panel_mode))
+            .on_action(cx.listener(Self::on_toggle_terminal))
+            .on_action(cx.listener(Self::on_toggle_results_panel))
+            .on_action(cx.listener(Self::on_toggle_left_dock))
+            .on_action(cx.listener(Self::on_toggle_right_dock))
             .on_action(cx.listener(Self::on_switch_theme))
             .child(
                 TitleBar::new().child(

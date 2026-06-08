@@ -196,17 +196,45 @@ pub const ALL_DESCRIPTORS: &[KeymapDescriptor] = &[
         default_key: "cmd-v",
         context: Some("terminal_panel"),
     },
-    // View
+    // Panels
+    KeymapDescriptor {
+        label: "Toggle Left Panel",
+        category: "Panels",
+        action_id: "toggle_left_dock",
+        default_key: "cmd-b",
+        context: None,
+    },
+    KeymapDescriptor {
+        label: "Toggle Right Panel",
+        category: "Panels",
+        action_id: "toggle_right_dock",
+        default_key: "cmd-shift-b",
+        context: None,
+    },
+    KeymapDescriptor {
+        label: "Toggle Terminal",
+        category: "Panels",
+        action_id: "toggle_terminal",
+        default_key: "cmd-shift-t",
+        context: None,
+    },
+    KeymapDescriptor {
+        label: "Toggle Results",
+        category: "Panels",
+        action_id: "toggle_results_panel",
+        default_key: "cmd-shift-r",
+        context: None,
+    },
     KeymapDescriptor {
         label: "Toggle Bottom Panel",
-        category: "View",
+        category: "Panels",
         action_id: "toggle_bottom_panel",
         default_key: "cmd-j",
         context: None,
     },
     KeymapDescriptor {
         label: "Keyboard Shortcuts",
-        category: "View",
+        category: "Panels",
         action_id: "toggle_keymap",
         default_key: "cmd-,",
         context: None,
