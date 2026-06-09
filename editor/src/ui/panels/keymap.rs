@@ -1,16 +1,18 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, KeyDownEvent, ParentElement, Render, ScrollHandle,
+    IntoElement, KeyBinding, KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::Scrollbar;
-use gpui_component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
+use gpui_component::{ActiveTheme, IconName, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
+
+use crate::shortcuts::{
+    CustomKeymap, ShortcutDefinition, display_key, load_custom_keymap, save_custom_keymap,
+    settings_path,
+};
 
 actions!(keymap, [ToggleKeymap, CloseKeymap]);
 
@@ -20,261 +22,13 @@ pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("escape", CloseKeymap, Some(CONTEXT))]);
 }
 
-pub struct KeymapDescriptor {
-    pub label: &'static str,
-    pub category: &'static str,
-    pub action_id: &'static str,
-    pub default_key: &'static str,
-    #[allow(dead_code)]
-    pub context: Option<&'static str>,
-}
+pub use crate::shortcuts::ALL_SHORTCUTS as ALL_DESCRIPTORS;
+pub type KeymapDescriptor = ShortcutDefinition;
 
-pub const ALL_DESCRIPTORS: &[KeymapDescriptor] = &[
-    // File
-    KeymapDescriptor {
-        label: "Open Recent Folder",
-        category: "File",
-        action_id: "open_recent_folders",
-        default_key: "cmd-o",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Open Folder...",
-        category: "File",
-        action_id: "open_folder",
-        default_key: "cmd-shift-o",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Save File",
-        category: "File",
-        action_id: "save_file",
-        default_key: "cmd-s",
-        context: Some("Input"),
-    },
-    // Editor
-    KeymapDescriptor {
-        label: "Execute Query",
-        category: "Editor",
-        action_id: "execute_query",
-        default_key: "cmd-enter",
-        context: Some("Input"),
-    },
-    KeymapDescriptor {
-        label: "Format Query",
-        category: "Editor",
-        action_id: "format_query",
-        default_key: "cmd-alt-l",
-        context: Some("Input"),
-    },
-    KeymapDescriptor {
-        label: "Find",
-        category: "Editor",
-        action_id: "toggle_editor_search",
-        default_key: "cmd-f",
-        context: Some("Input"),
-    },
-    KeymapDescriptor {
-        label: "Find in Files",
-        category: "Editor",
-        action_id: "toggle_project_search",
-        default_key: "cmd-shift-f",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Replace",
-        category: "Editor",
-        action_id: "toggle_editor_replace",
-        default_key: "cmd-shift-h",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Toggle Comment",
-        category: "Editor",
-        action_id: "toggle_comment_lines",
-        default_key: "cmd-/",
-        context: Some("Input"),
-    },
-    KeymapDescriptor {
-        label: "Indent Lines",
-        category: "Editor",
-        action_id: "indent_lines",
-        default_key: "tab",
-        context: Some("file_editor"),
-    },
-    KeymapDescriptor {
-        label: "Outdent Lines",
-        category: "Editor",
-        action_id: "outdent_lines",
-        default_key: "shift-tab",
-        context: Some("file_editor"),
-    },
-    KeymapDescriptor {
-        label: "Cut Line",
-        category: "Editor",
-        action_id: "cut_editor_line",
-        default_key: "cmd-x",
-        context: Some("file_editor"),
-    },
-    // Navigation
-    KeymapDescriptor {
-        label: "Go Back",
-        category: "Navigation",
-        action_id: "navigate_back",
-        default_key: "cmd-[",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Go Forward",
-        category: "Navigation",
-        action_id: "navigate_forward",
-        default_key: "cmd-]",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Search Files",
-        category: "Navigation",
-        action_id: "toggle_file_search",
-        default_key: "cmd-e",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Cycle Tab Forward",
-        category: "Navigation",
-        action_id: "cycle_tab_forward",
-        default_key: "ctrl-tab",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Cycle Tab Backward",
-        category: "Navigation",
-        action_id: "cycle_tab_backward",
-        default_key: "ctrl-shift-tab",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Close Active Tab",
-        category: "Navigation",
-        action_id: "close_active_tab",
-        default_key: "cmd-w",
-        context: None,
-    },
-    // Results
-    KeymapDescriptor {
-        label: "Copy Results",
-        category: "Results",
-        action_id: "copy_result_selection",
-        default_key: "cmd-c",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Edit Result Cell",
-        category: "Results",
-        action_id: "edit_result_cell",
-        default_key: "enter",
-        context: Some("DataTable"),
-    },
-    // Terminal
-    KeymapDescriptor {
-        label: "New Terminal Tab",
-        category: "Terminal",
-        action_id: "new_terminal_tab",
-        default_key: "cmd-t",
-        context: Some("terminal_panel"),
-    },
-    KeymapDescriptor {
-        label: "Copy Terminal Selection",
-        category: "Terminal",
-        action_id: "copy_terminal_selection",
-        default_key: "cmd-c",
-        context: Some("terminal_panel"),
-    },
-    KeymapDescriptor {
-        label: "Paste in Terminal",
-        category: "Terminal",
-        action_id: "paste_terminal",
-        default_key: "cmd-v",
-        context: Some("terminal_panel"),
-    },
-    // Panels
-    KeymapDescriptor {
-        label: "Toggle Left Panel",
-        category: "Panels",
-        action_id: "toggle_left_dock",
-        default_key: "cmd-b",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Toggle Right Panel",
-        category: "Panels",
-        action_id: "toggle_right_dock",
-        default_key: "cmd-shift-b",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Toggle Terminal",
-        category: "Panels",
-        action_id: "toggle_terminal",
-        default_key: "cmd-shift-t",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Toggle Results",
-        category: "Panels",
-        action_id: "toggle_results_panel",
-        default_key: "cmd-shift-r",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Toggle Bottom Panel",
-        category: "Panels",
-        action_id: "toggle_bottom_panel",
-        default_key: "cmd-j",
-        context: None,
-    },
-    KeymapDescriptor {
-        label: "Keyboard Shortcuts",
-        category: "Panels",
-        action_id: "toggle_keymap",
-        default_key: "cmd-,",
-        context: None,
-    },
-];
-
-pub type CustomKeymap = HashMap<String, String>;
-
-fn keymap_path() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".sqlab")
-        .join("keymap.json")
-}
-
-pub fn load_custom_keymap() -> CustomKeymap {
-    let path = keymap_path();
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return HashMap::new();
-    };
-    serde_json::from_str(&content).unwrap_or_default()
-}
-
-fn save_custom_keymap(keymap: &CustomKeymap) {
-    let path = keymap_path();
-    if let Some(parent) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        eprintln!("failed to create keymap directory: {}", e);
-        return;
-    }
-    match serde_json::to_string_pretty(keymap) {
-        Ok(content) => {
-            if let Err(e) = std::fs::write(&path, content) {
-                eprintln!("failed to save keymap: {}", e);
-            }
-        }
-        Err(e) => eprintln!("failed to serialize keymap: {}", e),
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingsSection {
+    Keymap,
+    Themes,
 }
 
 fn is_modifier_key(key: &str) -> bool {
@@ -318,8 +72,10 @@ pub struct KeymapPanel {
     search_input: Entity<InputState>,
     /// List index whose remap modal is currently open.
     recording_ix: Option<usize>,
+    recording_error: Option<String>,
     filtered_indices: Vec<usize>,
     custom_keymap: CustomKeymap,
+    active_section: SettingsSection,
     visible: bool,
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
@@ -329,6 +85,9 @@ pub struct KeymapPanel {
 pub enum KeymapPanelEvent {
     Closed,
     KeymapChanged(CustomKeymap),
+    RecordingStarted,
+    RecordingStopped(CustomKeymap),
+    ThemeChanged(String),
 }
 
 impl EventEmitter<KeymapPanelEvent> for KeymapPanel {}
@@ -350,13 +109,19 @@ impl KeymapPanel {
         );
 
         let custom_keymap = load_custom_keymap();
-        let filtered_indices = (0..ALL_DESCRIPTORS.len()).collect();
+        let filtered_indices = ALL_DESCRIPTORS
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, definition)| definition.visible.then_some(ix))
+            .collect();
 
         Self {
             search_input,
             recording_ix: None,
+            recording_error: None,
             filtered_indices,
             custom_keymap,
+            active_section: SettingsSection::Keymap,
             visible: false,
             focus_handle,
             scroll_handle: ScrollHandle::default(),
@@ -366,6 +131,10 @@ impl KeymapPanel {
 
     pub fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.recording_ix.is_some()
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -380,6 +149,7 @@ impl KeymapPanel {
         self.visible = true;
         self.custom_keymap = load_custom_keymap();
         self.recording_ix = None;
+        self.recording_error = None;
         self.filter_results(cx);
         cx.notify();
         window.focus(&self.search_input.read(cx).focus_handle(cx), cx);
@@ -390,7 +160,14 @@ impl KeymapPanel {
             return;
         }
         self.visible = false;
+        let was_recording = self.recording_ix.is_some();
         self.recording_ix = None;
+        self.recording_error = None;
+        if was_recording {
+            cx.emit(KeymapPanelEvent::RecordingStopped(
+                self.custom_keymap.clone(),
+            ));
+        }
         cx.emit(KeymapPanelEvent::Closed);
         cx.notify();
     }
@@ -398,32 +175,44 @@ impl KeymapPanel {
     fn filter_results(&mut self, cx: &mut Context<Self>) {
         let query = self.search_input.read(cx).value().to_lowercase();
         if query.is_empty() {
-            self.filtered_indices = (0..ALL_DESCRIPTORS.len()).collect();
+            self.filtered_indices = ALL_DESCRIPTORS
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, definition)| definition.visible.then_some(ix))
+                .collect();
         } else {
             self.filtered_indices = ALL_DESCRIPTORS
                 .iter()
                 .enumerate()
                 .filter(|(_, d)| {
-                    d.label.to_lowercase().contains(&query)
-                        || d.category.to_lowercase().contains(&query)
-                        || d.default_key.to_lowercase().contains(&query)
+                    d.visible
+                        && (d.label.to_lowercase().contains(&query)
+                            || d.category.to_lowercase().contains(&query)
+                            || d.id.to_lowercase().contains(&query)
+                            || d.default_key().to_lowercase().contains(&query)
+                            || d.context
+                                .is_some_and(|context| context.to_lowercase().contains(&query)))
                 })
                 .map(|(i, _)| i)
                 .collect();
         }
         self.recording_ix = None;
+        self.recording_error = None;
         cx.notify();
     }
 
     fn current_key(&self, descriptor: &KeymapDescriptor) -> String {
-        self.custom_keymap
-            .get(descriptor.action_id)
-            .cloned()
-            .unwrap_or_else(|| descriptor.default_key.to_string())
+        self.custom_keymap.key_for_definition(descriptor)
     }
 
     fn is_customized(&self, descriptor: &KeymapDescriptor) -> bool {
-        self.custom_keymap.contains_key(descriptor.action_id)
+        self.custom_keymap.has_custom_key(descriptor)
+    }
+
+    fn current_context(&self, descriptor: &KeymapDescriptor) -> String {
+        self.custom_keymap
+            .context_for_definition(descriptor)
+            .unwrap_or_else(|| "global".to_string())
     }
 
     fn start_recording(&mut self, list_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -434,6 +223,8 @@ impl KeymapPanel {
             return;
         };
         self.recording_ix = Some(list_ix);
+        self.recording_error = None;
+        cx.emit(KeymapPanelEvent::RecordingStarted);
         cx.notify();
         window.focus(&self.focus_handle, cx);
     }
@@ -448,24 +239,19 @@ impl KeymapPanel {
         if is_modifier_key(key) {
             return;
         }
-        // Pure Escape → cancel via CloseKeymap action.
         let has_modifier = event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.shift
             || event.keystroke.modifiers.platform;
         if key == "escape" && !has_modifier {
+            self.cancel_recording(window, cx);
             return;
         }
         let binding_str = keystroke_to_binding_str(&event.keystroke);
         self.save_recorded_key(binding_str, window, cx);
     }
 
-    fn save_recorded_key(
-        &mut self,
-        key_str: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn save_recorded_key(&mut self, key_str: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(list_ix) = self.recording_ix else {
             return;
         };
@@ -478,16 +264,26 @@ impl KeymapPanel {
             return;
         };
 
-        if !key_str.is_empty() && key_str != descriptor.default_key {
-            self.custom_keymap
-                .insert(descriptor.action_id.to_string(), key_str);
-        } else {
-            self.custom_keymap.remove(descriptor.action_id);
+        let normalized_key = crate::shortcuts::normalize_key(&key_str);
+        if normalized_key != self.custom_keymap.key_for_definition(descriptor)
+            && let Some(conflict) = self.conflicting_descriptor(descriptor, &normalized_key)
+        {
+            self.recording_error = Some(format!(
+                "{} is already used by {}",
+                display_key(&normalized_key),
+                conflict.label
+            ));
+            cx.notify();
+            window.focus(&self.focus_handle, cx);
+            return;
         }
+
+        self.custom_keymap.set_key(descriptor, key_str);
 
         save_custom_keymap(&self.custom_keymap);
         cx.emit(KeymapPanelEvent::KeymapChanged(self.custom_keymap.clone()));
         self.recording_ix = None;
+        self.recording_error = None;
         cx.notify();
         window.focus(&self.search_input.read(cx).focus_handle(cx), cx);
     }
@@ -505,8 +301,19 @@ impl KeymapPanel {
         Some((descriptor, current_key, customized))
     }
 
+    pub fn recording_error(&self) -> Option<&str> {
+        self.recording_error.as_deref()
+    }
+
     pub fn cancel_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let was_recording = self.recording_ix.is_some();
         self.recording_ix = None;
+        self.recording_error = None;
+        if was_recording {
+            cx.emit(KeymapPanelEvent::RecordingStopped(
+                self.custom_keymap.clone(),
+            ));
+        }
         cx.notify();
         window.focus(&self.search_input.read(cx).focus_handle(cx), cx);
     }
@@ -518,11 +325,54 @@ impl KeymapPanel {
         let Some(descriptor) = ALL_DESCRIPTORS.get(descriptor_ix) else {
             return;
         };
-        self.custom_keymap.remove(descriptor.action_id);
+        self.custom_keymap.reset_key(descriptor);
         save_custom_keymap(&self.custom_keymap);
         cx.emit(KeymapPanelEvent::KeymapChanged(self.custom_keymap.clone()));
         cx.notify();
     }
+
+    fn reset_all_to_defaults(&mut self, cx: &mut Context<Self>) {
+        self.recording_ix = None;
+        self.recording_error = None;
+        self.custom_keymap.reset_all();
+        save_custom_keymap(&self.custom_keymap);
+        cx.emit(KeymapPanelEvent::KeymapChanged(self.custom_keymap.clone()));
+        cx.notify();
+    }
+
+    fn conflicting_descriptor(
+        &self,
+        target: &KeymapDescriptor,
+        normalized_key: &str,
+    ) -> Option<&'static KeymapDescriptor> {
+        let target_context = self.custom_keymap.context_for_definition(target);
+
+        ALL_DESCRIPTORS.iter().find(|descriptor| {
+            descriptor.id != target.id
+                && descriptor.visible
+                && self.custom_keymap.key_for_definition(descriptor) == normalized_key
+                && contexts_conflict(
+                    target_context.as_deref(),
+                    self.custom_keymap
+                        .context_for_definition(descriptor)
+                        .as_deref(),
+                )
+        })
+    }
+}
+
+fn contexts_conflict(left: Option<&str>, right: Option<&str>) -> bool {
+    left == right || left.is_none() || right.is_none()
+}
+
+fn display_settings_path() -> String {
+    let path = settings_path();
+    if let Some(home) = std::env::var_os("HOME")
+        && let Ok(relative_path) = path.strip_prefix(home)
+    {
+        return format!("~/{}", relative_path.display());
+    }
+    path.display().to_string()
 }
 
 impl Render for KeymapPanel {
@@ -532,20 +382,27 @@ impl Render for KeymapPanel {
         }
 
         let filtered = self.filtered_indices.clone();
+        let active_section = self.active_section;
+        let content = match active_section {
+            SettingsSection::Keymap => self.render_keymap_section(&filtered, cx),
+            SettingsSection::Themes => self.render_themes_section(cx),
+        };
 
         v_flex()
-            .id("keymap-panel")
+            .id("settings-panel")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_action_toggle))
             .on_action(cx.listener(Self::on_action_close))
             .when(self.recording_ix.is_some(), |el| {
                 el.on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
                     this.handle_key_capture(event, window, cx);
                 }))
             })
-            .w(px(580.))
-            .max_h(px(520.))
+            .w(px(820.))
+            .h(px(560.))
             .overflow_hidden()
             .rounded_lg()
             .border_1()
@@ -553,10 +410,148 @@ impl Render for KeymapPanel {
             .bg(cx.theme().background)
             .shadow_md()
             .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .px_4()
+                    .py_3()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .items_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(cx.theme().foreground)
+                            .child("Settings"),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("settings-close")
+                            .icon(IconName::Close)
+                            .xsmall()
+                            .ghost()
+                            .tooltip("Close")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close(window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_hidden()
+                    .child(
+                        v_flex()
+                            .w(px(160.))
+                            .h_full()
+                            .flex_none()
+                            .p_2()
+                            .gap_1()
+                            .border_r_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().tab_bar)
+                            .child(self.render_section_button(
+                                "settings-section-keymap",
+                                "Keymap",
+                                SettingsSection::Keymap,
+                                active_section,
+                                cx,
+                            ))
+                            .child(self.render_section_button(
+                                "settings-section-themes",
+                                "Appearance",
+                                SettingsSection::Themes,
+                                active_section,
+                                cx,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .min_w(px(0.))
+                            .min_h(px(0.))
+                            .overflow_hidden()
+                            .child(content),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .h(px(32.))
+                    .px_4()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(div().flex_1())
+                    .child(display_settings_path()),
+            )
+            .into_any_element()
+    }
+}
+
+impl KeymapPanel {
+    fn render_section_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        section: SettingsSection,
+        active_section: SettingsSection,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        h_flex()
+            .id(id)
+            .h(px(32.))
+            .px_2()
+            .items_center()
+            .rounded_md()
+            .text_sm()
+            .font_weight(if section == active_section {
+                gpui::FontWeight::MEDIUM
+            } else {
+                gpui::FontWeight::NORMAL
+            })
+            .text_color(if section == active_section {
+                cx.theme().accent_foreground
+            } else {
+                cx.theme().foreground
+            })
+            .when(section == active_section, |this| this.bg(cx.theme().accent))
+            .when(section != active_section, |this| {
+                this.hover(|style| style.bg(cx.theme().accent.opacity(0.08)))
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.active_section = section;
+                if this.recording_ix.is_some() {
+                    this.cancel_recording(window, cx);
+                }
+                cx.notify();
+                if section == SettingsSection::Keymap {
+                    window.focus(&this.search_input.read(cx).focus_handle(cx), cx);
+                } else {
+                    window.focus(&this.focus_handle, cx);
+                }
+            }))
+            .child(label)
+            .into_any_element()
+    }
+
+    fn render_keymap_section(
+        &self,
+        filtered: &[usize],
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        v_flex()
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .child(
                 v_flex()
                     .flex_shrink_0()
-                    .px_3()
-                    .py_2()
+                    .px_4()
+                    .py_3()
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
@@ -569,17 +564,17 @@ impl Render for KeymapPanel {
                                     .text_sm()
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(cx.theme().foreground)
-                                    .child("Keyboard Shortcuts"),
+                                    .child("Keymap"),
                             )
                             .child(div().flex_1())
                             .child(
-                                Button::new("keymap-close")
-                                    .icon(IconName::Close)
+                                Button::new("keymap-reset-all")
+                                    .label("Reset all")
                                     .xsmall()
                                     .ghost()
-                                    .tooltip("Close")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.close(window, cx);
+                                    .tooltip("Reset all shortcuts to defaults")
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.reset_all_to_defaults(cx);
                                     })),
                             ),
                     )
@@ -594,10 +589,10 @@ impl Render for KeymapPanel {
                     .child(
                         div()
                             .id("keymap-scroll")
-                            .flex_1()
+                            .size_full()
                             .track_scroll(&self.scroll_handle)
                             .overflow_y_scroll()
-                            .children(self.render_grouped_rows(&filtered, cx)),
+                            .children(self.render_grouped_rows(filtered, cx)),
                     )
                     .child(
                         div()
@@ -610,9 +605,66 @@ impl Render for KeymapPanel {
             )
             .into_any_element()
     }
-}
 
-impl KeymapPanel {
+    fn render_themes_section(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current_theme_name = Theme::global(cx).theme_name().clone();
+        let theme_names = ThemeRegistry::global(cx)
+            .sorted_themes()
+            .into_iter()
+            .map(|theme| theme.name.clone())
+            .collect::<Vec<SharedString>>();
+        let entity = cx.entity();
+
+        v_flex()
+            .w_full()
+            .h_full()
+            .px_4()
+            .py_3()
+            .items_start()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child("Theme"),
+                    )
+                    .child(
+                        Button::new("settings-theme-dropdown")
+                            .label(current_theme_name.to_string())
+                            .w(px(260.))
+                            .small()
+                            .ghost()
+                            .dropdown_menu(move |menu, _window, _cx| {
+                                let mut menu = menu;
+                                for theme_name in theme_names.clone() {
+                                    let selected = theme_name == current_theme_name;
+                                    let theme_name_for_click = theme_name.to_string();
+                                    let entity = entity.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(theme_name).checked(selected).on_click(
+                                            move |_, _window, cx| {
+                                                entity.update(cx, |_, cx| {
+                                                    cx.emit(KeymapPanelEvent::ThemeChanged(
+                                                        theme_name_for_click.clone(),
+                                                    ));
+                                                    cx.notify();
+                                                });
+                                            },
+                                        ),
+                                    );
+                                }
+                                menu
+                            }),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_grouped_rows(
         &self,
         filtered: &[usize],
@@ -668,6 +720,7 @@ impl KeymapPanel {
     ) -> gpui::AnyElement {
         let is_customized = self.is_customized(descriptor);
         let current_key = self.current_key(descriptor);
+        let current_context = self.current_context(descriptor);
         let is_active_recording = self.recording_ix == Some(list_ix);
 
         let entity = cx.entity();
@@ -688,11 +741,13 @@ impl KeymapPanel {
                 this.hover(|style| style.bg(cx.theme().accent.opacity(0.08)))
             })
             // Double-click opens the remap modal.
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                if event.click_count() == 2 {
-                    this.start_recording(list_ix, window, cx);
-                }
-            }))
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    if event.click_count() == 2 {
+                        this.start_recording(list_ix, window, cx);
+                    }
+                }),
+            )
             // Right-click / secondary click opens the context menu.
             .context_menu(move |menu, _window, _cx| {
                 let entity_e = entity_edit.clone();
@@ -705,7 +760,7 @@ impl KeymapPanel {
                     }),
                 )
                 .item(
-                    PopupMenuItem::new("Remove shortcut")
+                    PopupMenuItem::new("Reset shortcut")
                         .disabled(!is_customized)
                         .on_click(move |_, _window, cx| {
                             entity_r.update(cx, |this, cx| {
@@ -715,11 +770,24 @@ impl KeymapPanel {
                 )
             })
             .child(
-                div()
+                v_flex()
                     .flex_1()
-                    .text_sm()
-                    .text_color(cx.theme().foreground)
-                    .child(descriptor.label),
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(descriptor.label),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(descriptor.id)
+                            .child("·")
+                            .child(current_context),
+                    ),
             )
             .child(render_key_badge(&current_key, is_customized, cx))
             .into_any_element()
@@ -731,7 +799,8 @@ fn render_key_badge(
     is_customized: bool,
     cx: &mut Context<KeymapPanel>,
 ) -> gpui::AnyElement {
-    let parts: Vec<String> = key.split('-').map(|part| part.to_string()).collect();
+    let display = display_key(key);
+    let parts: Vec<String> = display.split('+').map(|part| part.to_string()).collect();
 
     h_flex()
         .gap_0p5()
@@ -772,6 +841,9 @@ impl Focusable for KeymapPanel {
 
 impl KeymapPanel {
     fn on_action_toggle(&mut self, _: &ToggleKeymap, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording_ix.is_some() {
+            return;
+        }
         self.toggle(window, cx);
     }
 

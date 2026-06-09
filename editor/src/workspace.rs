@@ -859,6 +859,20 @@ impl Workspace {
                     KeymapPanelEvent::KeymapChanged(custom) => {
                         crate::bind_all_keys(cx, custom);
                     }
+                    KeymapPanelEvent::RecordingStarted => {
+                        cx.clear_key_bindings();
+                    }
+                    KeymapPanelEvent::RecordingStopped(custom) => {
+                        crate::bind_all_keys(cx, custom);
+                    }
+                    KeymapPanelEvent::ThemeChanged(theme_name) => {
+                        if crate::app_theme::apply_theme_by_name(theme_name, Some(window), cx) {
+                            crate::app_theme::persist_selected_theme(theme_name);
+                            this.app_menu_bar.update(cx, |menu_bar, cx| {
+                                menu_bar.reload(cx);
+                            });
+                        }
+                    }
                     KeymapPanelEvent::Closed => {
                         // Move focus to workspace root synchronously so actions (cmd-,)
                         // remain dispatchable while the deferred editor focus hasn't fired yet.
@@ -1785,6 +1799,10 @@ impl Workspace {
     }
 
     fn on_toggle_keymap(&mut self, _: &ToggleKeymap, window: &mut Window, cx: &mut Context<Self>) {
+        if self.keymap_panel.read(cx).is_recording() {
+            return;
+        }
+
         self.recent_folders.update(cx, |recent, cx| {
             recent.close(cx);
         });
@@ -2017,19 +2035,39 @@ impl Workspace {
         }
     }
 
-    fn on_toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_toggle_terminal(
+        &mut self,
+        _: &ToggleTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.toggle_bottom_panel_from_bottom_bar(BottomPanelMode::Terminal, window, cx);
     }
 
-    fn on_toggle_results_panel(&mut self, _: &ToggleResultsPanel, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_toggle_results_panel(
+        &mut self,
+        _: &ToggleResultsPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.toggle_bottom_panel_from_bottom_bar(BottomPanelMode::Results, window, cx);
     }
 
-    fn on_toggle_left_dock(&mut self, _: &ToggleLeftDock, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_toggle_left_dock(
+        &mut self,
+        _: &ToggleLeftDock,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.toggle_side_dock_from_bottom_bar(DockPlacement::Left, window, cx);
     }
 
-    fn on_toggle_right_dock(&mut self, _: &ToggleRightDock, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_toggle_right_dock(
+        &mut self,
+        _: &ToggleRightDock,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.toggle_side_dock_from_bottom_bar(DockPlacement::Right, window, cx);
     }
 
@@ -2093,7 +2131,11 @@ impl Workspace {
                     .xsmall()
                     .ghost()
                     .tooltip_with_action(
-                        if is_left_open { "Collapse Left Panel" } else { "Expand Left Panel" },
+                        if is_left_open {
+                            "Collapse Left Panel"
+                        } else {
+                            "Expand Left Panel"
+                        },
                         &ToggleLeftDock,
                         None,
                     )
@@ -2172,7 +2214,11 @@ impl Workspace {
                             .xsmall()
                             .ghost()
                             .tooltip_with_action(
-                                if is_right_open { "Collapse Right Panel" } else { "Expand Right Panel" },
+                                if is_right_open {
+                                    "Collapse Right Panel"
+                                } else {
+                                    "Expand Right Panel"
+                                },
                                 &ToggleRightDock,
                                 None,
                             )
@@ -2201,12 +2247,14 @@ impl Workspace {
         current_key: &str,
         is_customized: bool,
         action_id: &'static str,
+        recording_error: Option<String>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let action_id_for_reset = action_id;
 
         // Key badge parts
-        let key_parts: Vec<String> = current_key.split('-').map(|p| p.to_string()).collect();
+        let display_key = crate::shortcuts::display_key(current_key);
+        let key_parts: Vec<String> = display_key.split('+').map(|p| p.to_string()).collect();
 
         div()
             .absolute()
@@ -2336,6 +2384,14 @@ impl Workspace {
                                             .child("Press a key combination..."),
                                     ),
                             )
+                            .when_some(recording_error, |this, message| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().danger)
+                                        .child(message),
+                                )
+                            })
                             .child(
                                 h_flex()
                                     .gap_2()
@@ -2362,7 +2418,7 @@ impl Workspace {
                                                             .position(|&di| {
                                                                 crate::ui::panels::keymap::ALL_DESCRIPTORS
                                                                     .get(di)
-                                                                    .is_some_and(|d| d.action_id == action_id_for_reset)
+                                                                    .is_some_and(|d| d.id == action_id_for_reset)
                                                             })
                                                         {
                                                             panel.reset_to_default(list_ix, cx);
@@ -2393,9 +2449,20 @@ impl Render for Workspace {
         let is_project_search_visible = self.project_search.read(cx).is_visible();
         let is_keymap_panel_visible = self.keymap_panel.read(cx).is_visible();
         let keymap_recording = if is_keymap_panel_visible {
+            let recording_error = self
+                .keymap_panel
+                .read(cx)
+                .recording_error()
+                .map(ToString::to_string);
             self.keymap_panel.read(cx).recording_descriptor().map(
                 |(descriptor, current_key, is_customized)| {
-                    (descriptor.label, current_key, is_customized, descriptor.action_id)
+                    (
+                        descriptor.label,
+                        current_key,
+                        is_customized,
+                        descriptor.id,
+                        recording_error,
+                    )
                 },
             )
         } else {
@@ -2614,11 +2681,19 @@ impl Render for Workspace {
                                     ),
                             )
                     })
-                    .when_some(keymap_recording, |overlay, (label, current_key, is_customized, action_id)| {
-                        overlay.child(self.render_keymap_recording_modal(
-                            label, &current_key, is_customized, action_id, cx,
-                        ))
-                    }),
+                    .when_some(
+                        keymap_recording,
+                        |overlay, (label, current_key, is_customized, action_id, recording_error)| {
+                            overlay.child(self.render_keymap_recording_modal(
+                                label,
+                                &current_key,
+                                is_customized,
+                                action_id,
+                                recording_error,
+                                cx,
+                            ))
+                        },
+                    ),
             )
             .child(self.render_bottom_bar(window, cx))
             .children(Root::render_dialog_layer(window, cx))
