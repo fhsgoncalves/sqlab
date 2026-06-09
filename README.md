@@ -66,6 +66,7 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | Databend driver | ✅ |
 | Clickhouse driver | ⏳ |
 | Athena driver | ⏳ |
+| Custom keymap | ✅ |
 
 ## Supported Databases
 
