@@ -1,31 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET="${1:-x86_64-unknown-linux-gnu}"
 APP_ID="io.github.fhsgoncalves.sqlab"
 APP_NAME="sqlab"
-ARCHIVE="target/distrib/${APP_NAME}-${TARGET}.tar.xz"
-WORK_DIR="target/flatpak/${TARGET}"
-INPUT_DIR="${WORK_DIR}/input"
-REPO_DIR="${WORK_DIR}/repo"
-BUILD_DIR="${WORK_DIR}/build"
-MANIFEST="${WORK_DIR}/${APP_ID}.yml"
-FLATPAK_PATH="target/distrib/${APP_NAME}-${TARGET}.flatpak"
 
-if [[ ! -f "${ARCHIVE}" ]]; then
-  echo "Missing ${ARCHIVE}; run dist build for ${TARGET} first" >&2
-  exit 1
+if [[ "$#" -eq 0 ]]; then
+  set -- x86_64-unknown-linux-gnu
 fi
 
-rm -rf "${WORK_DIR}" "${FLATPAK_PATH}" "${FLATPAK_PATH}.sha256"
-mkdir -p "${INPUT_DIR}" "${REPO_DIR}"
+for TARGET in "$@"; do
+  ARCHIVE="target/distrib/${APP_NAME}-${TARGET}.tar.xz"
+  WORK_DIR="target/flatpak/${TARGET}"
+  INPUT_DIR="${WORK_DIR}/input"
+  REPO_DIR="${WORK_DIR}/repo"
+  BUILD_DIR="${WORK_DIR}/build"
+  MANIFEST="${WORK_DIR}/${APP_ID}.yml"
+  FLATPAK_PATH="target/distrib/${APP_NAME}-${TARGET}.flatpak"
 
-tar -xf "${ARCHIVE}" --strip-components 1 -C "${INPUT_DIR}"
-install -Dm644 packaging/flatpak/${APP_ID}.desktop "${INPUT_DIR}/${APP_ID}.desktop"
-install -Dm644 packaging/flatpak/${APP_ID}.metainfo.xml "${INPUT_DIR}/${APP_ID}.metainfo.xml"
-install -Dm644 packaging/flatpak/${APP_ID}.png "${INPUT_DIR}/${APP_ID}.png"
+  if [[ ! -f "${ARCHIVE}" ]]; then
+    echo "Missing ${ARCHIVE}; run dist build for ${TARGET} first" >&2
+    exit 1
+  fi
 
-cat > "${MANIFEST}" <<EOF
+  rm -rf "${WORK_DIR}" "${FLATPAK_PATH}" "${FLATPAK_PATH}.sha256"
+  mkdir -p "${INPUT_DIR}" "${REPO_DIR}"
+
+  tar -xf "${ARCHIVE}" --strip-components 1 -C "${INPUT_DIR}"
+  install -Dm644 packaging/flatpak/${APP_ID}.desktop "${INPUT_DIR}/${APP_ID}.desktop"
+  install -Dm644 packaging/flatpak/${APP_ID}.metainfo.xml "${INPUT_DIR}/${APP_ID}.metainfo.xml"
+  install -Dm644 packaging/flatpak/${APP_ID}.png "${INPUT_DIR}/${APP_ID}.png"
+
+  cat > "${MANIFEST}" <<EOF
 app-id: ${APP_ID}
 runtime: org.freedesktop.Platform
 runtime-version: "24.08"
@@ -55,7 +60,8 @@ modules:
         path: input
 EOF
 
-flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak-builder --user --force-clean --repo="${REPO_DIR}" --install-deps-from=flathub "${BUILD_DIR}" "${MANIFEST}"
-flatpak build-bundle "${REPO_DIR}" "${FLATPAK_PATH}" "${APP_ID}" --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
-sha256sum "${FLATPAK_PATH}" > "${FLATPAK_PATH}.sha256"
+  flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+  flatpak-builder --user --force-clean --repo="${REPO_DIR}" --install-deps-from=flathub "${BUILD_DIR}" "${MANIFEST}"
+  flatpak build-bundle "${REPO_DIR}" "${FLATPAK_PATH}" "${APP_ID}" --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+  sha256sum "${FLATPAK_PATH}" > "${FLATPAK_PATH}.sha256"
+done

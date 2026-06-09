@@ -170,8 +170,10 @@ jobs:
           # Parse out what we just built and upload it to scratch storage
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
           dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
-          if ls target/distrib/*.dmg target/distrib/*.flatpak target/distrib/*.dmg.sha256 target/distrib/*.flatpak.sha256 >/dev/null 2>&1; then
-            ls target/distrib/*.dmg target/distrib/*.flatpak target/distrib/*.dmg.sha256 target/distrib/*.flatpak.sha256 2>/dev/null
+          shopt -s nullglob
+          extra_artifacts=(target/distrib/*.dmg target/distrib/*.flatpak target/distrib/*.dmg.sha256 target/distrib/*.flatpak.sha256)
+          if ((${#extra_artifacts[@]})); then
+            printf '%s\n' "${extra_artifacts[@]}" >> "$GITHUB_OUTPUT"
           fi
           echo "EOF" >> "$GITHUB_OUTPUT"
 
