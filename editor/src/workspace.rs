@@ -35,6 +35,7 @@ use crate::ui::panels::file_editor::{
 };
 use crate::ui::panels::file_search::{FileSearch, FileSearchEvent, ToggleFileSearch};
 use crate::ui::panels::file_tree::{FileTreePanel, OpenFileEvent, RootChangedEvent};
+use crate::ui::panels::keymap::{KeymapPanel, KeymapPanelEvent, ToggleKeymap};
 use crate::ui::panels::project_search::{ProjectSearch, ProjectSearchEvent, ToggleProjectSearch};
 use crate::ui::panels::result::ResultPanel;
 use crate::ui::panels::terminal::TerminalPanel;
@@ -55,7 +56,11 @@ actions!(
         ToggleSearchReplace,
         SelectPreviousConnection,
         SelectNextConnection,
-        ConfirmSelectedConnection
+        ConfirmSelectedConnection,
+        ToggleTerminal,
+        ToggleResultsPanel,
+        ToggleLeftDock,
+        ToggleRightDock,
     ]
 );
 
@@ -680,6 +685,7 @@ pub struct Workspace {
     file_search: Entity<FileSearch>,
     recent_folders: Entity<RecentFolderSelector>,
     project_search: Entity<ProjectSearch>,
+    keymap_panel: Entity<KeymapPanel>,
     dock_area: Entity<DockArea>,
     editor_tabs: Entity<EditorTabs>,
     bottom_panel: Entity<BottomPanel>,
@@ -706,6 +712,7 @@ impl Workspace {
         let file_search = cx.new(|cx| FileSearch::new(root_path.clone(), window, cx));
         let recent_folders = cx.new(|cx| RecentFolderSelector::new(cx));
         let project_search = cx.new(|cx| ProjectSearch::new(root_path.clone(), window, cx));
+        let keymap_panel = cx.new(|cx| KeymapPanel::new(window, cx));
         let data_source_manager = cx.new(|_cx| {
             DataSourceManager::load().unwrap_or_else(|e| {
                 eprintln!("failed to load data source config: {}", e);
@@ -843,6 +850,32 @@ impl Workspace {
         )
         .detach();
 
+        let editor_tabs_for_keymap = editor_tabs.clone();
+        cx.subscribe_in(
+            &keymap_panel,
+            window,
+            move |this, _keymap, event: &KeymapPanelEvent, window, cx| {
+                match event {
+                    KeymapPanelEvent::KeymapChanged(custom) => {
+                        crate::bind_all_keys(cx, custom);
+                    }
+                    KeymapPanelEvent::Closed => {
+                        // Move focus to workspace root synchronously so actions (cmd-,)
+                        // remain dispatchable while the deferred editor focus hasn't fired yet.
+                        window.focus(&this.focus_handle, cx);
+                        let editor_tabs = editor_tabs_for_keymap.clone();
+                        cx.defer_in(window, move |_, window, cx| {
+                            if let Some(editor) = editor_tabs.read(cx).active_editor() {
+                                let input_focus = editor.read(cx).editor_focus_handle(cx);
+                                window.focus(&input_focus, cx);
+                            }
+                        });
+                    }
+                }
+            },
+        )
+        .detach();
+
         // Subscribe to project search results
         let editor_tabs_for_project = editor_tabs.clone();
         cx.subscribe_in(&project_search, window, {
@@ -952,6 +985,7 @@ impl Workspace {
             file_search,
             recent_folders,
             project_search,
+            keymap_panel,
             dock_area,
             editor_tabs,
             bottom_panel,
@@ -1750,6 +1784,21 @@ impl Workspace {
         });
     }
 
+    fn on_toggle_keymap(&mut self, _: &ToggleKeymap, window: &mut Window, cx: &mut Context<Self>) {
+        self.recent_folders.update(cx, |recent, cx| {
+            recent.close(cx);
+        });
+        self.file_search.update(cx, |search, cx| {
+            search.close(window, cx);
+        });
+        self.project_search.update(cx, |search, cx| {
+            search.close(window, cx);
+        });
+        self.keymap_panel.update(cx, |panel, cx| {
+            panel.toggle(window, cx);
+        });
+    }
+
     fn on_toggle_search_replace(
         &mut self,
         _: &ToggleSearchReplace,
@@ -1794,6 +1843,17 @@ impl Workspace {
         self.toggle_bottom_panel(BottomPanelMode::Terminal, window, cx);
     }
 
+    fn restore_focus_to_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle, cx);
+        let editor_tabs = self.editor_tabs.clone();
+        cx.defer_in(window, move |_, window, cx| {
+            if let Some(editor) = editor_tabs.read(cx).active_editor() {
+                let fh = editor.read(cx).editor_focus_handle(cx);
+                window.focus(&fh, cx);
+            }
+        });
+    }
+
     fn toggle_bottom_panel(
         &mut self,
         mode: BottomPanelMode,
@@ -1813,6 +1873,7 @@ impl Workspace {
                 }
                 dock_area.remove_bottom_dock(window, cx);
             });
+            self.restore_focus_to_editor(window, cx);
             return;
         }
 
@@ -1887,15 +1948,60 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dock_area.update(cx, |dock_area, cx| {
-            dock_area.toggle_dock(placement, window, cx);
-        });
-        self.editor_tabs.update(cx, |tabs, cx| {
-            tabs.sync_zoomed_side_docks(cx);
-        });
-        self.bottom_panel.update(cx, |panel, cx| {
-            panel.sync_zoomed_side_docks(cx);
-        });
+        let is_open = self.dock_area.read(cx).is_dock_open(placement, cx);
+
+        let dock_entity = match placement {
+            DockPlacement::Left => self.dock_area.read(cx).left_dock().cloned(),
+            DockPlacement::Right => self.dock_area.read(cx).right_dock().cloned(),
+            _ => None,
+        };
+
+        let dock_focus = dock_entity
+            .as_ref()
+            .map(|dock| dock.read(cx).panel().view().focus_handle(cx));
+
+        if is_open {
+            let is_focused = dock_focus
+                .as_ref()
+                .map(|fh| fh.contains_focused(window, cx))
+                .unwrap_or(false);
+
+            if is_focused {
+                // Focused → close and return focus to editor
+                self.dock_area.update(cx, |dock_area, cx| {
+                    dock_area.toggle_dock(placement, window, cx);
+                });
+                self.restore_focus_to_editor(window, cx);
+                self.editor_tabs.update(cx, |tabs, cx| {
+                    tabs.sync_zoomed_side_docks(cx);
+                });
+                self.bottom_panel.update(cx, |panel, cx| {
+                    panel.sync_zoomed_side_docks(cx);
+                });
+            } else {
+                // Open but not focused → just focus the active panel
+                if let Some(fh) = dock_focus {
+                    window.focus(&fh, cx);
+                }
+            }
+        } else {
+            // Closed → open it and focus the active panel
+            self.dock_area.update(cx, |dock_area, cx| {
+                dock_area.toggle_dock(placement, window, cx);
+            });
+            if let Some(dock) = dock_entity {
+                cx.defer_in(window, move |_, window, cx| {
+                    let fh = dock.read(cx).panel().view().focus_handle(cx);
+                    window.focus(&fh, cx);
+                });
+            }
+            self.editor_tabs.update(cx, |tabs, cx| {
+                tabs.sync_zoomed_side_docks(cx);
+            });
+            self.bottom_panel.update(cx, |panel, cx| {
+                panel.sync_zoomed_side_docks(cx);
+            });
+        }
     }
 
     fn toggle_bottom_panel_from_bottom_bar(
@@ -1909,6 +2015,22 @@ impl Workspace {
         } else {
             self.toggle_bottom_panel(mode, window, cx);
         }
+    }
+
+    fn on_toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_bottom_panel_from_bottom_bar(BottomPanelMode::Terminal, window, cx);
+    }
+
+    fn on_toggle_results_panel(&mut self, _: &ToggleResultsPanel, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_bottom_panel_from_bottom_bar(BottomPanelMode::Results, window, cx);
+    }
+
+    fn on_toggle_left_dock(&mut self, _: &ToggleLeftDock, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_side_dock_from_bottom_bar(DockPlacement::Left, window, cx);
+    }
+
+    fn on_toggle_right_dock(&mut self, _: &ToggleRightDock, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_side_dock_from_bottom_bar(DockPlacement::Right, window, cx);
     }
 
     fn render_bottom_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1970,11 +2092,11 @@ impl Workspace {
                     })
                     .xsmall()
                     .ghost()
-                    .tooltip(if is_left_open {
-                        "Collapse Left Panel"
-                    } else {
-                        "Expand Left Panel"
-                    })
+                    .tooltip_with_action(
+                        if is_left_open { "Collapse Left Panel" } else { "Expand Left Panel" },
+                        &ToggleLeftDock,
+                        None,
+                    )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_side_dock_from_bottom_bar(DockPlacement::Left, window, cx);
                     })),
@@ -2003,7 +2125,7 @@ impl Workspace {
                             .icon(Icon::new(IconName::File).path("icons/results-table.svg"))
                             .xsmall()
                             .ghost()
-                            .tooltip("Query Results");
+                            .tooltip_with_action("Query Results", &ToggleResultsPanel, None);
 
                         let btn = if is_results_active && is_dock_open {
                             btn.text_color(active_bottom_button_fg)
@@ -2024,7 +2146,7 @@ impl Workspace {
                             .icon(Icon::new(IconName::File).path("icons/square-terminal.svg"))
                             .xsmall()
                             .ghost()
-                            .tooltip("Terminal");
+                            .tooltip_with_action("Terminal", &ToggleTerminal, None);
 
                         let btn = if is_terminal_active && is_dock_open {
                             btn.text_color(active_bottom_button_fg)
@@ -2049,11 +2171,11 @@ impl Workspace {
                             })
                             .xsmall()
                             .ghost()
-                            .tooltip(if is_right_open {
-                                "Collapse Right Panel"
-                            } else {
-                                "Expand Right Panel"
-                            })
+                            .tooltip_with_action(
+                                if is_right_open { "Collapse Right Panel" } else { "Expand Right Panel" },
+                                &ToggleRightDock,
+                                None,
+                            )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_side_dock_from_bottom_bar(
                                     DockPlacement::Right,
@@ -2072,6 +2194,191 @@ impl Focusable for Workspace {
     }
 }
 
+impl Workspace {
+    fn render_keymap_recording_modal(
+        &self,
+        label: &'static str,
+        current_key: &str,
+        is_customized: bool,
+        action_id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let action_id_for_reset = action_id;
+
+        // Key badge parts
+        let key_parts: Vec<String> = current_key.split('-').map(|p| p.to_string()).collect();
+
+        div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(cx.theme().background.opacity(0.65))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.keymap_panel.update(cx, |panel, cx| {
+                        panel.cancel_recording(window, cx);
+                    });
+                }),
+            )
+            .child(
+                v_flex()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .w(px(400.))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .shadow_lg()
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(cx.theme().foreground)
+                                    .child("Remap Shortcut"),
+                            )
+                            .child(
+                                Button::new("keymap-modal-close")
+                                    .icon(IconName::Close)
+                                    .xsmall()
+                                    .ghost()
+                                    .tooltip("Cancel (Esc)")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.keymap_panel.update(cx, |panel, cx| {
+                                            panel.cancel_recording(window, cx);
+                                        });
+                                    })),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .px_4()
+                            .py_5()
+                            .gap_4()
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Command"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(cx.theme().foreground)
+                                            .child(label),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Current shortcut"),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap_0p5()
+                                            .items_center()
+                                            .children(key_parts.into_iter().map(|part| {
+                                                div()
+                                                    .px_1()
+                                                    .py_0p5()
+                                                    .rounded_sm()
+                                                    .border_1()
+                                                    .border_color(if is_customized {
+                                                        cx.theme().primary.opacity(0.6)
+                                                    } else {
+                                                        cx.theme().border
+                                                    })
+                                                    .bg(cx.theme().secondary)
+                                                    .text_xs()
+                                                    .text_color(if is_customized {
+                                                        cx.theme().primary
+                                                    } else {
+                                                        cx.theme().muted_foreground
+                                                    })
+                                                    .child(part)
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .px_4()
+                                    .py_4()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(cx.theme().primary.opacity(0.45))
+                                    .bg(cx.theme().primary.opacity(0.06))
+                                    .flex()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().primary)
+                                            .child("Press a key combination..."),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground.opacity(0.7))
+                                            .child("Press Esc to cancel"),
+                                    )
+                                    .child(div().flex_1())
+                                    .when(is_customized, |el| {
+                                        el.child(
+                                            Button::new("keymap-modal-reset")
+                                                .label("Reset to default")
+                                                .xsmall()
+                                                .ghost()
+                                                .on_click(cx.listener(move |this, _, window, cx| {
+                                                    this.keymap_panel.update(cx, |panel, cx| {
+                                                        // find the list_ix for this action_id
+                                                        if let Some(list_ix) = panel
+                                                            .filtered_indices()
+                                                            .iter()
+                                                            .position(|&di| {
+                                                                crate::ui::panels::keymap::ALL_DESCRIPTORS
+                                                                    .get(di)
+                                                                    .is_some_and(|d| d.action_id == action_id_for_reset)
+                                                            })
+                                                        {
+                                                            panel.reset_to_default(list_ix, cx);
+                                                        }
+                                                        panel.cancel_recording(window, cx);
+                                                    });
+                                                })),
+                                        )
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_dark = cx.theme().is_dark();
@@ -2084,6 +2391,16 @@ impl Render for Workspace {
         let is_file_search_visible = self.file_search.read(cx).is_visible();
         let is_recent_folders_visible = self.recent_folders.read(cx).is_visible();
         let is_project_search_visible = self.project_search.read(cx).is_visible();
+        let is_keymap_panel_visible = self.keymap_panel.read(cx).is_visible();
+        let keymap_recording = if is_keymap_panel_visible {
+            self.keymap_panel.read(cx).recording_descriptor().map(
+                |(descriptor, current_key, is_customized)| {
+                    (descriptor.label, current_key, is_customized, descriptor.action_id)
+                },
+            )
+        } else {
+            None
+        };
 
         v_flex()
             .id("workspace")
@@ -2095,8 +2412,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_execute_query))
             .on_action(cx.listener(Self::on_toggle_file_search))
             .on_action(cx.listener(Self::on_toggle_project_search))
+            .on_action(cx.listener(Self::on_toggle_keymap))
             .on_action(cx.listener(Self::on_toggle_search_replace))
             .on_action(cx.listener(Self::on_toggle_bottom_panel_mode))
+            .on_action(cx.listener(Self::on_toggle_terminal))
+            .on_action(cx.listener(Self::on_toggle_results_panel))
+            .on_action(cx.listener(Self::on_toggle_left_dock))
+            .on_action(cx.listener(Self::on_toggle_right_dock))
             .on_action(cx.listener(Self::on_switch_theme))
             .child(
                 TitleBar::new().child(
@@ -2256,6 +2578,46 @@ impl Render for Workspace {
                                             .child(self.project_search.clone()),
                                     ),
                             )
+                    })
+                    .when(is_keymap_panel_visible, |overlay| {
+                        overlay
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .inset_0()
+                                    .occlude()
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.keymap_panel.update(cx, |panel, cx| {
+                                                panel.close(window, cx);
+                                            });
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .top(px(80.))
+                                    .flex()
+                                    .justify_center()
+                                    .items_start()
+                                    .child(
+                                        div()
+                                            .occlude()
+                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation();
+                                            })
+                                            .child(self.keymap_panel.clone()),
+                                    ),
+                            )
+                    })
+                    .when_some(keymap_recording, |overlay, (label, current_key, is_customized, action_id)| {
+                        overlay.child(self.render_keymap_recording_modal(
+                            label, &current_key, is_customized, action_id, cx,
+                        ))
                     }),
             )
             .child(self.render_bottom_bar(window, cx))
