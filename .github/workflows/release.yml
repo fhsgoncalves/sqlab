@@ -287,6 +287,21 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      - name: Verify release artifact checksums
+        shell: bash
+        run: |
+          shopt -s nullglob
+          checksums=(artifacts/*.sha256)
+          if ((${#checksums[@]} == 0)); then
+            echo "No release artifact checksums found" >&2
+            exit 1
+          fi
+          for checksum in "${checksums[@]}"; do
+            (
+              cd "$(dirname "${checksum}")"
+              sha256sum -c "$(basename "${checksum}")"
+            )
+          done
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"

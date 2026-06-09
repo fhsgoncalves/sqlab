@@ -63,5 +63,8 @@ EOF
   flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
   flatpak-builder --user --force-clean --repo="${REPO_DIR}" --install-deps-from=flathub "${BUILD_DIR}" "${MANIFEST}"
   flatpak build-bundle "${REPO_DIR}" "${FLATPAK_PATH}" "${APP_ID}" --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
-  sha256sum "${FLATPAK_PATH}" > "${FLATPAK_PATH}.sha256"
+  (
+    cd "$(dirname "${FLATPAK_PATH}")"
+    sha256sum "$(basename "${FLATPAK_PATH}")" > "$(basename "${FLATPAK_PATH}").sha256"
+  )
 done
