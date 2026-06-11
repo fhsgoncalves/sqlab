@@ -302,6 +302,11 @@ jobs:
               sha256sum -c "$(basename "${checksum}")"
             )
           done
+      - name: Generate Homebrew Cask
+        shell: bash
+        run: |
+          scripts/generate-homebrew-cask.sh "${{ needs.plan.outputs.tag }}" artifacts/sqlab-aarch64-apple-darwin.dmg.sha256 artifacts/sqlab.rb
+          ruby -c artifacts/sqlab.rb
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
@@ -315,6 +320,33 @@ jobs:
           printf '%s\n' "$ANNOUNCEMENT_BODY" | awk 'BEGIN { emit = 0 } /^## Download / { emit = 1 } emit { print }' >> $RUNNER_TEMP/notes.txt
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+      - name: Publish Homebrew Cask
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "${HOMEBREW_TAP_TOKEN}" ]]; then
+            echo "HOMEBREW_TAP_TOKEN is not configured; skipping Homebrew tap update"
+            exit 0
+          fi
+
+          TAP_REPO="fhsgoncalves/homebrew-tap"
+          TAP_DIR="${RUNNER_TEMP}/homebrew-tap"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" "${TAP_DIR}"
+          mkdir -p "${TAP_DIR}/Casks"
+          cp artifacts/sqlab.rb "${TAP_DIR}/Casks/sqlab.rb"
+
+          git -C "${TAP_DIR}" config user.name "github-actions[bot]"
+          git -C "${TAP_DIR}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git -C "${TAP_DIR}" diff --quiet -- Casks/sqlab.rb; then
+            echo "Homebrew cask is already up to date"
+            exit 0
+          fi
+
+          git -C "${TAP_DIR}" add Casks/sqlab.rb
+          git -C "${TAP_DIR}" commit -m "Update sqlab to ${{ needs.plan.outputs.tag }}"
+          git -C "${TAP_DIR}" push
 
   announce:
     needs:

@@ -2,7 +2,17 @@
 
 ### macOS
 
-Download `sqlab-aarch64-apple-darwin.dmg`, open it, and drag `sqlab.app` to `Applications`.
+Homebrew is the preferred macOS install method:
+
+```sh
+brew install --cask fhsgoncalves/tap/sqlab
+```
+
+This installs the `sqlab.app` bundle into `Applications`.
+
+sq/lab is not currently signed or notarized. If macOS blocks the first launch, open `System Settings > Privacy & Security` and click `Open Anyway` for `sqlab`.
+
+You can also download `sqlab-aarch64-apple-darwin.dmg`, open it, and drag `sqlab.app` to `Applications`.
 
 The shell installer is still available for CLI-style installs, but it installs only the raw binary into `~/.cargo/bin` and does not provide the macOS app bundle icon.
 

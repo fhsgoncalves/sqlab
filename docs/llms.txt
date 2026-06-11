@@ -112,7 +112,7 @@ A: Yes. sq/lab is completely free and open-source under the MIT license. There i
 A: PostgreSQL, MySQL, SQLite, DuckDB, and Databend are supported today. MSSQL Server, Oracle, ClickHouse, and AWS Athena are planned for future releases.
 
 **Q: What operating systems does sq/lab support?**
-A: macOS (Apple Silicon and Intel), Windows (x86-64 via MSI), and Linux (x86-64 and ARM64 via Flatpak).
+A: macOS (Apple Silicon via Homebrew Cask or DMG), Windows (x86-64 via MSI), and Linux (x86-64 and ARM64 via Flatpak).
 
 **Q: Is sq/lab based on Electron or a JVM?**
 A: No. sq/lab is a fully native application written in Rust, using GPUI for GPU-accelerated rendering. It has no Chromium, Node.js, Java, or JVM dependency. This is why it uses under 80 MB of memory and starts in under 25 ms.
@@ -134,6 +134,11 @@ A: In the OS-native keychain: macOS Keychain, Windows Credential Manager, or the
 
 **Q: Can I use sq/lab with AI coding agents?**
 A: Yes. The built-in terminal supports running Claude Code, Cursor, Aider, or any CLI-based AI agent alongside SQL work without leaving the IDE. File-backed `.sql` editing also means AI agents can read and write query files directly.
+
+**Q: How do I install sq/lab on macOS?**
+A: Homebrew is preferred:
+`brew install --cask fhsgoncalves/tap/sqlab`
+You can also download the `.dmg` from the releases page. sq/lab is not currently signed or notarized, so macOS may require approving the first launch in System Settings > Privacy & Security.
 
 **Q: How do I install sq/lab on Linux?**
 A: Download the `.flatpak` bundle from the releases page, then run:
