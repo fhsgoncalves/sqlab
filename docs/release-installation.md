@@ -5,12 +5,12 @@
 Homebrew is the preferred macOS install method:
 
 ```sh
-brew install --cask --no-quarantine fhsgoncalves/tap/sqlab
+brew install --cask fhsgoncalves/tap/sqlab
 ```
 
 This installs the `sqlab.app` bundle into `Applications`.
 
-sq/lab is ad-hoc signed but not Developer ID signed or notarized. If macOS reports that `sqlab` is damaged, remove the quarantine attribute:
+sq/lab is ad-hoc signed but not Developer ID signed or notarized. If macOS reports that `sqlab` is damaged after installation, remove the quarantine attribute:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/sqlab.app

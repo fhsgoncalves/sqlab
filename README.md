@@ -18,7 +18,7 @@ The long-term goal is to provide a fully open-source alternative to DBeaver and 
 - Install on macOS with Homebrew:
 
 ```bash
-brew install --cask --no-quarantine fhsgoncalves/tap/sqlab
+brew install --cask fhsgoncalves/tap/sqlab
 ```
 
 - Install prebuilt CLI binaries:
