@@ -2065,7 +2065,9 @@ impl ConnectionConfigForm {
         set_input_value(&self.host, parsed.host, window, cx);
         set_input_value(&self.port, parsed.port.to_string(), window, cx);
         set_input_value(&self.user, parsed.user, window, cx);
-        set_input_value(&self.password, parsed.password, window, cx);
+        if parsed.password_present {
+            set_input_value(&self.password, parsed.password, window, cx);
+        }
         set_input_value(&self.database, parsed.database, window, cx);
         set_input_value(&self.schema, parsed.schema, window, cx);
         set_input_value(&self.query_string, parsed.query_string, window, cx);
@@ -2191,6 +2193,7 @@ struct ParsedConnectionUrl {
     port: u16,
     user: String,
     password: String,
+    password_present: bool,
     database: String,
     schema: String,
     query_string: String,
@@ -2270,6 +2273,7 @@ fn parse_connection_url(value: &str) -> Option<ParsedConnectionUrl> {
             port: db_type.default_port(),
             user: String::new(),
             password: String::new(),
+            password_present: false,
             database: percent_decode(path),
             schema,
             query_string,
@@ -2282,11 +2286,11 @@ fn parse_connection_url(value: &str) -> Option<ParsedConnectionUrl> {
         .rsplit_once('@')
         .map(|(auth, host_port)| (Some(auth), host_port))
         .unwrap_or((None, authority));
-    let (user, password) = auth
+    let (user, password, password_present) = auth
         .map(|auth| {
             auth.split_once(':')
-                .map(|(user, password)| (percent_decode(user), percent_decode(password)))
-                .unwrap_or_else(|| (percent_decode(auth), String::new()))
+                .map(|(user, password)| (percent_decode(user), percent_decode(password), true))
+                .unwrap_or_else(|| (percent_decode(auth), String::new(), false))
         })
         .unwrap_or_default();
     let (host, port) = parse_host_port(host_port, db_type.default_port());
@@ -2298,6 +2302,7 @@ fn parse_connection_url(value: &str) -> Option<ParsedConnectionUrl> {
         port,
         user,
         password,
+        password_present,
         database: percent_decode(path),
         schema,
         query_string,
@@ -2443,6 +2448,7 @@ mod tests {
         assert_eq!(parsed.db_type, Database::Postgres);
         assert_eq!(parsed.user, "app user");
         assert_eq!(parsed.password, "");
+        assert!(!parsed.password_present);
         assert_eq!(parsed.schema, "analytics");
         assert_eq!(parsed.query_string, "sslmode=require connect_timeout=5");
     }
@@ -2455,6 +2461,7 @@ mod tests {
         assert_eq!(parsed.db_type, Database::Postgres);
         assert_eq!(parsed.user, "myuser");
         assert_eq!(parsed.password, "secret123");
+        assert!(parsed.password_present);
         assert_eq!(parsed.host, "db.example.com");
         assert_eq!(parsed.port, 5432);
         assert_eq!(parsed.database, "mydb");
@@ -2478,6 +2485,16 @@ mod tests {
             sanitized_url,
             "postgresql://myuser@db.example.com:5432/mydb?schema=public"
         );
+    }
+
+    #[test]
+    fn parses_explicit_empty_password_from_connection_url() {
+        let parsed = parse_connection_url("postgresql://myuser:@db.example.com:5432/mydb").unwrap();
+
+        assert_eq!(parsed.user, "myuser");
+        assert_eq!(parsed.password, "");
+        assert!(parsed.password_present);
+        assert_eq!(parsed.host, "db.example.com");
     }
 
     #[test]

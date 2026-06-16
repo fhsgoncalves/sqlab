@@ -773,6 +773,7 @@ fn is_numeric_type(data_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mysql_async::Opts;
 
     #[test]
     fn adds_limit_to_select() {
@@ -788,6 +789,30 @@ mod tests {
             apply_limit_if_missing("SELECT * FROM users;", 1000),
             "SELECT * FROM users LIMIT 1000;"
         );
+    }
+
+    #[test]
+    fn builds_opts_for_email_user_without_password() {
+        let source = MySqlDataSource::new(DataSourceConfig {
+            name: "local".into(),
+            db_type: Database::MySql,
+            host: "localhost".into(),
+            port: 3307,
+            user: "fernando.goncalves@email.com".into(),
+            password: String::new(),
+            database: "db".into(),
+            schema: String::new(),
+            query_string: String::new(),
+        })
+        .unwrap();
+
+        let opts = Opts::from(source.opts());
+
+        assert_eq!(opts.user(), Some("fernando.goncalves@email.com"));
+        assert_eq!(opts.pass(), None);
+        assert_eq!(opts.ip_or_hostname(), "localhost");
+        assert_eq!(opts.tcp_port(), 3307);
+        assert_eq!(opts.db_name(), Some("db"));
     }
 
     #[test]

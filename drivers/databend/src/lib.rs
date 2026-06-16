@@ -666,6 +666,26 @@ mod tests {
     }
 
     #[test]
+    fn builds_databend_dsn_for_email_user_with_empty_password() {
+        let source = DatabendDataSource::new(DataSourceConfig {
+            db_type: Database::Databend,
+            host: "localhost".into(),
+            port: 8000,
+            user: "fernando.goncalves@email.com".into(),
+            password: String::new(),
+            database: "default".into(),
+            query_string: String::new(),
+            ..DataSourceConfig::default()
+        })
+        .unwrap();
+
+        assert_eq!(
+            source.dsn(),
+            "databend://fernando.goncalves%40email.com:@localhost:8000/default?sslmode=disable"
+        );
+    }
+
+    #[test]
     fn adds_limit_to_select() {
         assert_eq!(
             apply_limit_if_missing("SELECT * FROM users", 1000),

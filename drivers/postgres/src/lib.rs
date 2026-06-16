@@ -21,7 +21,7 @@ use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 use tokio::runtime::Runtime;
 use tokio_postgres::types::{FromSql, Kind, Type};
-use tokio_postgres::{Client, Row};
+use tokio_postgres::{Client, Config, Row};
 
 const DEFAULT_ROW_LIMIT: usize = 1000;
 const AWS_RDS_GLOBAL_BUNDLE_PEM: &str = include_str!("aws_rds_global_bundle.pem");
@@ -43,25 +43,33 @@ impl PostgresDataSource {
         })
     }
 
-    fn connection_string(&self) -> Result<(String, Option<String>), DataSourceError> {
-        let base = format!(
-            "host={} port={} user={} password={} dbname={}",
-            self.config.host,
-            self.config.port,
-            self.config.user,
-            self.config.password,
-            self.config.database
-        );
+    fn connection_config(&self) -> Result<(Config, Option<String>), DataSourceError> {
+        let mut config = Config::new();
+        if !self.config.host.trim().is_empty() {
+            config.host(&self.config.host);
+        }
+        config.port(self.config.port);
+        if !self.config.user.is_empty() {
+            config.user(&self.config.user);
+        }
+        if !self.config.password.is_empty() {
+            config.password(&self.config.password);
+        }
+        if !self.config.database.is_empty() {
+            config.dbname(&self.config.database);
+        }
+
         let (query_string, ssl_root_cert) = postgres_driver_options(&self.config.query_string)?;
         if query_string.is_empty() {
-            Ok((base, ssl_root_cert))
+            Ok((config, ssl_root_cert))
         } else {
-            Ok((format!("{} {}", base, query_string), ssl_root_cert))
+            apply_postgres_config_options(&mut config, &query_string)?;
+            Ok((config, ssl_root_cert))
         }
     }
 
     pub fn connect_blocking(&mut self) -> Result<(), DataSourceError> {
-        let (connection_string, ssl_root_cert) = self.connection_string()?;
+        let (connection_config, ssl_root_cert) = self.connection_config()?;
         let tls =
             make_rustls_connector(ssl_root_cert.as_deref(), is_aws_rds_host(&self.config.host))?;
 
@@ -70,7 +78,7 @@ impl PostgresDataSource {
             .block_on(async {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    tokio_postgres::connect(&connection_string, tls),
+                    connection_config.connect(tls),
                 )
                 .await
             })
@@ -852,6 +860,43 @@ fn postgres_driver_options(
     }
 
     Ok((format_postgres_options(&sanitized), ssl_root_cert))
+}
+
+fn apply_postgres_config_options(
+    config: &mut Config,
+    query_string: &str,
+) -> Result<(), DataSourceError> {
+    let options_config = query_string
+        .parse::<Config>()
+        .map_err(|e| DataSourceError::ConnectionFailed(format_postgres_error(e)))?;
+
+    if let Some(options) = options_config.get_options() {
+        config.options(options);
+    }
+    if let Some(application_name) = options_config.get_application_name() {
+        config.application_name(application_name);
+    }
+    config.ssl_mode(options_config.get_ssl_mode());
+    config.ssl_negotiation(options_config.get_ssl_negotiation());
+    if let Some(connect_timeout) = options_config.get_connect_timeout() {
+        config.connect_timeout(*connect_timeout);
+    }
+    if let Some(tcp_user_timeout) = options_config.get_tcp_user_timeout() {
+        config.tcp_user_timeout(*tcp_user_timeout);
+    }
+    config.keepalives(options_config.get_keepalives());
+    config.keepalives_idle(options_config.get_keepalives_idle());
+    if let Some(keepalives_interval) = options_config.get_keepalives_interval() {
+        config.keepalives_interval(keepalives_interval);
+    }
+    if let Some(keepalives_retries) = options_config.get_keepalives_retries() {
+        config.keepalives_retries(keepalives_retries);
+    }
+    config.target_session_attrs(options_config.get_target_session_attrs());
+    config.channel_binding(options_config.get_channel_binding());
+    config.load_balance_hosts(options_config.get_load_balance_hosts());
+
+    Ok(())
 }
 
 fn parse_postgres_options(input: &str) -> Result<Vec<(String, String)>, DataSourceError> {
@@ -1684,6 +1729,7 @@ fn format_postgres_error(e: tokio_postgres::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_postgres::config::Host;
 
     #[test]
     fn adds_limit_to_simple_select() {
@@ -1774,6 +1820,62 @@ mod tests {
         let error = postgres_driver_options("sslrootcert").unwrap_err();
 
         assert!(error.to_string().contains("expected '='"));
+    }
+
+    #[test]
+    fn builds_connection_config_for_email_user_without_password() {
+        let source = PostgresDataSource::new(DataSourceConfig {
+            name: "local".into(),
+            db_type: Database::Postgres,
+            host: "localhost".into(),
+            port: 5433,
+            user: "fernando.goncalves@email.com".into(),
+            password: String::new(),
+            database: "db".into(),
+            schema: String::new(),
+            query_string: String::new(),
+        })
+        .unwrap();
+
+        let (config, ssl_root_cert) = source.connection_config().unwrap();
+
+        assert_eq!(ssl_root_cert, None);
+        assert_eq!(config.get_user(), Some("fernando.goncalves@email.com"));
+        assert_eq!(config.get_password(), None);
+        assert_eq!(config.get_hosts(), &[Host::Tcp("localhost".into())]);
+        assert_eq!(config.get_ports(), &[5433]);
+        assert_eq!(config.get_dbname(), Some("db"));
+    }
+
+    #[test]
+    fn applies_postgres_query_options_to_connection_config() {
+        let source = PostgresDataSource::new(DataSourceConfig {
+            name: "local".into(),
+            db_type: Database::Postgres,
+            host: "localhost".into(),
+            port: 5432,
+            user: "app".into(),
+            password: String::new(),
+            database: "db".into(),
+            schema: String::new(),
+            query_string: "sslmode=verify-full connect_timeout=5 application_name='sq lab'".into(),
+        })
+        .unwrap();
+
+        let (config, ssl_root_cert) = source.connection_config().unwrap();
+
+        assert_eq!(ssl_root_cert, None);
+        assert_eq!(
+            config.get_ssl_mode(),
+            tokio_postgres::config::SslMode::Require
+        );
+        assert_eq!(
+            config
+                .get_connect_timeout()
+                .map(|timeout| timeout.as_secs()),
+            Some(5)
+        );
+        assert_eq!(config.get_application_name(), Some("sq lab"));
     }
 
     #[test]
