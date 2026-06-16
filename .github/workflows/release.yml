@@ -338,13 +338,13 @@ jobs:
 
           git -C "${TAP_DIR}" config user.name "github-actions[bot]"
           git -C "${TAP_DIR}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "${TAP_DIR}" add Casks/sqlab.rb
 
-          if git -C "${TAP_DIR}" diff --quiet -- Casks/sqlab.rb; then
+          if git -C "${TAP_DIR}" diff --cached --quiet -- Casks/sqlab.rb; then
             echo "Homebrew cask is already up to date"
             exit 0
           fi
 
-          git -C "${TAP_DIR}" add Casks/sqlab.rb
           git -C "${TAP_DIR}" commit -m "Update sqlab to ${{ needs.plan.outputs.tag }}"
           git -C "${TAP_DIR}" push
 
