@@ -137,8 +137,8 @@ A: Yes. The built-in terminal supports running Claude Code, Cursor, Aider, or an
 
 **Q: How do I install sq/lab on macOS?**
 A: Homebrew is preferred:
-`brew install --cask fhsgoncalves/tap/sqlab`
-You can also download the `.dmg` from the releases page. sq/lab is not currently signed or notarized, so macOS may require approving the first launch in System Settings > Privacy & Security.
+`brew install --cask --no-quarantine fhsgoncalves/tap/sqlab`
+You can also download the `.dmg` from the releases page. sq/lab is ad-hoc signed but not Developer ID signed or notarized, so macOS may require removing quarantine with `xattr -dr com.apple.quarantine /Applications/sqlab.app`.
 
 **Q: How do I install sq/lab on Linux?**
 A: Download the `.flatpak` bundle from the releases page, then run:

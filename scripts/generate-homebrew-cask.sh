@@ -36,8 +36,13 @@ cask "sqlab" do
 
   caveats <<~EOS
     sq/lab is not currently signed or notarized.
-    If macOS blocks the first launch, open System Settings > Privacy & Security
-    and click Open Anyway for sqlab.
+    If macOS reports that sqlab is damaged, reinstall without quarantine:
+
+      brew reinstall --cask --no-quarantine fhsgoncalves/tap/sqlab
+
+    Or remove the quarantine attribute after installation:
+
+      xattr -dr com.apple.quarantine /Applications/sqlab.app
   EOS
 
   zap trash: [
