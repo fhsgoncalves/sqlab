@@ -300,10 +300,15 @@ impl PostgresDataSource {
                         from pg_catalog.pg_proc p
                         join pg_catalog.pg_namespace n on n.oid = p.pronamespace
                         join pg_catalog.pg_language l on l.oid = p.prolang
-                        where n.nspname !~ '^pg_'
-                          and n.nspname <> 'information_schema'
-                          and p.prokind = 'f'
-                          and ($1 = '' or n.nspname = $1)
+                        where p.prokind = 'f'
+                          and (
+                            (
+                              n.nspname !~ '^pg_'
+                              and n.nspname <> 'information_schema'
+                              and ($1 = '' or n.nspname = $1)
+                            )
+                            or pg_catalog.pg_function_is_visible(p.oid)
+                          )
                         order by n.nspname, p.proname
                         ",
                         &[&configured_schema],

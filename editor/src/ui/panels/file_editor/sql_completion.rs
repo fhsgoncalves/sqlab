@@ -13,7 +13,9 @@ use serde_json::json;
 
 use crate::schema_cache;
 use sqlab_drivers_core::manager::DataSourceManager;
-use sqlab_drivers_core::{DataSourceConfig, Database, DatabaseSchema, TableInfo, TableKind};
+use sqlab_drivers_core::{
+    DataSourceConfig, Database, DatabaseSchema, FunctionInfo, TableInfo, TableKind,
+};
 
 const SQL_KEYWORDS: &[&str] = &[
     "select",
@@ -239,49 +241,80 @@ pub struct SqlDiagnostic {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TableDefinitionTarget {
+pub enum DefinitionTargetKind {
+    Table,
+    Function,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefinitionTarget {
+    pub kind: DefinitionTargetKind,
     pub schema_name: String,
-    pub table_name: String,
+    pub object_name: String,
     pub token_range: std::ops::Range<usize>,
 }
 
-pub fn table_definition_target_at(
+pub fn definition_target_at(
     text: &str,
     offset: usize,
     schema: &DatabaseSchema,
     selected_search_path: Option<&str>,
     config_schema: Option<&str>,
-) -> Option<TableDefinitionTarget> {
+) -> Option<DefinitionTarget> {
     let tokens = positioned_sql_tokens(text);
     let token_ix = tokens
         .iter()
         .position(|token| token.start <= offset && offset <= token.end)?;
     let token = tokens.get(token_ix)?;
 
-    if is_reserved_token(&token.text, schema) || is_operator_token(&token.text) {
+    if is_operator_token(&token.text) {
         return None;
     }
 
+    let is_function_call = is_function_definition_reference(&tokens, token_ix);
     let is_contextual_table_ref = is_table_definition_reference(&tokens, token_ix);
     let is_schema_qualified = token.text.contains('.');
-    if !is_contextual_table_ref && !is_schema_qualified {
+    if is_reserved_token(&token.text, schema) && !is_function_call && !is_schema_qualified {
         return None;
     }
 
-    let (schema_hint, table_name) = split_table_name(&token.text);
-    let table = resolve_table_definition_table(
-        schema,
-        schema_hint.as_deref(),
-        &table_name,
-        selected_search_path,
-        config_schema,
-    )?;
+    let (schema_hint, object_name) = split_table_name(&token.text);
 
-    Some(TableDefinitionTarget {
-        schema_name: table.schema.clone(),
-        table_name: table.name.clone(),
-        token_range: token.start..token.end,
-    })
+    if is_contextual_table_ref || is_schema_qualified {
+        if let Some(table) = resolve_table_definition_table(
+            schema,
+            schema_hint.as_deref(),
+            &object_name,
+            selected_search_path,
+            config_schema,
+        ) {
+            return Some(DefinitionTarget {
+                kind: DefinitionTargetKind::Table,
+                schema_name: table.schema.clone(),
+                object_name: table.name.clone(),
+                token_range: token.start..token.end,
+            });
+        }
+    }
+
+    if is_function_call || is_schema_qualified {
+        let function = resolve_function_definition(
+            schema,
+            schema_hint.as_deref(),
+            &object_name,
+            selected_search_path,
+            config_schema,
+        )?;
+
+        return Some(DefinitionTarget {
+            kind: DefinitionTargetKind::Function,
+            schema_name: function.schema.clone(),
+            object_name: function.name.clone(),
+            token_range: token.start..token.end,
+        });
+    }
+
+    None
 }
 
 pub fn sql_diagnostics_at(
@@ -1128,6 +1161,10 @@ fn is_table_definition_reference(tokens: &[PositionedToken], ix: usize) -> bool 
     }
 }
 
+fn is_function_definition_reference(tokens: &[PositionedToken], ix: usize) -> bool {
+    tokens.get(ix + 1).is_some_and(|token| token.text == "(")
+}
+
 fn resolve_table_definition_table<'a>(
     schema: &'a DatabaseSchema,
     schema_hint: Option<&str>,
@@ -1163,6 +1200,44 @@ fn resolve_table_definition_table<'a>(
     });
     let table = matches.next()?;
     matches.next().is_none().then_some(table)
+}
+
+fn resolve_function_definition<'a>(
+    schema: &'a DatabaseSchema,
+    schema_hint: Option<&str>,
+    function_name: &str,
+    selected_search_path: Option<&str>,
+    config_schema: Option<&str>,
+) -> Option<&'a FunctionInfo> {
+    if let Some(schema_hint) = schema_hint {
+        return unique_function_match(schema, Some(schema_hint), function_name);
+    }
+
+    for schema_name in [selected_search_path, config_schema, Some("public")]
+        .into_iter()
+        .flatten()
+        .filter(|schema_name| !schema_name.trim().is_empty())
+    {
+        if let Some(function) = unique_function_match(schema, Some(schema_name), function_name) {
+            return Some(function);
+        }
+    }
+
+    unique_function_match(schema, None, function_name)
+}
+
+fn unique_function_match<'a>(
+    schema: &'a DatabaseSchema,
+    schema_name: Option<&str>,
+    function_name: &str,
+) -> Option<&'a FunctionInfo> {
+    let mut matches = schema.functions.iter().filter(|function| {
+        function.name.eq_ignore_ascii_case(function_name)
+            && schema_name
+                .is_none_or(|schema_name| function.schema.eq_ignore_ascii_case(schema_name))
+    });
+    let function = matches.next()?;
+    matches.next().is_none().then_some(function)
 }
 
 fn alias_token(token: Option<&String>, schema: &DatabaseSchema) -> Option<String> {
@@ -1353,7 +1428,7 @@ fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
                     end: ix,
                 });
             }
-            if matches!(ch, ',' | '=' | '<' | '>' | '!') {
+            if matches!(ch, ',' | '=' | '<' | '>' | '!' | '(' | ')') {
                 let mut text = ch.to_string();
                 let mut end = ix + ch.len_utf8();
                 if matches!(ch, '<' | '>' | '!')
@@ -1634,7 +1709,7 @@ fn limit_items(mut items: Vec<ScoredCompletion>) -> Vec<CompletionItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlab_drivers_core::{ColumnInfo, TableKind};
+    use sqlab_drivers_core::{ColumnInfo, FunctionInfo, TableKind};
 
     #[test]
     fn detects_table_reference_scope_with_partial_prefix() {
@@ -1919,16 +1994,17 @@ mod tests {
         let text = "select * from customers c join orders o on o.customer_id = c.id";
 
         let customers =
-            table_definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
+            definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
                 .unwrap();
         let orders =
-            table_definition_target_at(text, text.find("orders").unwrap(), &schema, None, None)
-                .unwrap();
+            definition_target_at(text, text.find("orders").unwrap(), &schema, None, None).unwrap();
 
+        assert_eq!(customers.kind, DefinitionTargetKind::Table);
         assert_eq!(customers.schema_name, "public");
-        assert_eq!(customers.table_name, "customers");
+        assert_eq!(customers.object_name, "customers");
+        assert_eq!(orders.kind, DefinitionTargetKind::Table);
         assert_eq!(orders.schema_name, "public");
-        assert_eq!(orders.table_name, "orders");
+        assert_eq!(orders.object_name, "orders");
     }
 
     #[test]
@@ -1940,16 +2016,12 @@ mod tests {
             "insert into customers (name) values ('A')",
             "delete from customers where id = 1",
         ] {
-            let target = table_definition_target_at(
-                text,
-                text.find("customers").unwrap(),
-                &schema,
-                None,
-                None,
-            )
-            .unwrap();
+            let target =
+                definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
+                    .unwrap();
 
-            assert_eq!(target.table_name, "customers");
+            assert_eq!(target.kind, DefinitionTargetKind::Table);
+            assert_eq!(target.object_name, "customers");
         }
     }
 
@@ -1958,7 +2030,7 @@ mod tests {
         let schema = test_schema();
         let text = "select public.customers.id from public.customers";
 
-        let target = table_definition_target_at(
+        let target = definition_target_at(
             text,
             text.rfind("public.customers").unwrap(),
             &schema,
@@ -1967,8 +2039,9 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(target.kind, DefinitionTargetKind::Table);
         assert_eq!(target.schema_name, "public");
-        assert_eq!(target.table_name, "customers");
+        assert_eq!(target.object_name, "customers");
     }
 
     #[test]
@@ -1980,11 +2053,12 @@ mod tests {
 );"#;
 
         let target =
-            table_definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
+            definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
                 .unwrap();
 
+        assert_eq!(target.kind, DefinitionTargetKind::Table);
         assert_eq!(target.schema_name, "public");
-        assert_eq!(target.table_name, "customers");
+        assert_eq!(target.object_name, "customers");
     }
 
     #[test]
@@ -2005,7 +2079,7 @@ mod tests {
         let text = "select * from customers";
 
         assert!(
-            table_definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
+            definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
                 .is_none()
         );
     }
@@ -2022,7 +2096,7 @@ mod tests {
         });
         let text = "select * from customers";
 
-        let target = table_definition_target_at(
+        let target = definition_target_at(
             text,
             text.find("customers").unwrap(),
             &schema,
@@ -2031,8 +2105,134 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(target.kind, DefinitionTargetKind::Table);
         assert_eq!(target.schema_name, "archive");
-        assert_eq!(target.table_name, "customers");
+        assert_eq!(target.object_name, "customers");
+    }
+
+    #[test]
+    fn resolves_function_definition_for_function_call() {
+        let schema = test_schema();
+        let text = "select customer_label(name) from customers";
+
+        let target = definition_target_at(
+            text,
+            text.find("customer_label").unwrap(),
+            &schema,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(target.kind, DefinitionTargetKind::Function);
+        assert_eq!(target.schema_name, "public");
+        assert_eq!(target.object_name, "customer_label");
+    }
+
+    #[test]
+    fn resolves_schema_qualified_function_definition() {
+        let schema = test_schema();
+        let text = "select app.customer_label(name) from customers";
+
+        let target = definition_target_at(
+            text,
+            text.find("app.customer_label").unwrap(),
+            &schema,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(target.kind, DefinitionTargetKind::Function);
+        assert_eq!(target.schema_name, "app");
+        assert_eq!(target.object_name, "customer_label");
+    }
+
+    #[test]
+    fn resolves_reserved_postgres_builtin_function_definition() {
+        let mut schema = test_schema();
+        schema.db_type = Database::Postgres;
+        schema.functions.push(FunctionInfo {
+            schema: "pg_catalog".to_string(),
+            name: "now".to_string(),
+            arguments: String::new(),
+            return_type: "timestamp with time zone".to_string(),
+            definition: None,
+            language: "internal".to_string(),
+            body: Some("now".to_string()),
+            library: None,
+            owner: String::new(),
+        });
+        let text = "select now() from customers";
+
+        let target =
+            definition_target_at(text, text.find("now").unwrap(), &schema, None, None).unwrap();
+
+        assert_eq!(target.kind, DefinitionTargetKind::Function);
+        assert_eq!(target.schema_name, "pg_catalog");
+        assert_eq!(target.object_name, "now");
+    }
+
+    #[test]
+    fn resolves_reserved_postgres_extension_function_definition() {
+        let mut schema = test_schema();
+        schema.db_type = Database::Postgres;
+        schema.functions.push(FunctionInfo {
+            schema: "public".to_string(),
+            name: "gen_random_uuid".to_string(),
+            arguments: String::new(),
+            return_type: "uuid".to_string(),
+            definition: Some(
+                "CREATE FUNCTION public.gen_random_uuid() RETURNS uuid LANGUAGE c AS 'pgcrypto'"
+                    .to_string(),
+            ),
+            language: "c".to_string(),
+            body: Some("gen_random_uuid".to_string()),
+            library: Some("pgcrypto".to_string()),
+            owner: String::new(),
+        });
+        let text = "select gen_random_uuid() from customers";
+
+        let target = definition_target_at(
+            text,
+            text.find("gen_random_uuid").unwrap(),
+            &schema,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(target.kind, DefinitionTargetKind::Function);
+        assert_eq!(target.schema_name, "public");
+        assert_eq!(target.object_name, "gen_random_uuid");
+    }
+
+    #[test]
+    fn does_not_resolve_overloaded_function_definition() {
+        let mut schema = test_schema();
+        schema.functions.push(FunctionInfo {
+            schema: "public".to_string(),
+            name: "customer_label".to_string(),
+            arguments: "value bigint".to_string(),
+            return_type: "text".to_string(),
+            definition: None,
+            language: "sql".to_string(),
+            body: None,
+            library: None,
+            owner: String::new(),
+        });
+        let text = "select customer_label(name) from customers";
+
+        assert!(
+            definition_target_at(
+                text,
+                text.find("customer_label").unwrap(),
+                &schema,
+                None,
+                None
+            )
+            .is_none()
+        );
     }
 
     fn test_schema() -> DatabaseSchema {
@@ -2144,6 +2344,36 @@ mod tests {
                             comment: None,
                         },
                     ],
+                },
+            ],
+            functions: vec![
+                FunctionInfo {
+                    schema: "public".to_string(),
+                    name: "customer_label".to_string(),
+                    arguments: "value text".to_string(),
+                    return_type: "text".to_string(),
+                    definition: Some(
+                        "CREATE FUNCTION public.customer_label(value text) RETURNS text LANGUAGE sql AS $$ SELECT value $$"
+                            .to_string(),
+                    ),
+                    language: "sql".to_string(),
+                    body: None,
+                    library: None,
+                    owner: String::new(),
+                },
+                FunctionInfo {
+                    schema: "app".to_string(),
+                    name: "customer_label".to_string(),
+                    arguments: "value text".to_string(),
+                    return_type: "text".to_string(),
+                    definition: Some(
+                        "CREATE FUNCTION app.customer_label(value text) RETURNS text LANGUAGE sql AS $$ SELECT value $$"
+                            .to_string(),
+                    ),
+                    language: "sql".to_string(),
+                    body: None,
+                    library: None,
+                    owner: String::new(),
                 },
             ],
             ..Default::default()

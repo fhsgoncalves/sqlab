@@ -74,7 +74,7 @@ sq/lab is a desktop SQL editor with a focus on performance and simplicity. It is
 | Clickhouse driver | ⏳ |
 | Athena driver | ⏳ |
 | Custom keymap | ✅ |
-| Go to definition (table, related table / FK) | ✅ |
+| Go to definition (table, related table / FK, functions) | ✅ |
 
 ## Supported Databases
 

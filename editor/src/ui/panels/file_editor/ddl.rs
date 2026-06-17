@@ -12,17 +12,17 @@ use gpui_component::{
     input::{Input, InputState},
     v_flex,
 };
-use sqlab_drivers_core::{DatabaseSchema, ddl::create_ddl_generator};
+use sqlab_drivers_core::{DatabaseSchema, FunctionInfo, TableInfo, ddl::create_ddl_generator};
 
 use super::editor::GoToDefinition;
-use super::sql_completion::{TableDefinitionTarget, table_definition_target_at};
+use super::sql_completion::{DefinitionTarget, DefinitionTargetKind, definition_target_at};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DdlPanelEvent {
     OpenTableDefinition {
         connection_name: String,
         schema_name: String,
-        table_name: String,
+        object_name: String,
         ddl: String,
     },
 }
@@ -30,7 +30,7 @@ pub enum DdlPanelEvent {
 pub struct DdlPanel {
     connection_name: String,
     schema_name: String,
-    table_name: String,
+    object_name: String,
     title: String,
     schema: Arc<DatabaseSchema>,
     editor: Entity<InputState>,
@@ -42,7 +42,7 @@ impl DdlPanel {
     pub fn new(
         connection_name: String,
         schema_name: String,
-        table_name: String,
+        object_name: String,
         ddl: String,
         schema: Arc<DatabaseSchema>,
         window: &mut Window,
@@ -57,11 +57,11 @@ impl DdlPanel {
                 .default_value(ddl_text)
                 .placeholder("")
         });
-        let title = format!("{}.{} DDL", schema_name, table_name);
+        let title = format!("{}.{} DDL", schema_name, object_name);
         Self {
             connection_name,
             schema_name,
-            table_name,
+            object_name,
             title,
             schema,
             editor,
@@ -82,58 +82,66 @@ impl DdlPanel {
         &self.schema_name
     }
 
-    pub fn table_name(&self) -> &str {
-        &self.table_name
+    pub fn object_name(&self) -> &str {
+        &self.object_name
     }
 
     pub fn schema(&self) -> &Arc<DatabaseSchema> {
         &self.schema
     }
 
-    pub fn matches_table(
+    pub fn matches_object(
         &self,
         connection_name: &str,
         schema_name: &str,
-        table_name: &str,
+        object_name: &str,
     ) -> bool {
         self.connection_name == connection_name
             && self.schema_name.eq_ignore_ascii_case(schema_name)
-            && self.table_name.eq_ignore_ascii_case(table_name)
+            && self.object_name.eq_ignore_ascii_case(object_name)
     }
 
-    fn table_definition_target_at_offset(
-        &self,
-        offset: usize,
-        cx: &App,
-    ) -> Option<TableDefinitionTarget> {
+    fn definition_target_at_offset(&self, offset: usize, cx: &App) -> Option<DefinitionTarget> {
         let text = self.editor.read(cx).value().to_string();
-        table_definition_target_at(&text, offset, &self.schema, None, None)
+        definition_target_at(&text, offset, &self.schema, None, None)
     }
 
-    fn open_table_definition_at_cursor(&mut self, cx: &mut Context<Self>) {
+    fn open_definition_at_cursor(&mut self, cx: &mut Context<Self>) {
         let offset = self.editor.read(cx).cursor();
-        let target = match self.table_definition_target_at_offset(offset, cx) {
+        let target = match self.definition_target_at_offset(offset, cx) {
             Some(t) => t,
             None => return,
         };
-        let table = self.schema.tables.iter().find(|t| {
-            t.schema.eq_ignore_ascii_case(&target.schema_name)
-                && t.name.eq_ignore_ascii_case(&target.table_name)
-        });
-        let Some(table) = table else {
+        let Some(ddl) = self.ddl_for_target(&target) else {
             return;
         };
+        self.emit_definition(target, ddl, cx);
+    }
+
+    fn ddl_for_target(&self, target: &DefinitionTarget) -> Option<String> {
         let generator = create_ddl_generator(self.schema.db_type);
-        let ddl = generator.generate_table_ddl(&self.schema, table);
+        match target.kind {
+            DefinitionTargetKind::Table => {
+                let table = table_for_definition_target(&self.schema, target)?;
+                Some(generator.generate_table_ddl(&self.schema, table))
+            }
+            DefinitionTargetKind::Function => {
+                let function = function_for_definition_target(&self.schema, target)?;
+                Some(generator.generate_function_ddl(function))
+            }
+        }
+    }
+
+    fn emit_definition(&mut self, target: DefinitionTarget, ddl: String, cx: &mut Context<Self>) {
         cx.emit(DdlPanelEvent::OpenTableDefinition {
             connection_name: self.connection_name.clone(),
             schema_name: target.schema_name.clone(),
-            table_name: target.table_name.clone(),
+            object_name: target.object_name.clone(),
             ddl,
         });
     }
 
-    fn open_table_definition_at_mouse_position(
+    fn open_definition_at_mouse_position(
         &mut self,
         event: &MouseDownEvent,
         cx: &mut Context<Self>,
@@ -142,25 +150,14 @@ impl DdlPanel {
             .editor
             .read(cx)
             .offset_for_mouse_position(event.position);
-        let target = match self.table_definition_target_at_offset(offset, cx) {
+        let target = match self.definition_target_at_offset(offset, cx) {
             Some(t) => t,
             None => return,
         };
-        let table = self.schema.tables.iter().find(|t| {
-            t.schema.eq_ignore_ascii_case(&target.schema_name)
-                && t.name.eq_ignore_ascii_case(&target.table_name)
-        });
-        let Some(table) = table else {
+        let Some(ddl) = self.ddl_for_target(&target) else {
             return;
         };
-        let generator = create_ddl_generator(self.schema.db_type);
-        let ddl = generator.generate_table_ddl(&self.schema, table);
-        cx.emit(DdlPanelEvent::OpenTableDefinition {
-            connection_name: self.connection_name.clone(),
-            schema_name: target.schema_name.clone(),
-            table_name: target.table_name.clone(),
-            ddl,
-        });
+        self.emit_definition(target, ddl, cx);
     }
 
     fn on_go_to_definition(
@@ -169,7 +166,7 @@ impl DdlPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_table_definition_at_cursor(cx);
+        self.open_definition_at_cursor(cx);
     }
 
     fn update_hover_table_definition(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
@@ -179,7 +176,7 @@ impl DdlPanel {
                     .editor
                     .read(cx)
                     .offset_for_mouse_position(event.position);
-                self.table_definition_target_at_offset(offset, cx)
+                self.definition_target_at_offset(offset, cx)
                     .map(|target| target.token_range)
             } else {
                 None
@@ -192,6 +189,26 @@ impl DdlPanel {
         self.hover_table_definition_range = next_range;
         cx.notify();
     }
+}
+
+fn table_for_definition_target<'a>(
+    schema: &'a DatabaseSchema,
+    target: &DefinitionTarget,
+) -> Option<&'a TableInfo> {
+    schema.tables.iter().find(|table| {
+        table.schema.eq_ignore_ascii_case(&target.schema_name)
+            && table.name.eq_ignore_ascii_case(&target.object_name)
+    })
+}
+
+fn function_for_definition_target<'a>(
+    schema: &'a DatabaseSchema,
+    target: &DefinitionTarget,
+) -> Option<&'a FunctionInfo> {
+    schema.functions.iter().find(|function| {
+        function.schema.eq_ignore_ascii_case(&target.schema_name)
+            && function.name.eq_ignore_ascii_case(&target.object_name)
+    })
 }
 
 impl EventEmitter<DdlPanelEvent> for DdlPanel {}
@@ -230,7 +247,7 @@ impl Render for DdlPanel {
                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {
                     if event.modifiers.secondary() && !event.modifiers.shift && !event.modifiers.alt
                     {
-                        this.open_table_definition_at_mouse_position(event, cx);
+                        this.open_definition_at_mouse_position(event, cx);
                         cx.stop_propagation();
                     }
                 }),

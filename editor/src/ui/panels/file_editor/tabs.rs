@@ -131,7 +131,7 @@ enum NavigationTarget {
     Ddl {
         connection_name: String,
         schema_name: String,
-        table_name: String,
+        object_name: String,
     },
 }
 
@@ -388,7 +388,7 @@ impl EditorTabs {
         &mut self,
         connection_name: String,
         schema_name: String,
-        table_name: String,
+        object_name: String,
         ddl: String,
         schema: Arc<DatabaseSchema>,
         window: &mut Window,
@@ -399,7 +399,7 @@ impl EditorTabs {
         if let Some(ix) = self.tabs.iter().position(|tab| match tab {
             EditorTab::Ddl(ddl) => {
                 ddl.read(cx)
-                    .matches_table(&connection_name, &schema_name, &table_name)
+                    .matches_object(&connection_name, &schema_name, &object_name)
             }
             EditorTab::Sql(_) | EditorTab::Diagram(_) | EditorTab::Data(_) => false,
         }) {
@@ -417,7 +417,7 @@ impl EditorTabs {
             DdlPanel::new(
                 connection_name,
                 schema_name,
-                table_name,
+                object_name,
                 ddl,
                 schema,
                 window,
@@ -638,14 +638,14 @@ impl EditorTabs {
                 EditorPanelEvent::OpenTableDefinition {
                     connection_name,
                     schema_name,
-                    table_name,
+                    object_name,
                     ddl,
                 } => {
                     let schema = this.schema_for_ddl(&editor, cx);
                     this.open_table_definition(
                         connection_name.clone(),
                         schema_name.clone(),
-                        table_name.clone(),
+                        object_name.clone(),
                         ddl.clone(),
                         schema,
                         window,
@@ -670,14 +670,14 @@ impl EditorTabs {
                 DdlPanelEvent::OpenTableDefinition {
                     connection_name,
                     schema_name,
-                    table_name,
+                    object_name,
                     ddl,
                 } => {
                     let schema = ddl_entity.read(cx).schema().clone();
                     this.open_table_definition(
                         connection_name.clone(),
                         schema_name.clone(),
-                        table_name.clone(),
+                        object_name.clone(),
                         ddl.clone(),
                         schema,
                         window,
@@ -723,7 +723,7 @@ impl EditorTabs {
                 target: NavigationTarget::Ddl {
                     connection_name: ddl.read(cx).connection_name().to_string(),
                     schema_name: ddl.read(cx).schema_name().to_string(),
-                    table_name: ddl.read(cx).table_name().to_string(),
+                    object_name: ddl.read(cx).object_name().to_string(),
                 },
                 row: 0,
                 column: 0,
@@ -806,12 +806,12 @@ impl EditorTabs {
             NavigationTarget::Ddl {
                 connection_name,
                 schema_name,
-                table_name,
+                object_name,
             } => {
                 if let Some(ix) = self.tabs.iter().position(|tab| match tab {
                     EditorTab::Ddl(ddl) => {
                         ddl.read(cx)
-                            .matches_table(connection_name, schema_name, table_name)
+                            .matches_object(connection_name, schema_name, object_name)
                     }
                     EditorTab::Sql(_) | EditorTab::Diagram(_) | EditorTab::Data(_) => false,
                 }) {

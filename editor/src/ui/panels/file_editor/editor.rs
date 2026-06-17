@@ -27,14 +27,14 @@ use gpui_component::{
 
 use super::query_detector::{QueryRange, query_ranges_for_execution, query_ranges_in_text};
 use super::sql_completion::{
-    SqlCompletionProvider, SqlDiagnostic, TableDefinitionTarget, sql_diagnostics_at,
-    table_definition_target_at,
+    DefinitionTarget, DefinitionTargetKind, SqlCompletionProvider, SqlDiagnostic,
+    definition_target_at, sql_diagnostics_at,
 };
 use crate::schema_cache;
 use crate::ui::search::{SearchOptions, TextMatch, find_text_matches};
 use sqlab_drivers_core::ddl::create_ddl_generator;
 use sqlab_drivers_core::manager::DataSourceManager;
-use sqlab_drivers_core::{DatabaseSchema, TableInfo};
+use sqlab_drivers_core::{DatabaseSchema, FunctionInfo, TableInfo};
 
 actions!(
     editor,
@@ -68,7 +68,7 @@ pub enum EditorPanelEvent {
     OpenTableDefinition {
         connection_name: String,
         schema_name: String,
-        table_name: String,
+        object_name: String,
         ddl: String,
     },
 }
@@ -116,7 +116,7 @@ pub struct EditorPanel {
     last_observed_snapshot: Option<EditorSnapshot>,
     selected_search_path: Option<String>,
     selected_connection_name: Option<String>,
-    hover_table_definition_range: Option<Range<usize>>,
+    hover_definition_range: Option<Range<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -152,10 +152,10 @@ struct EditorSnapshot {
 }
 
 #[derive(Clone)]
-struct TableDefinitionOpen {
+struct DefinitionOpen {
     connection_name: String,
     schema_name: String,
-    table_name: String,
+    object_name: String,
     ddl: String,
 }
 
@@ -489,11 +489,21 @@ fn current_line_range_for_cut(text: &str, cursor: usize) -> Range<usize> {
 
 fn table_for_definition_target<'a>(
     schema: &'a DatabaseSchema,
-    target: &TableDefinitionTarget,
+    target: &DefinitionTarget,
 ) -> Option<&'a TableInfo> {
     schema.tables.iter().find(|table| {
         table.schema.eq_ignore_ascii_case(&target.schema_name)
-            && table.name.eq_ignore_ascii_case(&target.table_name)
+            && table.name.eq_ignore_ascii_case(&target.object_name)
+    })
+}
+
+fn function_for_definition_target<'a>(
+    schema: &'a DatabaseSchema,
+    target: &DefinitionTarget,
+) -> Option<&'a FunctionInfo> {
+    schema.functions.iter().find(|function| {
+        function.schema.eq_ignore_ascii_case(&target.schema_name)
+            && function.name.eq_ignore_ascii_case(&target.object_name)
     })
 }
 
@@ -674,7 +684,7 @@ impl EditorPanel {
             last_observed_snapshot: None,
             selected_search_path: None,
             selected_connection_name: None,
-            hover_table_definition_range: None,
+            hover_definition_range: None,
         };
         panel.refresh_active_query(cx);
         panel.refresh_schema_cache(cx);
@@ -787,47 +797,51 @@ impl EditorPanel {
         cx.notify();
     }
 
-    fn table_definition_at_cursor(&self, cx: &App) -> Option<TableDefinitionOpen> {
+    fn definition_at_cursor(&self, cx: &App) -> Option<DefinitionOpen> {
         let offset = self.editor.read(cx).cursor();
-        self.table_definition_at_offset(offset, cx)
+        self.definition_at_offset(offset, cx)
     }
 
-    fn table_definition_at_mouse_position(
+    fn definition_at_mouse_position(
         &self,
         event: &MouseDownEvent,
         cx: &App,
-    ) -> Option<TableDefinitionOpen> {
+    ) -> Option<DefinitionOpen> {
         let offset = self
             .editor
             .read(cx)
             .offset_for_mouse_position(event.position);
-        self.table_definition_at_offset(offset, cx)
+        self.definition_at_offset(offset, cx)
     }
 
-    fn table_definition_at_offset(&self, offset: usize, cx: &App) -> Option<TableDefinitionOpen> {
+    fn definition_at_offset(&self, offset: usize, cx: &App) -> Option<DefinitionOpen> {
         let connection_name = self.selected_connection_name()?.to_string();
         let (_, schema) = self.schema_cache.as_ref()?;
-        let target = self.table_definition_target_at_offset(offset, cx)?;
-        let table = table_for_definition_target(schema, &target)?;
+        let target = self.definition_target_at_offset(offset, cx)?;
         let generator = create_ddl_generator(schema.db_type);
-        let ddl = generator.generate_table_ddl(schema, table);
+        let ddl = match target.kind {
+            DefinitionTargetKind::Table => {
+                let table = table_for_definition_target(schema, &target)?;
+                generator.generate_table_ddl(schema, table)
+            }
+            DefinitionTargetKind::Function => {
+                let function = function_for_definition_target(schema, &target)?;
+                generator.generate_function_ddl(function)
+            }
+        };
 
-        Some(TableDefinitionOpen {
+        Some(DefinitionOpen {
             connection_name,
             schema_name: target.schema_name,
-            table_name: target.table_name,
+            object_name: target.object_name,
             ddl,
         })
     }
 
-    fn table_definition_target_at_offset(
-        &self,
-        offset: usize,
-        cx: &App,
-    ) -> Option<TableDefinitionTarget> {
+    fn definition_target_at_offset(&self, offset: usize, cx: &App) -> Option<DefinitionTarget> {
         let (_, schema) = self.schema_cache.as_ref()?;
         let text = self.editor.read(cx).value().to_string();
-        table_definition_target_at(
+        definition_target_at(
             &text,
             offset,
             schema,
@@ -836,52 +850,52 @@ impl EditorPanel {
         )
     }
 
-    fn open_table_definition_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let Some(definition) = self.table_definition_at_cursor(cx) else {
+    fn open_definition_at_cursor(&mut self, cx: &mut Context<Self>) {
+        let Some(definition) = self.definition_at_cursor(cx) else {
             return;
         };
-        self.emit_table_definition(definition, cx);
+        self.emit_definition(definition, cx);
     }
 
-    fn open_table_definition_at_mouse_position(
+    fn open_definition_at_mouse_position(
         &mut self,
         event: &MouseDownEvent,
         cx: &mut Context<Self>,
     ) {
-        let Some(definition) = self.table_definition_at_mouse_position(event, cx) else {
+        let Some(definition) = self.definition_at_mouse_position(event, cx) else {
             return;
         };
-        self.emit_table_definition(definition, cx);
+        self.emit_definition(definition, cx);
         cx.stop_propagation();
     }
 
-    fn emit_table_definition(&mut self, definition: TableDefinitionOpen, cx: &mut Context<Self>) {
+    fn emit_definition(&mut self, definition: DefinitionOpen, cx: &mut Context<Self>) {
         cx.emit(EditorPanelEvent::OpenTableDefinition {
             connection_name: definition.connection_name,
             schema_name: definition.schema_name,
-            table_name: definition.table_name,
+            object_name: definition.object_name,
             ddl: definition.ddl,
         });
     }
 
-    fn update_hover_table_definition(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+    fn update_hover_definition(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         let next_range =
             if event.modifiers.secondary() && !event.modifiers.shift && !event.modifiers.alt {
                 let offset = self
                     .editor
                     .read(cx)
                     .offset_for_mouse_position(event.position);
-                self.table_definition_target_at_offset(offset, cx)
+                self.definition_target_at_offset(offset, cx)
                     .map(|target| target.token_range)
             } else {
                 None
             };
 
-        if self.hover_table_definition_range == next_range {
+        if self.hover_definition_range == next_range {
             return;
         }
 
-        self.hover_table_definition_range = next_range;
+        self.hover_definition_range = next_range;
         self.apply_current_decorations(cx);
         cx.notify();
     }
@@ -1026,7 +1040,7 @@ impl EditorPanel {
                 }),
         );
 
-        if let Some(range) = &self.hover_table_definition_range {
+        if let Some(range) = &self.hover_definition_range {
             decorations.push(InputDecoration {
                 range: range.clone(),
                 fill: None,
@@ -1247,7 +1261,7 @@ impl EditorPanel {
                 }),
         );
 
-        if let Some(range) = &self.hover_table_definition_range {
+        if let Some(range) = &self.hover_definition_range {
             decorations.push(InputDecoration {
                 range: range.clone(),
                 fill: None,
@@ -1618,7 +1632,7 @@ impl EditorPanel {
             return;
         }
 
-        self.open_table_definition_at_cursor(cx);
+        self.open_definition_at_cursor(cx);
     }
 
     fn handle_key_down(
@@ -1654,8 +1668,8 @@ impl EditorPanel {
             return;
         }
 
-        if self.hover_table_definition_range.is_some() && !modifiers.platform {
-            self.hover_table_definition_range = None;
+        if self.hover_definition_range.is_some() && !modifiers.platform {
+            self.hover_definition_range = None;
             self.apply_current_decorations(cx);
             cx.notify();
         }
@@ -1719,14 +1733,14 @@ impl Render for EditorPanel {
                                 && !event.modifiers.shift
                                 && !event.modifiers.alt
                             {
-                                this.open_table_definition_at_mouse_position(event, cx);
+                                this.open_definition_at_mouse_position(event, cx);
                             }
                         }),
                     )
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                        this.update_hover_table_definition(event, cx);
+                        this.update_hover_definition(event, cx);
                     }))
-                    .when(self.hover_table_definition_range.is_some(), |this| {
+                    .when(self.hover_definition_range.is_some(), |this| {
                         this.cursor_pointer()
                     })
                     .child(
@@ -1762,7 +1776,7 @@ impl EditorPanel {
             PopupMenuItem::new("Go to definition").on_click(window.listener_for(
                 &editor,
                 |this, _, _window, cx| {
-                    this.open_table_definition_at_cursor(cx);
+                    this.open_definition_at_cursor(cx);
                 },
             )),
         )
