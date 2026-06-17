@@ -1,24 +1,28 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, rc::Rc};
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window, div, hsla, prelude::FluentBuilder, px, rgb,
+    IntoElement, ParentElement, Pixels, Render, ScrollStrategy, SharedString, Size,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, hsla, prelude::FluentBuilder,
+    px, rgb, size,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, WindowExt,
+    ActiveTheme, Icon, IconName, Sizable, VirtualListScrollHandle, WindowExt,
     button::{Button, ButtonVariants as _},
+    dialog::DialogFooter,
     dock::{Panel, PanelEvent, PanelState},
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem},
+    scroll::{ScrollableElement as _, ScrollbarAxis},
     text::TextView,
     tree::TreeItem,
-    v_flex,
+    v_flex, v_virtual_list,
 };
 
 use crate::credentials;
 use crate::drivers::create_configured_data_source;
+use crate::query_session::QuerySessionStore;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::diagram::{DiagramScope, ShowDiagramEvent};
@@ -32,11 +36,16 @@ use sqlab_drivers_core::{
 pub struct ConnectionPanel {
     manager: Entity<DataSourceManager>,
     activity_tracker: Entity<ActivityTracker>,
+    query_sessions: QuerySessionStore,
     focus_handle: FocusHandle,
     expanded_connections: HashSet<String>,
     expanded_nodes: HashSet<String>,
     selected_node: Option<String>,
     selected_connection: Option<String>,
+    visible_rows: Vec<ConnectionPanelRow>,
+    row_sizes: Rc<Vec<Size<Pixels>>>,
+    rows_dirty: bool,
+    scroll_handle: VirtualListScrollHandle,
     shown_errors: HashSet<String>,
     shown_credential_errors: HashSet<String>,
     shown_global_credential_error: bool,
@@ -54,14 +63,42 @@ const DATABASE_OPTIONS: [Database; 5] = [
     Database::Databend,
 ];
 
+const CONNECTION_ROW_HEIGHT: Pixels = px(26.);
+const MESSAGE_ROW_HEIGHT: Pixels = px(28.);
+const MIN_ROW_WIDTH: Pixels = px(240.);
+
+#[derive(Clone)]
+enum ConnectionPanelRow {
+    Empty,
+    Connection {
+        config: DataSourceConfig,
+        status: ConnectionStatus,
+        expanded: bool,
+    },
+    SchemaNode {
+        id: String,
+        label: String,
+        depth: usize,
+        config: DataSourceConfig,
+        schema: Rc<sqlab_drivers_core::DatabaseSchema>,
+        expanded: bool,
+        leaf: bool,
+    },
+    Message {
+        text: &'static str,
+    },
+}
+
 impl ConnectionPanel {
     pub fn new(
         manager: Entity<DataSourceManager>,
         activity_tracker: Entity<ActivityTracker>,
+        query_sessions: QuerySessionStore,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.observe(&manager, |_, _, cx| {
+        cx.observe(&manager, |this, _, cx| {
+            this.rows_dirty = true;
             cx.notify();
         })
         .detach();
@@ -69,11 +106,16 @@ impl ConnectionPanel {
         Self {
             manager,
             activity_tracker,
+            query_sessions,
             focus_handle: cx.focus_handle(),
             expanded_connections: HashSet::new(),
             expanded_nodes: HashSet::new(),
             selected_node: None,
             selected_connection: None,
+            visible_rows: Vec::new(),
+            row_sizes: Rc::new(Vec::new()),
+            rows_dirty: true,
+            scroll_handle: VirtualListScrollHandle::new(),
             shown_errors: HashSet::new(),
             shown_credential_errors: HashSet::new(),
             shown_global_credential_error: false,
@@ -140,83 +182,128 @@ impl ConnectionPanel {
         let view = cx.entity();
 
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let save_config = Rc::new({
+                let manager = manager.clone();
+                let old_name = old_name.clone();
+                let form = form.clone();
+                let view = view.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    Self::save_config_from_dialog(
+                        manager.clone(),
+                        old_name.clone(),
+                        form.clone(),
+                        view.clone(),
+                        window,
+                        cx,
+                    )
+                }
+            });
+            let save_config_for_ok = save_config.clone();
+            let save_config_for_footer = save_config.clone();
+            let form_for_test = form.clone();
+            let view_for_test = view.clone();
+
             alert
                 .title(title)
                 .width(px(624.))
                 .child(v_flex().gap_2().w_full().child(form.clone()))
-                .show_cancel(true)
-                .on_ok({
-                    let manager = manager.clone();
-                    let old_name = old_name.clone();
-                    let form_for_ok = form.clone();
-                    let view = view.clone();
-                    move |_, window: &mut Window, cx: &mut App| {
-                        let config = form_for_ok.read(cx).config(cx);
-                        let name = config.name.clone();
-                        let db_type = config.db_type;
-
-                        if name.is_empty() || config.database.is_empty() {
-                            return false;
-                        }
-                        if !matches!(db_type, Database::SQLite | Database::DuckDB)
-                            && (config.host.is_empty() || config.user.is_empty())
-                        {
-                            return false;
-                        }
-
-                        let duplicate = manager.read(cx).configs().iter().any(|config| {
-                            config.name == name && old_name.as_deref() != Some(config.name.as_str())
-                        });
-                        if duplicate {
-                            return false;
-                        }
-
-                        let is_new = old_name.is_none();
-                        let save_result = manager.update(cx, |manager, cx| {
-                            if let Some(old_name) = old_name.as_deref() {
-                                manager.update(old_name, config.clone());
-                            } else {
-                                manager.add(config.clone());
-                            }
-                            if let Err(e) =
-                                credentials::save_password(&config.name, &config.password)
-                            {
-                                manager.set_credential_error(
-                                    &config.name,
-                                    credentials::recovery_error_message(&e),
-                                );
-                            }
-                            let save_result = manager.save();
-                            match &save_result {
-                                Ok(()) => manager.clear_credential_error(&name),
-                                Err(error) => {
-                                    manager.set_credential_error(&name, error.to_string());
+                .footer(
+                    DialogFooter::new()
+                        .child(Button::new("cancel").label("Cancel").on_click(
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                            },
+                        ))
+                        .child(
+                            Button::new("test-connection")
+                                .label("Test Connection")
+                                .outline()
+                                .on_click(_window.listener_for(
+                                    &view_for_test,
+                                    move |this, _, _window, cx| {
+                                        let config = form_for_test.read(cx).config(cx);
+                                        this.test_unsaved_connection(
+                                            form_for_test.clone(),
+                                            config,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                        )
+                        .child(Button::new("ok").label("OK").primary().on_click(
+                            move |_, window, cx| {
+                                if save_config_for_footer(window, cx) {
+                                    window.close_dialog(cx);
                                 }
-                            }
-                            cx.notify();
-                            save_result.map_err(|error| error.to_string())
-                        });
-                        if let Err(error) = save_result {
-                            let title = format!("Keychain Access Error: {}", name);
-                            window.open_alert_dialog(cx, move |alert, _, _| {
-                                alert.title(title.clone()).description(error.clone())
-                            });
-                            return false;
-                        }
-
-                        if is_new {
-                            let _ = view.update(cx, |panel, cx| {
-                                panel.expanded_connections.insert(name.clone());
-                                let db_folder_id = format!("conn:{}:schemas", name);
-                                panel.expanded_nodes.insert(db_folder_id);
-                                panel.introspect_schema(config, cx);
-                            });
-                        }
-
-                        true
-                    }
-                })
+                            },
+                        )),
+                )
+                .on_ok(move |_, window: &mut Window, cx: &mut App| save_config_for_ok(window, cx))
         });
+    }
+
+    fn save_config_from_dialog(
+        manager: Entity<DataSourceManager>,
+        old_name: Option<String>,
+        form: Entity<ConnectionConfigForm>,
+        view: Entity<Self>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let config = form.read(cx).config(cx);
+        let name = config.name.clone();
+
+        if validate_connection_config(&config).is_err() {
+            return false;
+        }
+
+        let duplicate =
+            manager.read(cx).configs().iter().any(|config| {
+                config.name == name && old_name.as_deref() != Some(config.name.as_str())
+            });
+        if duplicate {
+            return false;
+        }
+
+        let is_new = old_name.is_none();
+        let save_result = manager.update(cx, |manager, cx| {
+            if let Some(old_name) = old_name.as_deref() {
+                manager.update(old_name, config.clone());
+            } else {
+                manager.add(config.clone());
+            }
+            if let Err(e) = credentials::save_password(&config.name, &config.password) {
+                manager.set_credential_error(&config.name, credentials::recovery_error_message(&e));
+            }
+            let save_result = manager.save();
+            match &save_result {
+                Ok(()) => manager.clear_credential_error(&name),
+                Err(error) => {
+                    manager.set_credential_error(&name, error.to_string());
+                }
+            }
+            cx.notify();
+            save_result.map_err(|error| error.to_string())
+        });
+        if let Err(error) = save_result {
+            let title = format!("Keychain Access Error: {}", name);
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                alert.title(title.clone()).description(error.clone())
+            });
+            return false;
+        }
+
+        if is_new {
+            let _ = view.update(cx, |panel, cx| {
+                panel.expanded_connections.insert(name.clone());
+                let db_folder_id = format!("conn:{}:schemas", name);
+                panel.expanded_nodes.insert(db_folder_id);
+                panel.mark_rows_dirty();
+                panel.introspect_schema(config, cx);
+            });
+        }
+
+        true
     }
 
     fn delete_connection(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -263,12 +350,14 @@ impl ConnectionPanel {
     ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
         move |menu, window, _cx| {
             let menu_name_for_refresh = menu_name.clone();
+            let menu_name_for_reconnect = menu_name.clone();
             let menu_name_for_duplicate = menu_name.clone();
             let menu_name_for_delete = menu_name.clone();
             let menu_name_for_configure = menu_name.clone();
             let menu_config_for_configure = menu_config.clone();
             let menu_config_for_diagram = menu_config.clone();
             let view_for_refresh = view.clone();
+            let view_for_reconnect = view.clone();
             let view_for_duplicate = view.clone();
             let view_for_delete = view.clone();
             let view_for_configure = view.clone();
@@ -281,6 +370,16 @@ impl ConnectionPanel {
                         let menu_config = menu_config_for_diagram.clone();
                         move |this, _, _window, cx| {
                             this.show_diagram(menu_config.clone(), DiagramScope::Database, cx);
+                        }
+                    })),
+            )
+            .item(
+                PopupMenuItem::new("Reconnect")
+                    .icon(IconName::Redo)
+                    .on_click(window.listener_for(&view_for_reconnect, {
+                        let menu_name = menu_name_for_reconnect.clone();
+                        move |this, _, _window, cx| {
+                            this.reconnect_connection(menu_name.clone(), cx);
                         }
                     })),
             )
@@ -485,6 +584,115 @@ impl ConnectionPanel {
         .detach();
     }
 
+    fn reconnect_connection(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(config) = self.prepare_connection_operation(name.clone(), cx) else {
+            return;
+        };
+
+        let manager = self.manager.clone();
+        let query_sessions = self.query_sessions.clone();
+        let activity_tracker = self.activity_tracker.clone();
+        let config_name = name.clone();
+        let config_name_for_task = config_name.clone();
+        let activity_label = format!("Reconnecting: {}", config_name);
+        let activity_id = self
+            .activity_tracker
+            .update(cx, |tracker, cx| tracker.begin(activity_label, cx));
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    query_sessions
+                        .close_connection_name(config_name_for_task.clone())
+                        .await?;
+                    let mut source = create_configured_data_source(&config)?;
+                    source.connect().await?;
+                    source.disconnect().await?;
+                    Ok::<(), DataSourceError>(())
+                })
+                .await;
+
+            cx.update_entity(&manager, move |manager, cx| {
+                match result {
+                    Ok(_) => {
+                        manager.set_status(&config_name, ConnectionStatus::Connected);
+                        manager.clear_last_error(&config_name);
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        manager.set_status(&config_name, ConnectionStatus::Failed);
+                        manager.set_last_error(&config_name, msg);
+                    }
+                }
+                cx.notify();
+            });
+
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn test_unsaved_connection(
+        &mut self,
+        form: Entity<ConnectionConfigForm>,
+        config: DataSourceConfig,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(message) = validate_connection_test_config(&config) {
+            form.update(cx, |form, cx| {
+                form.testing_connection = false;
+                form.test_status = Some(ConnectionTestStatus::Failed(message));
+                cx.notify();
+            });
+            return;
+        }
+
+        form.update(cx, |form, cx| {
+            form.testing_connection = true;
+            form.test_status = None;
+            cx.notify();
+        });
+
+        let activity_tracker = self.activity_tracker.clone();
+        let activity_label = if config.name.is_empty() {
+            "Testing connection".to_string()
+        } else {
+            format!("Testing connection: {}", config.name)
+        };
+        let activity_id = self
+            .activity_tracker
+            .update(cx, |tracker, cx| tracker.begin(activity_label, cx));
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut source = create_configured_data_source(&config)?;
+                    source.connect().await?;
+                    source.disconnect().await?;
+                    Ok::<(), DataSourceError>(())
+                })
+                .await;
+
+            cx.update_entity(&form, |form, cx| {
+                form.testing_connection = false;
+                form.test_status = Some(match result {
+                    Ok(()) => ConnectionTestStatus::Succeeded,
+                    Err(error) => ConnectionTestStatus::Failed(error.to_string()),
+                });
+                cx.notify();
+            });
+
+            cx.update_entity(&activity_tracker, |tracker, cx| {
+                tracker.finish(activity_id, cx);
+            });
+        })
+        .detach();
+    }
+
     fn refresh_schema(&mut self, name: String, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(config) = self.prepare_connection_operation(name, cx) else {
             return;
@@ -560,6 +768,7 @@ impl ConnectionPanel {
             let db_folder_id = format!("conn:{}:schemas", name);
             self.expanded_nodes.insert(db_folder_id);
         }
+        self.mark_rows_dirty();
     }
 
     fn toggle_node_expanded(&mut self, id: &str) {
@@ -568,6 +777,7 @@ impl ConnectionPanel {
         } else {
             self.expanded_nodes.insert(id.to_string());
         }
+        self.mark_rows_dirty();
     }
 
     fn build_schema_tree_items(
@@ -819,6 +1029,92 @@ impl ConnectionPanel {
         }
     }
 
+    fn mark_rows_dirty(&mut self) {
+        self.rows_dirty = true;
+    }
+
+    fn rebuild_visible_rows(&mut self, configs: &[DataSourceConfig], cx: &App) {
+        if !self.rows_dirty {
+            return;
+        }
+
+        let manager = self.manager.read(cx);
+        let mut rows = Vec::new();
+        if configs.is_empty() {
+            rows.push(ConnectionPanelRow::Empty);
+        }
+
+        for config in configs {
+            let status = manager.status(&config.name);
+            let expanded = self.expanded_connections.contains(&config.name);
+            rows.push(ConnectionPanelRow::Connection {
+                config: config.clone(),
+                status,
+                expanded,
+            });
+
+            if !expanded {
+                continue;
+            }
+
+            let cache_key = schema_cache::cache_key(config);
+            if let Some(schema) = schema_cache::load(&cache_key).ok().flatten() {
+                let schema = Rc::new(schema);
+                let tree_items = Self::build_schema_tree_items(
+                    &config.name,
+                    &config.database,
+                    &schema,
+                    &self.expanded_nodes,
+                );
+                let mut entries = Vec::new();
+                Self::flatten_items(&tree_items, &mut entries, 1);
+                rows.extend(entries.into_iter().map(|(item, depth)| {
+                    let id = item.id.to_string();
+                    ConnectionPanelRow::SchemaNode {
+                        label: item.label.to_string(),
+                        expanded: item.is_expanded(),
+                        leaf: Self::is_leaf_node(&id),
+                        id,
+                        depth,
+                        config: config.clone(),
+                        schema: schema.clone(),
+                    }
+                }));
+            } else {
+                let text = match manager.introspection_status(&config.name) {
+                    IntrospectionStatus::Running => "Refreshing schema...",
+                    IntrospectionStatus::Failed => "Schema refresh failed. Click Refresh to retry.",
+                    _ => "Schema not cached. Click Refresh to load.",
+                };
+                rows.push(ConnectionPanelRow::Message { text });
+            }
+        }
+
+        self.row_sizes = Rc::new(rows.iter().map(Self::row_size).collect());
+        self.visible_rows = rows;
+        self.rows_dirty = false;
+    }
+
+    fn row_size(row: &ConnectionPanelRow) -> Size<Pixels> {
+        let width = match row {
+            ConnectionPanelRow::Empty => MIN_ROW_WIDTH,
+            ConnectionPanelRow::Connection { config, .. } => {
+                estimated_row_width(0, config.name.as_str())
+            }
+            ConnectionPanelRow::SchemaNode { label, depth, .. } => {
+                estimated_row_width(*depth, label.as_str())
+            }
+            ConnectionPanelRow::Message { text, .. } => estimated_row_width(1, text),
+        };
+        let height = match row {
+            ConnectionPanelRow::Message { .. } | ConnectionPanelRow::Empty => MESSAGE_ROW_HEIGHT,
+            ConnectionPanelRow::Connection { .. } | ConnectionPanelRow::SchemaNode { .. } => {
+                CONNECTION_ROW_HEIGHT
+            }
+        };
+        size(width, height)
+    }
+
     fn node_icon(id: &str) -> IconName {
         if id.contains(":col:") {
             if id.contains(":pk:") {
@@ -858,6 +1154,20 @@ impl ConnectionPanel {
     }
 
     fn build_visible_entries(&self, configs: &[DataSourceConfig]) -> Vec<String> {
+        if !self.rows_dirty {
+            return self
+                .visible_rows
+                .iter()
+                .filter_map(|row| match row {
+                    ConnectionPanelRow::Connection { config, .. } => {
+                        Some(format!("conn:{}", config.name))
+                    }
+                    ConnectionPanelRow::SchemaNode { id, .. } => Some(id.clone()),
+                    ConnectionPanelRow::Empty | ConnectionPanelRow::Message { .. } => None,
+                })
+                .collect();
+        }
+
         let mut entries = Vec::new();
 
         for config in configs {
@@ -935,6 +1245,14 @@ impl ConnectionPanel {
             self.selected_connection = None;
         }
 
+        self.scroll_handle.scroll_to_item(
+            next_ix,
+            if offset < 0 {
+                ScrollStrategy::Top
+            } else {
+                ScrollStrategy::Bottom
+            },
+        );
         cx.notify();
     }
 
@@ -1403,6 +1721,306 @@ impl ConnectionPanel {
             })
             .then(|| ((*schema_name).to_string(), (*table_name).to_string()))
     }
+
+    fn render_row(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(row) = self.visible_rows.get(ix).cloned() else {
+            return div().into_any_element();
+        };
+
+        match row {
+            ConnectionPanelRow::Empty => div()
+                .p_2()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child("No data sources configured.")
+                .into_any_element(),
+            ConnectionPanelRow::Connection {
+                config,
+                status,
+                expanded,
+            } => self.render_connection_row(config, status, expanded, window, cx),
+            ConnectionPanelRow::SchemaNode {
+                id,
+                label,
+                depth,
+                config,
+                schema,
+                expanded,
+                leaf,
+            } => self.render_schema_node_row(id, label, depth, config, schema, expanded, leaf, cx),
+            ConnectionPanelRow::Message { text, .. } => div()
+                .pl(px(32.))
+                .py_1()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(text)
+                .into_any_element(),
+        }
+    }
+
+    fn render_connection_row(
+        &mut self,
+        config: DataSourceConfig,
+        _status: ConnectionStatus,
+        is_expanded: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let is_selected = self.selected_connection.as_deref() == Some(config.name.as_str());
+        let icon_color = if cx.theme().is_dark() {
+            cx.theme().muted_foreground
+        } else {
+            cx.theme().foreground
+        };
+        let row_name = config.name.clone();
+        let menu_name = config.name.clone();
+        let menu_config = config.clone();
+        let manager = self.manager.clone();
+        let row_manager = manager.clone();
+        let view = cx.entity();
+        let row_name_for_active = row_name.clone();
+        let row_name_for_expand = row_name.clone();
+
+        h_flex()
+            .id(format!("connection-row-{}", row_name))
+            .w_full()
+            .px_1()
+            .py_0p5()
+            .gap_1()
+            .rounded(cx.theme().radius)
+            .hover(|style| style.bg(cx.theme().accent.opacity(0.1)))
+            .when(is_selected, |this| {
+                this.bg(if cx.theme().is_dark() {
+                    hsla(0.74, 0.45, 0.32, 0.45)
+                } else {
+                    hsla(0.74, 0.42, 0.70, 0.58)
+                })
+            })
+            .child(
+                div()
+                    .id(format!("connection-expand-icon-{}", row_name))
+                    .size(px(16.))
+                    .flex_none()
+                    .child(
+                        Icon::new(if is_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size(px(14.))
+                        .text_color(cx.theme().muted_foreground),
+                    )
+                    .cursor_pointer()
+                    .on_click(cx.listener({
+                        let row_name = row_name_for_expand.clone();
+                        move |this, _, _, cx| {
+                            this.toggle_connection_expanded(&row_name);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(
+                div().id(format!("connection-icon-{}", row_name)).child(
+                    Icon::new(IconName::File)
+                        .path(Self::database_icon_path(config.db_type))
+                        .size(px(17.))
+                        .text_color(icon_color)
+                        .into_any_element(),
+                ),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .id(format!("connection-label-{}", row_name))
+                    .child(div().text_base().truncate().child(config.name.clone()))
+                    .on_click(cx.listener({
+                        let row_manager = row_manager.clone();
+                        let row_name = row_name_for_active;
+                        move |this, event: &gpui::ClickEvent, _, cx| {
+                            this.selected_connection = Some(row_name.clone());
+                            this.selected_node = None;
+
+                            if event.click_count() == 2 {
+                                let current_active =
+                                    row_manager.read(cx).active_name().map(|n| n.to_string());
+                                let status = row_manager.read(cx).status(&row_name);
+                                if current_active.as_deref() != Some(row_name.as_str())
+                                    || status != ConnectionStatus::Connected
+                                {
+                                    this.test_connection(row_name.clone(), cx);
+                                }
+                            }
+                            cx.notify();
+                        }
+                    }))
+                    .context_menu(Self::connection_context_menu(
+                        manager.clone(),
+                        menu_name.clone(),
+                        menu_config.clone(),
+                        view.clone(),
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_schema_node_row(
+        &mut self,
+        id: String,
+        label: String,
+        depth: usize,
+        config: DataSourceConfig,
+        schema: Rc<sqlab_drivers_core::DatabaseSchema>,
+        is_node_expanded: bool,
+        is_leaf: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let is_selected = self.selected_node.as_deref() == Some(&id);
+        let icon = Self::node_icon(&id);
+        let icon_path = Self::node_icon_path(&id, config.db_type);
+        let id_click = id.clone();
+        let id_toggle = id.clone();
+        let label_for_menu = label.clone();
+        let data_editor_target = Self::data_editor_target_for_node(&id, &schema);
+        let data_editor_connection = config.name.clone();
+        let view = cx.entity();
+
+        let (name, data_type) = if id.contains(":col:") {
+            if let Some(pos) = label.find(" : ") {
+                (label[..pos].to_string(), Some(label[pos + 3..].to_string()))
+            } else {
+                (label.clone(), None)
+            }
+        } else {
+            (label.clone(), None)
+        };
+
+        div()
+            .id(id.clone())
+            .w(px(Self::row_size(&ConnectionPanelRow::SchemaNode {
+                id: id.clone(),
+                label: label.clone(),
+                depth,
+                config: config.clone(),
+                schema: schema.clone(),
+                expanded: is_node_expanded,
+                leaf: is_leaf,
+            })
+            .width
+            .as_f32()))
+            .min_w_full()
+            .py_0p5()
+            .px_1()
+            .pl(px(12.) * depth as f32 + px(4.))
+            .rounded(cx.theme().radius)
+            .whitespace_nowrap()
+            .when(is_selected, |this| {
+                this.bg(if cx.theme().is_dark() {
+                    hsla(0.74, 0.45, 0.32, 0.45)
+                } else {
+                    hsla(0.74, 0.42, 0.70, 0.58)
+                })
+            })
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(format!("expand-{}", id_toggle))
+                            .size(px(14.))
+                            .flex_none()
+                            .child(if !is_leaf {
+                                Icon::new(if is_node_expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .size(px(14.))
+                                .text_color(cx.theme().muted_foreground)
+                                .into_any_element()
+                            } else {
+                                div().size_full().into_any_element()
+                            })
+                            .cursor_pointer()
+                            .on_click(cx.listener({
+                                let id_toggle = id_toggle.clone();
+                                move |this, _, _, cx| {
+                                    if !is_leaf {
+                                        this.toggle_node_expanded(&id_toggle);
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }
+                                }
+                            })),
+                    )
+                    .child(if let Some(path) = icon_path {
+                        let icon_color = if cx.theme().is_dark() {
+                            cx.theme().muted_foreground
+                        } else {
+                            cx.theme().foreground
+                        };
+                        Icon::new(IconName::File)
+                            .path(path)
+                            .size(px(16.))
+                            .flex_none()
+                            .text_color(icon_color)
+                            .into_any_element()
+                    } else {
+                        Icon::new(icon)
+                            .size(px(16.))
+                            .flex_none()
+                            .text_color(cx.theme().muted_foreground)
+                            .into_any_element()
+                    })
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(div().text_base().child(name))
+                            .when_some(data_type, |this, dt| {
+                                this.child(
+                                    div()
+                                        .text_base()
+                                        .text_color(cx.theme().muted_foreground.opacity(0.6))
+                                        .child(dt),
+                                )
+                            }),
+                    ),
+            )
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                this.selected_node = Some(id_click.clone());
+                this.selected_connection = None;
+                if event.click_count() == 2 {
+                    if let Some((schema_name, table_name)) = data_editor_target.as_ref() {
+                        this.show_data_editor(
+                            data_editor_connection.clone(),
+                            schema_name.clone(),
+                            table_name.clone(),
+                            cx,
+                        );
+                        cx.notify();
+                        return;
+                    }
+                }
+                if let Some(name) = Self::copyable_name(&id_click, &label) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(name));
+                }
+                cx.notify();
+            }))
+            .context_menu(Self::schema_node_context_menu(
+                id.clone(),
+                label_for_menu,
+                (*schema).clone(),
+                config.clone(),
+                view.clone(),
+            ))
+            .into_any_element()
+    }
 }
 
 impl Panel for ConnectionPanel {
@@ -1441,10 +2059,10 @@ impl Panel for ConnectionPanel {
 impl Render for ConnectionPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let configs = self.manager.read(cx).configs().to_vec();
-        let active_name = self.manager.read(cx).active_name().map(str::to_string);
         let manager = self.manager.clone();
-
-        let mut list_children: Vec<gpui::AnyElement> = Vec::new();
+        self.rebuild_visible_rows(&configs, cx);
+        let row_sizes = self.row_sizes.clone();
+        let scroll_handle = self.scroll_handle.clone();
 
         // Header
         let header = h_flex()
@@ -1471,312 +2089,6 @@ impl Render for ConnectionPanel {
                     })),
             )
             .into_any_element();
-
-        if configs.is_empty() {
-            list_children.push(
-                div()
-                    .p_2()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("No data sources configured.")
-                    .into_any_element(),
-            );
-        }
-
-        for config in &configs {
-            let is_active = active_name.as_deref() == Some(config.name.as_str());
-            let is_selected = self.selected_connection.as_deref() == Some(config.name.as_str());
-            let status = manager.read(cx).status(&config.name);
-            let status_color = if is_active {
-                match status {
-                    ConnectionStatus::Connected => rgb(0xa855f7),
-                    ConnectionStatus::Failed => rgb(0xef4444),
-                    ConnectionStatus::Idle => rgb(0x9ca3af),
-                }
-            } else {
-                rgb(0x9ca3af)
-            };
-
-            let row_name = config.name.clone();
-            let menu_name = config.name.clone();
-            let menu_config = config.clone();
-            let manager = manager.clone();
-            let row_manager = manager.clone();
-            let view = cx.entity();
-
-            let is_expanded = self.expanded_connections.contains(&config.name);
-            let introspection_status = manager.read(cx).introspection_status(&config.name);
-
-            // Connection row
-            let row_name_for_active = row_name.clone();
-            let row_name_for_expand = row_name.clone();
-            list_children.push(
-                h_flex()
-                    .id(format!("connection-row-{}", row_name))
-                    .w_full()
-                    .px_1()
-                    .py_0p5()
-                    .gap_1()
-                    .rounded(cx.theme().radius)
-                    .hover(|style| style.bg(cx.theme().accent.opacity(0.1)))
-                    .when(is_selected, |this| {
-                        this.bg(if cx.theme().is_dark() {
-                            hsla(0.74, 0.45, 0.32, 0.45)
-                        } else {
-                            hsla(0.74, 0.42, 0.70, 0.58)
-                        })
-                    })
-                    .child(
-                        div()
-                            .id(format!("connection-expand-icon-{}", row_name))
-                            .size(px(16.))
-                            .flex_none()
-                            .child(
-                                Icon::new(if is_expanded {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                })
-                                .size(px(14.))
-                                .text_color(cx.theme().muted_foreground),
-                            )
-                            .cursor_pointer()
-                            .on_click(cx.listener({
-                                let row_name = row_name_for_expand.clone();
-                                move |this, _, _, cx| {
-                                    this.toggle_connection_expanded(&row_name);
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        div().id(format!("connection-icon-{}", row_name)).child(
-                            Icon::new(IconName::File)
-                                .path(Self::database_icon_path(config.db_type))
-                                .size(px(17.))
-                                .text_color(status_color)
-                                .into_any_element(),
-                        ),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .overflow_hidden()
-                            .id(format!("connection-label-{}", row_name))
-                            .child(div().text_base().truncate().child(config.name.clone()))
-                            .on_click(cx.listener({
-                                let row_manager = row_manager.clone();
-                                let row_name = row_name_for_active;
-                                move |this, event: &gpui::ClickEvent, _, cx| {
-                                    this.selected_connection = Some(row_name.clone());
-                                    this.selected_node = None;
-
-                                    // GPUI ClickEvent has click_count() method
-                                    if event.click_count() == 2 {
-                                        let current_active = row_manager
-                                            .read(cx)
-                                            .active_name()
-                                            .map(|n| n.to_string());
-                                        let status = row_manager.read(cx).status(&row_name);
-                                        if current_active.as_deref() != Some(row_name.as_str())
-                                            || status != ConnectionStatus::Connected
-                                        {
-                                            this.test_connection(row_name.clone(), cx);
-                                        }
-                                    }
-                                    cx.notify();
-                                }
-                            }))
-                            .context_menu(Self::connection_context_menu(
-                                manager.clone(),
-                                menu_name.clone(),
-                                menu_config.clone(),
-                                view.clone(),
-                            )),
-                    )
-                    .into_any_element(),
-            );
-            // Schema tree
-            if is_expanded {
-                let cache_key = schema_cache::cache_key(&config);
-                let schema_opt = schema_cache::load(&cache_key).ok().flatten();
-
-                if let Some(schema) = schema_opt {
-                    let tree_items = Self::build_schema_tree_items(
-                        &config.name,
-                        &config.database,
-                        &schema,
-                        &self.expanded_nodes,
-                    );
-                    let mut entries = Vec::new();
-                    Self::flatten_items(&tree_items, &mut entries, 1);
-
-                    for (item, depth) in entries {
-                        let id = item.id.to_string();
-                        let label = item.label.to_string();
-                        let is_selected = self.selected_node.as_deref() == Some(&id);
-                        let icon = Self::node_icon(&id);
-                        let icon_path = Self::node_icon_path(&id, config.db_type);
-                        let is_leaf = Self::is_leaf_node(&id);
-                        let is_node_expanded = item.is_expanded();
-                        let id_click = id.clone();
-                        let id_toggle = id.clone();
-                        let label_for_menu = label.clone();
-                        let data_editor_target = Self::data_editor_target_for_node(&id, &schema);
-                        let data_editor_connection = config.name.clone();
-
-                        let (name, data_type) = if id.contains(":col:") {
-                            if let Some(pos) = label.find(" : ") {
-                                (label[..pos].to_string(), Some(label[pos + 3..].to_string()))
-                            } else {
-                                (label.clone(), None)
-                            }
-                        } else {
-                            (label.clone(), None)
-                        };
-
-                        list_children.push(
-                            div()
-                                .id(id.clone())
-                                .min_w_full()
-                                .py_0p5()
-                                .px_1()
-                                .pl(px(12.) * depth as f32 + px(4.))
-                                .rounded(cx.theme().radius)
-                                .whitespace_nowrap()
-                                .when(is_selected, |this| {
-                                    this.bg(if cx.theme().is_dark() {
-                                        hsla(0.74, 0.45, 0.32, 0.45)
-                                    } else {
-                                        hsla(0.74, 0.42, 0.70, 0.58)
-                                    })
-                                })
-                                .child(
-                                    h_flex()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .id(format!("expand-{}", id_toggle))
-                                                .size(px(14.))
-                                                .flex_none()
-                                                .child(if !is_leaf {
-                                                    Icon::new(if is_node_expanded {
-                                                        IconName::ChevronDown
-                                                    } else {
-                                                        IconName::ChevronRight
-                                                    })
-                                                    .size(px(14.))
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .into_any_element()
-                                                } else {
-                                                    div().size_full().into_any_element()
-                                                })
-                                                .cursor_pointer()
-                                                .on_click(cx.listener({
-                                                    let id_toggle = id_toggle.clone();
-                                                    move |this, _, _, cx| {
-                                                        if !is_leaf {
-                                                            this.toggle_node_expanded(&id_toggle);
-                                                            cx.stop_propagation();
-                                                            cx.notify();
-                                                        }
-                                                    }
-                                                })),
-                                        )
-                                        .child(if let Some(path) = icon_path {
-                                            let icon_color = if cx.theme().is_dark() {
-                                                cx.theme().muted_foreground
-                                            } else {
-                                                cx.theme().foreground
-                                            };
-                                            Icon::new(IconName::File)
-                                                .path(path)
-                                                .size(px(16.))
-                                                .flex_none()
-                                                .text_color(icon_color)
-                                                .into_any_element()
-                                        } else {
-                                            Icon::new(icon)
-                                                .size(px(16.))
-                                                .flex_none()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .into_any_element()
-                                        })
-                                        .child(
-                                            h_flex()
-                                                .gap_1()
-                                                .child(div().text_base().child(name))
-                                                .when_some(data_type, |this, dt| {
-                                                    this.child(
-                                                        div()
-                                                            .text_base()
-                                                            .text_color(
-                                                                cx.theme()
-                                                                    .muted_foreground
-                                                                    .opacity(0.6),
-                                                            )
-                                                            .child(dt),
-                                                    )
-                                                }),
-                                        ),
-                                )
-                                .on_click(cx.listener(
-                                    move |this, event: &gpui::ClickEvent, _, cx| {
-                                        this.selected_node = Some(id_click.clone());
-                                        this.selected_connection = None;
-                                        if event.click_count() == 2 {
-                                            if let Some((schema_name, table_name)) =
-                                                data_editor_target.as_ref()
-                                            {
-                                                this.show_data_editor(
-                                                    data_editor_connection.clone(),
-                                                    schema_name.clone(),
-                                                    table_name.clone(),
-                                                    cx,
-                                                );
-                                                cx.notify();
-                                                return;
-                                            }
-                                        }
-                                        if let Some(name) = Self::copyable_name(&id_click, &label) {
-                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                                name,
-                                            ));
-                                        }
-                                        cx.notify();
-                                    },
-                                ))
-                                .context_menu(Self::schema_node_context_menu(
-                                    id.clone(),
-                                    label_for_menu,
-                                    schema.clone(),
-                                    config.clone(),
-                                    view.clone(),
-                                ))
-                                .into_any_element(),
-                        );
-                    }
-                } else {
-                    let msg = match introspection_status {
-                        IntrospectionStatus::Running => "Refreshing schema...",
-                        IntrospectionStatus::Failed => {
-                            "Schema refresh failed. Click Refresh to retry."
-                        }
-                        _ => "Schema not cached. Click Refresh to load.",
-                    };
-                    list_children.push(
-                        div()
-                            .pl(px(32.))
-                            .py_1()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(msg)
-                            .into_any_element(),
-                    );
-                }
-            }
-        }
 
         if let Some(error) = manager.read(cx).global_credential_error() {
             if !self.shown_global_credential_error {
@@ -1863,6 +2175,7 @@ impl Render for ConnectionPanel {
                             if let Some(id) = &this.selected_node {
                                 if !this.expanded_nodes.contains(id) {
                                     this.expanded_nodes.insert(id.clone());
+                                    this.mark_rows_dirty();
                                     cx.notify();
                                 }
                             } else if let Some(id) = &this.selected_connection {
@@ -1871,6 +2184,7 @@ impl Render for ConnectionPanel {
                                     // Auto-expand the database folder when first opening a connection
                                     let db_folder_id = format!("conn:{}:schemas", id);
                                     this.expanded_nodes.insert(db_folder_id);
+                                    this.mark_rows_dirty();
                                     cx.notify();
                                 }
                             }
@@ -1879,11 +2193,13 @@ impl Render for ConnectionPanel {
                             if let Some(id) = &this.selected_node {
                                 if this.expanded_nodes.contains(id) {
                                     this.expanded_nodes.remove(id);
+                                    this.mark_rows_dirty();
                                     cx.notify();
                                 }
                             } else if let Some(id) = &this.selected_connection {
                                 if this.expanded_connections.contains(id) {
                                     this.expanded_connections.remove(id);
+                                    this.mark_rows_dirty();
                                     cx.notify();
                                 }
                             }
@@ -1903,13 +2219,27 @@ impl Render for ConnectionPanel {
             .child(
                 v_flex()
                     .id("connection-panel-inner")
+                    .relative()
                     .flex_1()
                     .w_full()
-                    .overflow_y_scroll()
-                    .children(list_children)
                     .text_sm()
                     .p_1()
-                    .min_w_full(),
+                    .min_w_full()
+                    .child(
+                        v_virtual_list(
+                            cx.entity().clone(),
+                            "connection-panel-rows",
+                            row_sizes,
+                            move |this, visible_range, window, cx| {
+                                visible_range
+                                    .map(|ix| this.render_row(ix, window, cx))
+                                    .collect::<Vec<_>>()
+                            },
+                        )
+                        .track_scroll(&scroll_handle)
+                        .size_full(),
+                    )
+                    .scrollbar(&scroll_handle, ScrollbarAxis::Both),
             )
     }
 }
@@ -1920,9 +2250,16 @@ impl Focusable for ConnectionPanel {
     }
 }
 
+enum ConnectionTestStatus {
+    Succeeded,
+    Failed(String),
+}
+
 struct ConnectionConfigForm {
     selected_db_type: Database,
     advanced_open: bool,
+    testing_connection: bool,
+    test_status: Option<ConnectionTestStatus>,
     name: Entity<InputState>,
     host: Entity<InputState>,
     port: Entity<InputState>,
@@ -1985,6 +2322,8 @@ impl ConnectionConfigForm {
         Self {
             selected_db_type: config.db_type,
             advanced_open: false,
+            testing_connection: false,
+            test_status: None,
             name,
             host,
             port,
@@ -2089,6 +2428,7 @@ impl Render for ConnectionConfigForm {
         let selected = self.selected_db_type;
         let form = cx.entity();
         let advanced_open = self.advanced_open;
+        let testing_connection = self.testing_connection;
 
         let file_database = matches!(selected, Database::SQLite | Database::DuckDB);
 
@@ -2171,6 +2511,28 @@ impl Render for ConnectionConfigForm {
                             .child(form_field("Query String", Input::new(&self.query_string)))
                     }),
             )
+            .when(testing_connection, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Testing connection..."),
+                )
+            })
+            .when_some(self.test_status.as_ref(), |this, status| match status {
+                ConnectionTestStatus::Succeeded => this.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x16a34a))
+                        .child("Connection test succeeded."),
+                ),
+                ConnectionTestStatus::Failed(message) => this.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0xef4444))
+                        .child(format!("Connection test failed: {}", message)),
+                ),
+            })
     }
 }
 
@@ -2185,6 +2547,41 @@ fn set_input_value(
             input.set_value(value, window, cx);
         }
     });
+}
+
+fn validate_connection_config(config: &DataSourceConfig) -> Result<(), String> {
+    if config.name.is_empty() {
+        return Err("Connection name is required.".to_string());
+    }
+    validate_connection_test_config(config)
+}
+
+fn validate_connection_test_config(config: &DataSourceConfig) -> Result<(), String> {
+    if config.database.is_empty() {
+        return Err(
+            if matches!(config.db_type, Database::SQLite | Database::DuckDB) {
+                "File location is required.".to_string()
+            } else {
+                "Database is required.".to_string()
+            },
+        );
+    }
+    if !matches!(config.db_type, Database::SQLite | Database::DuckDB) {
+        if config.host.is_empty() {
+            return Err("Host is required.".to_string());
+        }
+        if config.user.is_empty() {
+            return Err("User is required.".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+fn estimated_row_width(depth: usize, label: &str) -> Pixels {
+    let indent = 12. * depth as f32 + 48.;
+    let text = label.chars().count() as f32 * 7.5;
+    px((indent + text).max(MIN_ROW_WIDTH.as_f32()))
 }
 
 struct ParsedConnectionUrl {
@@ -2510,6 +2907,64 @@ mod tests {
         assert_eq!(
             parse_connection_url(&url).unwrap().database,
             "/tmp/app data.sqlite"
+        );
+    }
+
+    #[test]
+    fn validates_required_connection_fields_for_remote_databases() {
+        let config = DataSourceConfig {
+            name: "remote".into(),
+            db_type: Database::Postgres,
+            host: String::new(),
+            database: "app".into(),
+            ..DataSourceConfig::default()
+        };
+
+        assert_eq!(
+            validate_connection_config(&config).unwrap_err(),
+            "Host is required."
+        );
+
+        let config = DataSourceConfig {
+            host: "localhost".into(),
+            ..config
+        };
+        assert_eq!(
+            validate_connection_config(&config).unwrap_err(),
+            "User is required."
+        );
+    }
+
+    #[test]
+    fn validates_file_location_for_file_databases() {
+        let config = DataSourceConfig {
+            name: "local".into(),
+            db_type: Database::SQLite,
+            database: String::new(),
+            ..DataSourceConfig::default()
+        };
+
+        assert_eq!(
+            validate_connection_config(&config).unwrap_err(),
+            "File location is required."
+        );
+    }
+
+    #[test]
+    fn connection_test_validation_does_not_require_name() {
+        let config = DataSourceConfig {
+            name: String::new(),
+            db_type: Database::Postgres,
+            host: "localhost".into(),
+            user: "app".into(),
+            database: "app".into(),
+            ..DataSourceConfig::default()
+        };
+
+        assert!(validate_connection_test_config(&config).is_ok());
+        assert_eq!(
+            validate_connection_config(&config).unwrap_err(),
+            "Connection name is required."
         );
     }
 }

@@ -934,6 +934,7 @@ impl Workspace {
             ConnectionPanel::new(
                 data_source_manager.clone(),
                 activity_tracker.clone(),
+                query_sessions.clone(),
                 window,
                 cx,
             )

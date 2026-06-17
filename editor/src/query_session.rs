@@ -302,6 +302,26 @@ mod tests {
     }
 
     #[test]
+    fn close_connection_name_closes_that_connection_across_paths() {
+        let store = QuerySessionStore::new();
+        let path_1 = PathBuf::from("/tmp/sqlab-session-close-name-1.sql");
+        let path_2 = PathBuf::from("/tmp/sqlab-session-close-name-2.sql");
+
+        run_query(&store, &path_1, "shared", "create table t1 (id integer);").unwrap();
+        run_query(&store, &path_2, "shared", "create table t2 (id integer);").unwrap();
+        run_query(&store, &path_2, "other", "create table t3 (id integer);").unwrap();
+
+        Runtime::new()
+            .unwrap()
+            .block_on(store.close_connection_name("shared".into()))
+            .unwrap();
+
+        assert!(!store.is_open(&path_1, "shared"));
+        assert!(!store.is_open(&path_2, "shared"));
+        assert!(store.is_open(&path_2, "other"));
+    }
+
+    #[test]
     fn reconnects_automatically_when_connection_drops() {
         let store = QuerySessionStore::new();
         let path = PathBuf::from("/tmp/sqlab-session-reconnect-test.sql");
