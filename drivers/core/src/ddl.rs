@@ -552,28 +552,28 @@ impl DdlGenerator for MySqlDdlGenerator {
         }
 
         // Table comment
-        if let Some(comment) = &table.comment {
-            if !comment.is_empty() {
-                ddl.push_str(&format!(
-                    "\nALTER TABLE {} COMMENT = {};\n",
-                    mysql_qualified_name(&table.schema, &table.name),
-                    quote_string(comment)
-                ));
-            }
+        if let Some(comment) = &table.comment
+            && !comment.is_empty()
+        {
+            ddl.push_str(&format!(
+                "\nALTER TABLE {} COMMENT = {};\n",
+                mysql_qualified_name(&table.schema, &table.name),
+                quote_string(comment)
+            ));
         }
 
         // Column comments
         for col in &table.columns {
-            if let Some(comment) = &col.comment {
-                if !comment.is_empty() {
-                    ddl.push_str(&format!(
-                        "ALTER TABLE {} MODIFY COLUMN {} {} COMMENT {};\n",
-                        mysql_qualified_name(&table.schema, &table.name),
-                        quote_mysql_identifier(&col.name),
-                        format_column_type(col),
-                        quote_string(comment)
-                    ));
-                }
+            if let Some(comment) = &col.comment
+                && !comment.is_empty()
+            {
+                ddl.push_str(&format!(
+                    "ALTER TABLE {} MODIFY COLUMN {} {} COMMENT {};\n",
+                    mysql_qualified_name(&table.schema, &table.name),
+                    quote_mysql_identifier(&col.name),
+                    format_column_type(col),
+                    quote_string(comment)
+                ));
             }
         }
 

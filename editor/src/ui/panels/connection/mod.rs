@@ -42,6 +42,7 @@ pub struct ConnectionPanel {
     expanded_nodes: HashSet<String>,
     selected_node: Option<String>,
     selected_connection: Option<String>,
+    search_input: Entity<InputState>,
     visible_rows: Vec<ConnectionPanelRow>,
     row_sizes: Rc<Vec<Size<Pixels>>>,
     rows_dirty: bool,
@@ -49,6 +50,7 @@ pub struct ConnectionPanel {
     shown_errors: HashSet<String>,
     shown_credential_errors: HashSet<String>,
     shown_global_credential_error: bool,
+    _search_subscription: Subscription,
 }
 
 impl EventEmitter<PanelEvent> for ConnectionPanel {}
@@ -103,6 +105,20 @@ impl ConnectionPanel {
         })
         .detach();
 
+        let search_input =
+            cx.new(|cx| InputState::new(_window, cx).placeholder("Filter objects..."));
+        let search_subscription = cx.subscribe_in(&search_input, _window, {
+            move |this: &mut Self, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.mark_rows_dirty();
+                    if input.read(cx).value().is_empty() {
+                        this.focus_handle.focus(window, cx);
+                    }
+                    cx.notify();
+                }
+            }
+        });
+
         Self {
             manager,
             activity_tracker,
@@ -112,6 +128,7 @@ impl ConnectionPanel {
             expanded_nodes: HashSet::new(),
             selected_node: None,
             selected_connection: None,
+            search_input,
             visible_rows: Vec::new(),
             row_sizes: Rc::new(Vec::new()),
             rows_dirty: true,
@@ -119,6 +136,7 @@ impl ConnectionPanel {
             shown_errors: HashSet::new(),
             shown_credential_errors: HashSet::new(),
             shown_global_credential_error: false,
+            _search_subscription: search_subscription,
         }
     }
 
@@ -1034,12 +1052,44 @@ impl ConnectionPanel {
         self.rows_dirty = true;
     }
 
+    fn search_query(&self, cx: &App) -> String {
+        self.search_input.read(cx).value().trim().to_lowercase()
+    }
+
+    fn tree_item_matches(item: &TreeItem, query: &str) -> bool {
+        item.label.to_lowercase().contains(query) || item.id.to_lowercase().contains(query)
+    }
+
+    fn filter_tree_items(items: &[TreeItem], query: &str) -> Vec<TreeItem> {
+        items
+            .iter()
+            .filter_map(|item| {
+                let item_matches = Self::tree_item_matches(item, query);
+                let children = if item.is_expanded() {
+                    Self::filter_tree_items(&item.children, query)
+                } else {
+                    Vec::new()
+                };
+
+                if item_matches || !children.is_empty() {
+                    let mut item = item.clone();
+                    item.children = children;
+                    Some(item)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     fn rebuild_visible_rows(&mut self, configs: &[DataSourceConfig], cx: &App) {
         if !self.rows_dirty {
             return;
         }
 
         let manager = self.manager.read(cx);
+        let search_query = self.search_query(cx);
+        let filtering = !search_query.is_empty();
         let mut rows = Vec::new();
         if configs.is_empty() {
             rows.push(ConnectionPanelRow::Empty);
@@ -1061,12 +1111,18 @@ impl ConnectionPanel {
             let cache_key = schema_cache::cache_key(config);
             if let Some(schema) = schema_cache::load(&cache_key).ok().flatten() {
                 let schema = Rc::new(schema);
-                let tree_items = Self::build_schema_tree_items(
+                let mut tree_items = Self::build_schema_tree_items(
                     &config.name,
                     &config.database,
                     &schema,
                     &self.expanded_nodes,
                 );
+                if filtering {
+                    tree_items = Self::filter_tree_items(&tree_items, &search_query);
+                    if tree_items.is_empty() {
+                        continue;
+                    }
+                }
                 let mut entries = Vec::new();
                 Self::flatten_items(&tree_items, &mut entries, 1);
                 rows.extend(entries.into_iter().map(|(item, depth)| {
@@ -1081,7 +1137,7 @@ impl ConnectionPanel {
                         schema: schema.clone(),
                     }
                 }));
-            } else {
+            } else if !filtering {
                 let text = match manager.introspection_status(&config.name) {
                     IntrospectionStatus::Running => "Refreshing schema...",
                     IntrospectionStatus::Failed => "Schema refresh failed. Click Refresh to retry.",
@@ -1154,47 +1210,17 @@ impl ConnectionPanel {
         }
     }
 
-    fn build_visible_entries(&self, configs: &[DataSourceConfig]) -> Vec<String> {
-        if !self.rows_dirty {
-            return self
-                .visible_rows
-                .iter()
-                .filter_map(|row| match row {
-                    ConnectionPanelRow::Connection { config, .. } => {
-                        Some(format!("conn:{}", config.name))
-                    }
-                    ConnectionPanelRow::SchemaNode { id, .. } => Some(id.clone()),
-                    ConnectionPanelRow::Empty | ConnectionPanelRow::Message { .. } => None,
-                })
-                .collect();
-        }
-
-        let mut entries = Vec::new();
-
-        for config in configs {
-            // Add connection itself
-            entries.push(format!("conn:{}", config.name));
-
-            // If expanded, add its schema tree nodes
-            if self.expanded_connections.contains(&config.name) {
-                let cache_key = schema_cache::cache_key(config);
-                if let Some(schema) = schema_cache::load(&cache_key).ok().flatten() {
-                    let tree_items = Self::build_schema_tree_items(
-                        &config.name,
-                        &config.database,
-                        &schema,
-                        &self.expanded_nodes,
-                    );
-                    let mut flat = Vec::new();
-                    Self::flatten_items(&tree_items, &mut flat, 1);
-                    for (item, _) in flat {
-                        entries.push(item.id.to_string());
-                    }
+    fn build_visible_entries(&self) -> Vec<String> {
+        self.visible_rows
+            .iter()
+            .filter_map(|row| match row {
+                ConnectionPanelRow::Connection { config, .. } => {
+                    Some(format!("conn:{}", config.name))
                 }
-            }
-        }
-
-        entries
+                ConnectionPanelRow::SchemaNode { id, .. } => Some(id.clone()),
+                ConnectionPanelRow::Empty | ConnectionPanelRow::Message { .. } => None,
+            })
+            .collect()
     }
 
     fn select_relative(
@@ -1203,7 +1229,8 @@ impl ConnectionPanel {
         configs: &[DataSourceConfig],
         cx: &mut Context<Self>,
     ) {
-        let entries = self.build_visible_entries(configs);
+        self.rebuild_visible_rows(configs, cx);
+        let entries = self.build_visible_entries();
         if entries.is_empty() {
             return;
         }
@@ -2022,6 +2049,53 @@ impl ConnectionPanel {
             ))
             .into_any_element()
     }
+
+    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+        self.mark_rows_dirty();
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn append_search_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let mut value = self.search_input.read(cx).value().to_string();
+        value.push_str(text);
+        self.search_input.update(cx, |input, cx| {
+            input.set_value(value, window, cx);
+            input.focus(window, cx);
+        });
+        self.mark_rows_dirty();
+        cx.notify();
+    }
+
+    fn render_search_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        h_flex()
+            .id("connection-filter")
+            .w_full()
+            .px_1()
+            .pb_1()
+            .gap_1()
+            .child(
+                div().flex_1().child(
+                    Input::new(&self.search_input)
+                        .xsmall()
+                        .prefix(IconName::Search),
+                ),
+            )
+            .child(
+                Button::new("connection-filter-clear")
+                    .icon(IconName::Close)
+                    .xsmall()
+                    .ghost()
+                    .tooltip("Clear Filter")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.clear_search(window, cx);
+                    })),
+            )
+            .into_any_element()
+    }
 }
 
 impl Panel for ConnectionPanel {
@@ -2064,6 +2138,12 @@ impl Render for ConnectionPanel {
         self.rebuild_visible_rows(&configs, cx);
         let row_sizes = self.row_sizes.clone();
         let scroll_handle = self.scroll_handle.clone();
+        let search_visible = !self.search_input.read(cx).value().is_empty()
+            || self
+                .search_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window);
 
         // Header
         let header = h_flex()
@@ -2161,62 +2241,136 @@ impl Render for ConnectionPanel {
             .size_full()
             .items_start()
             .track_focus(&self.focus_handle)
-            .on_key_down(
-                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                let search_focused = this
+                    .search_input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window);
+                if !search_focused {
+                    return;
+                }
+
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        let configs = this.manager.read(cx).configs().to_vec();
+                        this.select_relative(-1, &configs, cx);
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        let configs = this.manager.read(cx).configs().to_vec();
+                        this.select_relative(1, &configs, cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                let search_focused = this
+                    .search_input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window);
+                if search_focused {
                     match event.keystroke.key.as_str() {
                         "up" => {
                             let configs = this.manager.read(cx).configs().to_vec();
                             this.select_relative(-1, &configs, cx);
+                            cx.stop_propagation();
                         }
                         "down" => {
                             let configs = this.manager.read(cx).configs().to_vec();
                             this.select_relative(1, &configs, cx);
+                            cx.stop_propagation();
                         }
-                        "right" => {
-                            if let Some(id) = &this.selected_node {
-                                if !this.expanded_nodes.contains(id) {
-                                    this.expanded_nodes.insert(id.clone());
-                                    this.mark_rows_dirty();
-                                    cx.notify();
-                                }
-                            } else if let Some(id) = &this.selected_connection {
-                                if !this.expanded_connections.contains(id) {
-                                    this.expanded_connections.insert(id.clone());
-                                    // Auto-expand the database folder when first opening a connection
-                                    let db_folder_id = format!("conn:{}:schemas", id);
-                                    this.expanded_nodes.insert(db_folder_id);
-                                    this.mark_rows_dirty();
-                                    cx.notify();
-                                }
-                            }
-                        }
-                        "left" => {
-                            if let Some(id) = &this.selected_node {
-                                if this.expanded_nodes.contains(id) {
-                                    this.expanded_nodes.remove(id);
-                                    this.mark_rows_dirty();
-                                    cx.notify();
-                                }
-                            } else if let Some(id) = &this.selected_connection {
-                                if this.expanded_connections.contains(id) {
-                                    this.expanded_connections.remove(id);
-                                    this.mark_rows_dirty();
-                                    cx.notify();
-                                }
-                            }
-                        }
-                        "enter" => {
-                            let configs = this.manager.read(cx).configs().to_vec();
-                            if this.open_selected_data_editor(&configs, cx) {
-                                cx.stop_propagation();
-                                cx.notify();
-                            }
+                        "escape" => {
+                            this.clear_search(window, cx);
+                            cx.stop_propagation();
                         }
                         _ => {}
                     }
-                }),
-            )
+                    return;
+                }
+
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        let configs = this.manager.read(cx).configs().to_vec();
+                        this.select_relative(-1, &configs, cx);
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        let configs = this.manager.read(cx).configs().to_vec();
+                        this.select_relative(1, &configs, cx);
+                        cx.stop_propagation();
+                    }
+                    "right" => {
+                        if let Some(id) = &this.selected_node {
+                            if !this.expanded_nodes.contains(id) {
+                                this.expanded_nodes.insert(id.clone());
+                                this.mark_rows_dirty();
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                        } else if let Some(id) = &this.selected_connection {
+                            if !this.expanded_connections.contains(id) {
+                                this.expanded_connections.insert(id.clone());
+                                // Auto-expand the database folder when first opening a connection
+                                let db_folder_id = format!("conn:{}:schemas", id);
+                                this.expanded_nodes.insert(db_folder_id);
+                                this.mark_rows_dirty();
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                        }
+                    }
+                    "left" => {
+                        if let Some(id) = &this.selected_node {
+                            if this.expanded_nodes.contains(id) {
+                                this.expanded_nodes.remove(id);
+                                this.mark_rows_dirty();
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                        } else if let Some(id) = &this.selected_connection {
+                            if this.expanded_connections.contains(id) {
+                                this.expanded_connections.remove(id);
+                                this.mark_rows_dirty();
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                        }
+                    }
+                    "enter" => {
+                        let configs = this.manager.read(cx).configs().to_vec();
+                        if this.open_selected_data_editor(&configs, cx) {
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }
+                    "escape" => {
+                        if !this.search_input.read(cx).value().is_empty() {
+                            this.clear_search(window, cx);
+                            cx.stop_propagation();
+                        }
+                    }
+                    _ => {
+                        let modifiers = event.keystroke.modifiers;
+                        if !modifiers.platform
+                            && !modifiers.control
+                            && !modifiers.alt
+                            && let Some(key_char) = event.keystroke.key_char.as_deref()
+                            && !key_char.chars().any(char::is_control)
+                        {
+                            this.append_search_text(key_char, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }
+                }
+            }))
             .child(header)
+            .when(search_visible, |this| {
+                this.child(self.render_search_bar(cx))
+            })
             .child(
                 v_flex()
                     .id("connection-panel-inner")
