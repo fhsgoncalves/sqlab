@@ -813,6 +813,14 @@ impl Workspace {
             });
         })
         .detach();
+        cx.subscribe_in(
+            &editor_tabs,
+            window,
+            |this, _tabs, event: &ShowDataEditorEvent, window, cx| {
+                this.open_data_editor(event.clone(), window, cx);
+            },
+        )
+        .detach();
 
         // Subscribe to file search results (after editor_tabs is created)
         let editor_tabs_for_focus = editor_tabs.clone();
@@ -966,6 +974,14 @@ impl Workspace {
             panel.set_dock_area(weak_dock_area.clone());
             panel
         });
+        cx.subscribe_in(
+            &results_panel,
+            window,
+            |this, _panel, event: &ShowDataEditorEvent, window, cx| {
+                this.open_data_editor(event.clone(), window, cx);
+            },
+        )
+        .detach();
 
         let terminal_panel = cx.new(|cx| {
             let mut panel = TerminalPanel::new(root_path.clone(), window, cx);
@@ -1151,7 +1167,7 @@ impl Workspace {
         };
 
         self.editor_tabs.update(cx, |tabs, cx| {
-            tabs.open_data_editor(event.config, table, window, cx);
+            tabs.open_data_editor(event.config, table, event.where_clause, window, cx);
         });
     }
 

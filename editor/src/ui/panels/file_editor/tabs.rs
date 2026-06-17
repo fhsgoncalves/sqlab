@@ -1,4 +1,6 @@
+use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -14,7 +16,8 @@ use gpui_component::{
     v_flex,
 };
 
-use super::data_editor::DataEditorPanel;
+use super::data_editor::{DataEditorPanel, ShowDataEditorEvent};
+use super::ddl::{DdlPanel, DdlPanelEvent};
 use super::editor::{EditorCursorPosition, EditorPanel, EditorPanelEvent, ExecuteQuery};
 use crate::credentials;
 use crate::query_session::QuerySessionStore;
@@ -23,7 +26,7 @@ use crate::ui::components::tab::{Tab, TabBar};
 use crate::ui::panels::connection::ConnectionPanel;
 use crate::ui::panels::diagram::{DiagramModel, DiagramPanel};
 use sqlab_drivers_core::{
-    ConnectionStatus, DataSourceConfig, TableInfo, manager::DataSourceManager,
+    ConnectionStatus, DataSourceConfig, DatabaseSchema, TableInfo, manager::DataSourceManager,
 };
 
 actions!(
@@ -60,6 +63,7 @@ enum EditorTab {
     Sql(Entity<EditorPanel>),
     Diagram(Entity<DiagramPanel>),
     Data(Entity<DataEditorPanel>),
+    Ddl(Entity<DdlPanel>),
 }
 
 #[derive(Clone, Copy)]
@@ -80,6 +84,7 @@ impl EditorTab {
                 .to_string(),
             EditorTab::Diagram(diagram) => diagram.read(cx).title().to_string(),
             EditorTab::Data(data_editor) => data_editor.read(cx).title(),
+            EditorTab::Ddl(ddl) => ddl.read(cx).title_text().to_string(),
         }
     }
 
@@ -88,12 +93,24 @@ impl EditorTab {
             EditorTab::Sql(_) => None,
             EditorTab::Diagram(_) => None,
             EditorTab::Data(_) => Some(Icon::new(IconName::File).path("icons/table.svg")),
+            EditorTab::Ddl(_) => Some(Icon::new(IconName::File).path("icons/table.svg")),
         }
     }
 
     fn as_sql(&self) -> Option<&Entity<EditorPanel>> {
         match self {
             EditorTab::Sql(editor) => Some(editor),
+            EditorTab::Diagram(_) | EditorTab::Data(_) | EditorTab::Ddl(_) => None,
+        }
+    }
+
+    fn connection_name(&self, cx: &App) -> Option<String> {
+        match self {
+            EditorTab::Sql(editor) => editor
+                .read(cx)
+                .selected_connection_name()
+                .map(str::to_string),
+            EditorTab::Ddl(ddl) => Some(ddl.read(cx).connection_name().to_string()),
             EditorTab::Diagram(_) | EditorTab::Data(_) => None,
         }
     }
@@ -103,23 +120,34 @@ impl EditorTab {
             EditorTab::Sql(editor) => editor.clone().into_any_element(),
             EditorTab::Diagram(diagram) => diagram.clone().into_any_element(),
             EditorTab::Data(data_editor) => data_editor.clone().into_any_element(),
+            EditorTab::Ddl(ddl) => ddl.clone().into_any_element(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+enum NavigationTarget {
+    File(PathBuf),
+    Ddl {
+        connection_name: String,
+        schema_name: String,
+        table_name: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct EditorNavigationPoint {
-    path: PathBuf,
+    target: NavigationTarget,
     row: usize,
     column: usize,
     cursor: usize,
-    visible_rows: Option<std::ops::Range<usize>>,
+    visible_rows: Option<Range<usize>>,
 }
 
 impl EditorNavigationPoint {
     fn new(path: PathBuf, cursor: EditorCursorPosition) -> Self {
         Self {
-            path,
+            target: NavigationTarget::File(path),
             row: cursor.row,
             column: cursor.column,
             cursor: cursor.cursor,
@@ -215,7 +243,7 @@ fn is_significant_movement(
     previous: &EditorNavigationPoint,
     current: &EditorNavigationPoint,
 ) -> bool {
-    if previous.path != current.path {
+    if previous.target != current.target {
         return true;
     }
 
@@ -283,7 +311,7 @@ impl EditorTabs {
 
         let data_source_manager = self.data_source_manager.clone();
         let editor = cx.new(|cx| EditorPanel::new(path, data_source_manager, window, cx));
-        self.subscribe_to_editor_navigation(&editor, cx);
+        self.subscribe_to_editor_navigation(&editor, window, cx);
         self.tabs.push(EditorTab::Sql(editor));
         self.active_ix = self.tabs.len() - 1;
         self.sync_active_connection(cx);
@@ -299,7 +327,7 @@ impl EditorTabs {
     ) {
         if let Some(ix) = self.tabs.iter().position(|tab| match tab {
             EditorTab::Diagram(diagram) => diagram.read(cx).title() == model.title,
-            EditorTab::Sql(_) | EditorTab::Data(_) => false,
+            EditorTab::Sql(_) | EditorTab::Data(_) | EditorTab::Ddl(_) => false,
         }) {
             self.active_ix = ix;
             self.sync_active_connection(cx);
@@ -320,12 +348,17 @@ impl EditorTabs {
         &mut self,
         config: DataSourceConfig,
         table: TableInfo,
+        where_clause: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(ix) = self.tabs.iter().position(|tab| match tab {
-            EditorTab::Data(data_editor) => data_editor.read(cx).matches_table(&config, &table),
-            EditorTab::Sql(_) | EditorTab::Diagram(_) => false,
+            EditorTab::Data(data_editor) => {
+                data_editor
+                    .read(cx)
+                    .matches_table(&config, &table, where_clause.as_deref(), cx)
+            }
+            EditorTab::Sql(_) | EditorTab::Diagram(_) | EditorTab::Ddl(_) => false,
         }) {
             self.active_ix = ix;
             self.sync_active_connection(cx);
@@ -334,13 +367,72 @@ impl EditorTabs {
         }
 
         let data_editor = cx.new(|cx| {
-            DataEditorPanel::new(config, table, self.activity_tracker.clone(), window, cx)
+            DataEditorPanel::new(
+                config,
+                table,
+                where_clause,
+                self.activity_tracker.clone(),
+                window,
+                cx,
+            )
         });
+        self.subscribe_to_data_editor_navigation(&data_editor, window, cx);
         self.tabs.push(EditorTab::Data(data_editor));
         self.active_ix = self.tabs.len() - 1;
         self.sync_active_connection(cx);
         self.scroll_to_active_tab(cx);
         cx.notify();
+    }
+
+    pub fn open_table_definition(
+        &mut self,
+        connection_name: String,
+        schema_name: String,
+        table_name: String,
+        ddl: String,
+        schema: Arc<DatabaseSchema>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.record_current_before_navigation(cx);
+
+        if let Some(ix) = self.tabs.iter().position(|tab| match tab {
+            EditorTab::Ddl(ddl) => {
+                ddl.read(cx)
+                    .matches_table(&connection_name, &schema_name, &table_name)
+            }
+            EditorTab::Sql(_) | EditorTab::Diagram(_) | EditorTab::Data(_) => false,
+        }) {
+            self.active_ix = ix;
+            self.sync_current_navigation_point(cx);
+            self.sync_active_connection(cx);
+            self.scroll_to_active_tab(cx);
+            cx.notify();
+            self.focus_active_tab(window, cx);
+            self.defer_focus_active_tab(window, cx);
+            return;
+        }
+
+        let ddl_panel = cx.new(|cx| {
+            DdlPanel::new(
+                connection_name,
+                schema_name,
+                table_name,
+                ddl,
+                schema,
+                window,
+                cx,
+            )
+        });
+        self.subscribe_to_ddl_navigation(&ddl_panel, window, cx);
+        self.tabs.push(EditorTab::Ddl(ddl_panel));
+        self.active_ix = self.tabs.len() - 1;
+        self.sync_current_navigation_point(cx);
+        self.sync_active_connection(cx);
+        self.scroll_to_active_tab(cx);
+        cx.notify();
+        self.focus_active_tab(window, cx);
+        self.defer_focus_active_tab(window, cx);
     }
 
     pub fn open_file_at_position(
@@ -469,7 +561,7 @@ impl EditorTabs {
             self.sync_active_connection(cx);
             self.scroll_to_active_tab(cx);
             cx.notify();
-            self.focus_active_editor(window, cx);
+            self.focus_active_tab(window, cx);
         }
     }
 
@@ -486,7 +578,7 @@ impl EditorTabs {
             self.sync_active_connection(cx);
             self.scroll_to_active_tab(cx);
             cx.notify();
-            self.focus_active_editor(window, cx);
+            self.focus_active_tab(window, cx);
         }
     }
 
@@ -509,7 +601,7 @@ impl EditorTabs {
         self.sync_active_connection(cx);
         self.scroll_to_active_tab(cx);
         cx.notify();
-        self.focus_active_editor(window, cx);
+        self.focus_active_tab(window, cx);
     }
 
     fn reorder_tab(&mut self, from_ix: usize, to_ix: usize, cx: &mut Context<Self>) {
@@ -533,27 +625,113 @@ impl EditorTabs {
     fn subscribe_to_editor_navigation(
         &mut self,
         editor: &Entity<EditorPanel>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let subscription =
-            cx.subscribe(
-                editor,
-                |this, editor, event: &EditorPanelEvent, cx| match event {
-                    EditorPanelEvent::CursorMoved => {
-                        this.record_editor_movement(&editor, cx);
-                    }
-                },
-            );
+        let subscription = cx.subscribe_in(
+            editor,
+            window,
+            |this, editor, event: &EditorPanelEvent, window, cx| match event {
+                EditorPanelEvent::CursorMoved => {
+                    this.record_editor_movement(&editor, cx);
+                }
+                EditorPanelEvent::OpenTableDefinition {
+                    connection_name,
+                    schema_name,
+                    table_name,
+                    ddl,
+                } => {
+                    let schema = this.schema_for_ddl(&editor, cx);
+                    this.open_table_definition(
+                        connection_name.clone(),
+                        schema_name.clone(),
+                        table_name.clone(),
+                        ddl.clone(),
+                        schema,
+                        window,
+                        cx,
+                    );
+                }
+            },
+        );
         self.navigation_subscriptions.push(subscription);
     }
 
+    fn subscribe_to_ddl_navigation(
+        &mut self,
+        ddl_panel: &Entity<DdlPanel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.subscribe_in(
+            ddl_panel,
+            window,
+            |this, ddl_entity, event: &DdlPanelEvent, window, cx| match event {
+                DdlPanelEvent::OpenTableDefinition {
+                    connection_name,
+                    schema_name,
+                    table_name,
+                    ddl,
+                } => {
+                    let schema = ddl_entity.read(cx).schema().clone();
+                    this.open_table_definition(
+                        connection_name.clone(),
+                        schema_name.clone(),
+                        table_name.clone(),
+                        ddl.clone(),
+                        schema,
+                        window,
+                        cx,
+                    );
+                }
+            },
+        );
+        self.navigation_subscriptions.push(subscription);
+    }
+
+    fn subscribe_to_data_editor_navigation(
+        &mut self,
+        data_editor: &Entity<DataEditorPanel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.subscribe_in(
+            data_editor,
+            window,
+            |_this, _data_editor, event: &ShowDataEditorEvent, _window, cx| {
+                cx.emit(event.clone());
+            },
+        );
+        self.navigation_subscriptions.push(subscription);
+    }
+
+    fn schema_for_ddl(&self, editor: &Entity<EditorPanel>, cx: &App) -> Arc<DatabaseSchema> {
+        editor
+            .read(cx)
+            .schema_cache()
+            .map(|(_, schema)| schema.clone())
+            .unwrap_or_else(|| Arc::new(DatabaseSchema::default()))
+    }
+
     fn active_navigation_point(&self, cx: &App) -> Option<EditorNavigationPoint> {
-        self.active_editor().map(|editor| {
-            EditorNavigationPoint::new(
+        match self.tabs.get(self.active_ix) {
+            Some(EditorTab::Sql(editor)) => Some(EditorNavigationPoint::new(
                 editor.read(cx).path().clone(),
                 editor.read(cx).cursor_position(cx),
-            )
-        })
+            )),
+            Some(EditorTab::Ddl(ddl)) => Some(EditorNavigationPoint {
+                target: NavigationTarget::Ddl {
+                    connection_name: ddl.read(cx).connection_name().to_string(),
+                    schema_name: ddl.read(cx).schema_name().to_string(),
+                    table_name: ddl.read(cx).table_name().to_string(),
+                },
+                row: 0,
+                column: 0,
+                cursor: 0,
+                visible_rows: None,
+            }),
+            _ => None,
+        }
     }
 
     fn record_current_before_navigation(&mut self, cx: &App) {
@@ -616,24 +794,59 @@ impl EditorTabs {
         cx: &mut Context<Self>,
     ) {
         self.suppress_navigation_recording = true;
-        self.open_file_internal(target.path.clone(), window, cx);
-        if let Some(editor) = self.active_editor() {
-            editor.update(cx, |editor, cx| {
-                editor.go_to_position(target.row + 1, target.column, window, cx);
-            });
+        match &target.target {
+            NavigationTarget::File(path) => {
+                self.open_file_internal(path.clone(), window, cx);
+                if let Some(editor) = self.active_editor() {
+                    editor.update(cx, |editor, cx| {
+                        editor.go_to_position(target.row + 1, target.column, window, cx);
+                    });
+                }
+            }
+            NavigationTarget::Ddl {
+                connection_name,
+                schema_name,
+                table_name,
+            } => {
+                if let Some(ix) = self.tabs.iter().position(|tab| match tab {
+                    EditorTab::Ddl(ddl) => {
+                        ddl.read(cx)
+                            .matches_table(connection_name, schema_name, table_name)
+                    }
+                    EditorTab::Sql(_) | EditorTab::Diagram(_) | EditorTab::Data(_) => false,
+                }) {
+                    self.active_ix = ix;
+                }
+            }
         }
         self.suppress_navigation_recording = false;
         self.navigation_history.sync_current(Some(target));
         self.sync_active_connection(cx);
         cx.notify();
-        self.focus_active_editor(window, cx);
+        self.focus_active_tab(window, cx);
     }
 
-    fn focus_active_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor() {
-            let focus_handle = editor.read(cx).editor_focus_handle(cx);
+    fn focus_active_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(focus_handle) = self.active_tab_focus_handle(cx) {
             window.focus(&focus_handle, cx);
         }
+    }
+
+    fn active_tab_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        match self.tabs.get(self.active_ix) {
+            Some(EditorTab::Sql(editor)) => Some(editor.read(cx).editor_focus_handle(cx)),
+            Some(EditorTab::Ddl(ddl)) => Some(ddl.read(cx).focus_handle(cx)),
+            Some(EditorTab::Diagram(_) | EditorTab::Data(_)) | None => None,
+        }
+    }
+
+    fn defer_focus_active_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(focus_handle) = self.active_tab_focus_handle(cx) else {
+            return;
+        };
+        cx.defer_in(window, move |_, window, cx| {
+            window.focus(&focus_handle, cx);
+        });
     }
 
     fn scroll_to_active_tab(&self, cx: &App) {
@@ -765,12 +978,10 @@ impl EditorTabs {
     }
 
     fn sync_active_connection(&self, cx: &mut Context<Self>) {
-        let active_name = self.active_editor().and_then(|editor| {
-            editor
-                .read(cx)
-                .selected_connection_name()
-                .map(str::to_string)
-        });
+        let active_name = self
+            .tabs
+            .get(self.active_ix)
+            .and_then(|tab| tab.connection_name(cx));
         self.data_source_manager.update(cx, |manager, cx| {
             manager.set_active(active_name);
             cx.notify();
@@ -779,6 +990,7 @@ impl EditorTabs {
 }
 
 impl EventEmitter<PanelEvent> for EditorTabs {}
+impl EventEmitter<ShowDataEditorEvent> for EditorTabs {}
 
 impl EditorTabs {
     pub fn is_zoomed(&self) -> bool {
@@ -1238,7 +1450,7 @@ mod tests {
 
     fn point(path: &str, row: usize) -> EditorNavigationPoint {
         EditorNavigationPoint {
-            path: PathBuf::from(path),
+            target: NavigationTarget::File(PathBuf::from(path)),
             row,
             column: 0,
             cursor: row * 10,

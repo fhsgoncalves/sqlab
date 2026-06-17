@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::schema_cache;
 use sqlab_drivers_core::manager::DataSourceManager;
-use sqlab_drivers_core::{DataSourceConfig, Database, DatabaseSchema, TableInfo};
+use sqlab_drivers_core::{DataSourceConfig, Database, DatabaseSchema, TableInfo, TableKind};
 
 const SQL_KEYWORDS: &[&str] = &[
     "select",
@@ -236,6 +236,52 @@ struct TableRef {
 pub struct SqlDiagnostic {
     pub range: std::ops::Range<usize>,
     pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableDefinitionTarget {
+    pub schema_name: String,
+    pub table_name: String,
+    pub token_range: std::ops::Range<usize>,
+}
+
+pub fn table_definition_target_at(
+    text: &str,
+    offset: usize,
+    schema: &DatabaseSchema,
+    selected_search_path: Option<&str>,
+    config_schema: Option<&str>,
+) -> Option<TableDefinitionTarget> {
+    let tokens = positioned_sql_tokens(text);
+    let token_ix = tokens
+        .iter()
+        .position(|token| token.start <= offset && offset <= token.end)?;
+    let token = tokens.get(token_ix)?;
+
+    if is_reserved_token(&token.text, schema) || is_operator_token(&token.text) {
+        return None;
+    }
+
+    let is_contextual_table_ref = is_table_definition_reference(&tokens, token_ix);
+    let is_schema_qualified = token.text.contains('.');
+    if !is_contextual_table_ref && !is_schema_qualified {
+        return None;
+    }
+
+    let (schema_hint, table_name) = split_table_name(&token.text);
+    let table = resolve_table_definition_table(
+        schema,
+        schema_hint.as_deref(),
+        &table_name,
+        selected_search_path,
+        config_schema,
+    )?;
+
+    Some(TableDefinitionTarget {
+        schema_name: table.schema.clone(),
+        table_name: table.name.clone(),
+        token_range: token.start..token.end,
+    })
 }
 
 pub fn sql_diagnostics_at(
@@ -1051,6 +1097,74 @@ fn is_table_reference_keyword(tokens: &[String], ix: usize) -> bool {
     matches!(tokens.get(ix).map(String::as_str), Some("from" | "join"))
 }
 
+fn is_table_definition_reference(tokens: &[PositionedToken], ix: usize) -> bool {
+    let token_texts = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>();
+
+    match token_texts.as_slice() {
+        _ if ix > 0
+            && matches!(
+                token_texts.get(ix - 1),
+                Some(&"from" | &"join" | &"update" | &"references")
+            ) =>
+        {
+            true
+        }
+        _ if ix > 1
+            && token_texts.get(ix - 2) == Some(&"insert")
+            && token_texts.get(ix - 1) == Some(&"into") =>
+        {
+            true
+        }
+        _ if ix > 1
+            && token_texts.get(ix - 2) == Some(&"delete")
+            && token_texts.get(ix - 1) == Some(&"from") =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn resolve_table_definition_table<'a>(
+    schema: &'a DatabaseSchema,
+    schema_hint: Option<&str>,
+    table_name: &str,
+    selected_search_path: Option<&str>,
+    config_schema: Option<&str>,
+) -> Option<&'a TableInfo> {
+    if let Some(schema_hint) = schema_hint {
+        return schema.tables.iter().find(|table| {
+            table.schema.eq_ignore_ascii_case(schema_hint)
+                && table.name.eq_ignore_ascii_case(table_name)
+                && matches!(table.kind, TableKind::Table | TableKind::ForeignTable)
+        });
+    }
+
+    for schema_name in [selected_search_path, config_schema, Some("public")]
+        .into_iter()
+        .flatten()
+        .filter(|schema_name| !schema_name.trim().is_empty())
+    {
+        if let Some(table) = schema.tables.iter().find(|table| {
+            table.schema.eq_ignore_ascii_case(schema_name)
+                && table.name.eq_ignore_ascii_case(table_name)
+                && matches!(table.kind, TableKind::Table | TableKind::ForeignTable)
+        }) {
+            return Some(table);
+        }
+    }
+
+    let mut matches = schema.tables.iter().filter(|table| {
+        table.name.eq_ignore_ascii_case(table_name)
+            && matches!(table.kind, TableKind::Table | TableKind::ForeignTable)
+    });
+    let table = matches.next()?;
+    matches.next().is_none().then_some(table)
+}
+
 fn alias_token(token: Option<&String>, schema: &DatabaseSchema) -> Option<String> {
     let token = token?;
     (!is_reserved_token(token, schema) && token != "," && token != ".").then(|| token.clone())
@@ -1058,10 +1172,20 @@ fn alias_token(token: Option<&String>, schema: &DatabaseSchema) -> Option<String
 
 fn split_table_name(token: &str) -> (Option<String>, String) {
     if let Some((schema, table)) = token.rsplit_once('.') {
-        (Some(schema.to_string()), table.to_string())
+        (
+            Some(unquote_identifier(schema).to_string()),
+            unquote_identifier(table).to_string(),
+        )
     } else {
-        (None, token.to_string())
+        (None, unquote_identifier(token).to_string())
     }
+}
+
+fn unquote_identifier(identifier: &str) -> &str {
+    identifier
+        .strip_prefix('"')
+        .and_then(|identifier| identifier.strip_suffix('"'))
+        .unwrap_or(identifier)
 }
 
 fn sql_tokens(text: &str) -> Vec<String> {
@@ -1120,6 +1244,26 @@ struct PositionedToken {
     end: usize,
 }
 
+fn consume_quoted_identifier(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    token: &mut String,
+) {
+    while let Some((_, next)) = chars.next() {
+        token.push(next.to_ascii_lowercase());
+        if next == '"' {
+            if chars.peek().is_some_and(|(_, peek)| *peek == '"') {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
 fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
     let mut tokens = Vec::new();
     let mut token = String::new();
@@ -1143,6 +1287,55 @@ fn positioned_sql_tokens(text: &str) -> Vec<PositionedToken> {
                         break;
                     }
                 }
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            if !token.is_empty() {
+                tokens.push(PositionedToken {
+                    text: std::mem::take(&mut token),
+                    start: token_start,
+                    end: ix,
+                });
+            }
+            token_start = ix;
+            token.push(ch);
+            consume_quoted_identifier(&mut chars, &mut token);
+
+            while chars.peek().is_some_and(|(_, peek)| *peek == '.') {
+                chars.next();
+
+                if chars.peek().is_some_and(|(_, next)| *next == '"') {
+                    token.push('.');
+                    chars.next();
+                    token.push('"');
+                    consume_quoted_identifier(&mut chars, &mut token);
+                } else if chars
+                    .peek()
+                    .is_some_and(|(_, next)| is_identifier_char(*next))
+                {
+                    token.push('.');
+                    while chars
+                        .peek()
+                        .is_some_and(|(_, next)| is_identifier_char(*next) || *next == '.')
+                    {
+                        if let Some((_, next)) = chars.next() {
+                            token.push(next.to_ascii_lowercase());
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            if !token.is_empty() {
+                let end_pos = chars.peek().map(|(ix, _)| *ix).unwrap_or(text.len());
+                tokens.push(PositionedToken {
+                    text: std::mem::take(&mut token),
+                    start: token_start,
+                    end: end_pos,
+                });
             }
             continue;
         }
@@ -1718,6 +1911,128 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["id", "customer_id", "created_at", "status"]
         );
+    }
+
+    #[test]
+    fn resolves_table_definition_for_from_and_join_targets() {
+        let schema = test_schema();
+        let text = "select * from customers c join orders o on o.customer_id = c.id";
+
+        let customers =
+            table_definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
+                .unwrap();
+        let orders =
+            table_definition_target_at(text, text.find("orders").unwrap(), &schema, None, None)
+                .unwrap();
+
+        assert_eq!(customers.schema_name, "public");
+        assert_eq!(customers.table_name, "customers");
+        assert_eq!(orders.schema_name, "public");
+        assert_eq!(orders.table_name, "orders");
+    }
+
+    #[test]
+    fn resolves_table_definition_for_dml_targets() {
+        let schema = test_schema();
+
+        for text in [
+            "update customers set name = 'A'",
+            "insert into customers (name) values ('A')",
+            "delete from customers where id = 1",
+        ] {
+            let target = table_definition_target_at(
+                text,
+                text.find("customers").unwrap(),
+                &schema,
+                None,
+                None,
+            )
+            .unwrap();
+
+            assert_eq!(target.table_name, "customers");
+        }
+    }
+
+    #[test]
+    fn resolves_schema_qualified_table_definition() {
+        let schema = test_schema();
+        let text = "select public.customers.id from public.customers";
+
+        let target = table_definition_target_at(
+            text,
+            text.rfind("public.customers").unwrap(),
+            &schema,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(target.schema_name, "public");
+        assert_eq!(target.table_name, "customers");
+    }
+
+    #[test]
+    fn resolves_quoted_reference_table_definition() {
+        let schema = test_schema();
+        let text = r#"CREATE TABLE "public".orders (
+    customer_id uuid NOT NULL,
+    CONSTRAINT orders_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES "public".customers (id)
+);"#;
+
+        let target =
+            table_definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
+                .unwrap();
+
+        assert_eq!(target.schema_name, "public");
+        assert_eq!(target.table_name, "customers");
+    }
+
+    #[test]
+    fn does_not_resolve_ambiguous_unqualified_table_definition_without_search_path() {
+        let mut schema = test_schema();
+        for table in &mut schema.tables {
+            if table.name == "customers" {
+                table.schema = "app".to_string();
+            }
+        }
+        schema.tables.push(TableInfo {
+            schema: "archive".to_string(),
+            name: "customers".to_string(),
+            kind: TableKind::Table,
+            comment: None,
+            columns: Vec::new(),
+        });
+        let text = "select * from customers";
+
+        assert!(
+            table_definition_target_at(text, text.find("customers").unwrap(), &schema, None, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn search_path_disambiguates_unqualified_table_definition() {
+        let mut schema = test_schema();
+        schema.tables.push(TableInfo {
+            schema: "archive".to_string(),
+            name: "customers".to_string(),
+            kind: TableKind::Table,
+            comment: None,
+            columns: Vec::new(),
+        });
+        let text = "select * from customers";
+
+        let target = table_definition_target_at(
+            text,
+            text.find("customers").unwrap(),
+            &schema,
+            Some("archive"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(target.schema_name, "archive");
+        assert_eq!(target.table_name, "customers");
     }
 
     fn test_schema() -> DatabaseSchema {

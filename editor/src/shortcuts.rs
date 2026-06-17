@@ -14,6 +14,7 @@ pub enum ShortcutAction {
     ExecuteQuery,
     SaveFile,
     FormatQuery,
+    GoToDefinition,
     ToggleCommentLines,
     IndentLines,
     OutdentLines,
@@ -180,6 +181,16 @@ pub const ALL_SHORTCUTS: &[ShortcutDefinition] = &[
         "Editor",
         "cmd-shift-h",
         "ctrl-shift-h",
+        None,
+        true
+    ),
+    shortcut!(
+        GoToDefinition,
+        "go_to_definition",
+        "Go to Definition",
+        "Editor",
+        "cmd-b",
+        "ctrl-b",
         None,
         true
     ),
@@ -526,20 +537,20 @@ pub const ALL_SHORTCUTS: &[ShortcutDefinition] = &[
     shortcut!(
         ToggleLeftDock,
         "toggle_left_dock",
-        "Toggle Left Panel",
+        "Toggle File Panel",
         "Panels",
-        "cmd-b",
-        "ctrl-b",
+        "cmd-1",
+        "ctrl-1",
         None,
         true
     ),
     shortcut!(
         ToggleRightDock,
         "toggle_right_dock",
-        "Toggle Right Panel",
+        "Toggle Connection Panel",
         "Panels",
-        "cmd-shift-b",
-        "ctrl-shift-b",
+        "cmd-2",
+        "ctrl-2",
         None,
         true
     ),

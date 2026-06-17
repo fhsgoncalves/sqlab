@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write as FmtWrite,
     io::{Cursor, Write},
+    rc::Rc,
 };
 
 use chrono::Local;
@@ -18,7 +19,7 @@ use gpui_component::{
     dock::{DockArea, DockPlacement, Panel, PanelControl, PanelEvent, PanelState},
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::{DropdownMenu as _, PopupMenuItem},
+    menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
     table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState},
     v_flex,
 };
@@ -27,9 +28,10 @@ use crate::drivers::create_configured_data_source;
 use crate::schema_cache;
 use crate::ui::activity::ActivityTracker;
 use crate::ui::components::tab::{Tab, TabBar};
+use crate::ui::panels::file_editor::data_editor::ShowDataEditorEvent;
 use sqlab_drivers_core::{
-    ColumnMetadata, DataSourceConfig, DataSourceError, Database, QueryResult, TableEditBatch,
-    TableEditRow, TableEditValue, TableInfo, TableKind,
+    ColumnInfo, ColumnMetadata, DataSourceConfig, DataSourceError, Database, ForeignKeyInfo,
+    QueryResult, TableEditBatch, TableEditRow, TableEditValue, TableInfo, TableKind,
 };
 
 actions!(
@@ -144,6 +146,7 @@ pub struct ResultsTableDelegate {
     selected_cells: BTreeSet<(usize, usize)>,
     selection_anchor: Option<(usize, usize)>,
     selection_cursor: Option<(usize, usize)>,
+    fk_navigation: Option<FkNavigationContext>,
 }
 
 #[derive(Clone)]
@@ -151,6 +154,23 @@ struct EditingCell {
     row_ix: usize,
     col_ix: usize,
     input: gpui::Entity<InputState>,
+}
+
+pub(crate) type FkNavigationHandler = Rc<dyn Fn(ShowDataEditorEvent, &mut Window, &mut App)>;
+
+#[derive(Clone)]
+pub(crate) struct FkNavigationContext {
+    config: DataSourceConfig,
+    source_table: TableInfo,
+    foreign_keys: Vec<ForeignKeyInfo>,
+    tables: Vec<TableInfo>,
+    handler: FkNavigationHandler,
+}
+
+#[derive(Clone)]
+struct ReferencedRowsRequest {
+    event: ShowDataEditorEvent,
+    handler: FkNavigationHandler,
 }
 
 #[derive(Clone, Debug)]
@@ -344,6 +364,28 @@ impl TableDelegate for ResultsTableDelegate {
             .iter()
             .filter_map(|&ix| self.row_ids.get(ix).copied())
             .collect();
+    }
+
+    fn context_menu_for_cell(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let Some(request) = self.referenced_rows_request(row_ix, col_ix) else {
+            return menu;
+        };
+        let event = request.event.clone();
+        let handler = request.handler.clone();
+        menu.item(
+            PopupMenuItem::new("Go to referenced rows")
+                .icon(IconName::ArrowRight)
+                .on_click(move |_, window, cx| {
+                    handler(event.clone(), window, cx);
+                }),
+        )
     }
 
     fn render_td(
@@ -576,7 +618,13 @@ impl ResultsTableDelegate {
             selected_cells: BTreeSet::new(),
             selection_anchor: None,
             selection_cursor: None,
+            fk_navigation: None,
         }
+    }
+
+    pub(crate) fn with_fk_navigation(mut self, fk_navigation: Option<FkNavigationContext>) -> Self {
+        self.fk_navigation = fk_navigation;
+        self
     }
 
     fn row_id(&self, row_ix: usize) -> usize {
@@ -1049,6 +1097,71 @@ impl ResultsTableDelegate {
             }
         }
     }
+
+    fn referenced_rows_request(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+    ) -> Option<ReferencedRowsRequest> {
+        let context = self.fk_navigation.as_ref()?;
+        if self.cell_is_null(row_ix, col_ix) {
+            return None;
+        }
+        let clicked_column = self.columns.get(col_ix)?;
+
+        let matching_foreign_keys = context
+            .foreign_keys
+            .iter()
+            .filter(|fk| {
+                fk.source_schema == context.source_table.schema
+                    && fk.source_table == context.source_table.name
+                    && fk
+                        .source_columns
+                        .iter()
+                        .any(|column| column == clicked_column)
+                    && fk.source_columns.len() == fk.target_columns.len()
+            })
+            .collect::<Vec<_>>();
+        let [foreign_key] = matching_foreign_keys.as_slice() else {
+            return None;
+        };
+
+        let source_indices = foreign_key
+            .source_columns
+            .iter()
+            .map(|source_column| unique_column_index(&self.columns, source_column))
+            .collect::<Option<Vec<_>>>()?;
+        let values = source_indices
+            .iter()
+            .map(|&source_col_ix| {
+                if self.cell_is_null(row_ix, source_col_ix) {
+                    None
+                } else {
+                    Some(self.raw_cell_value(row_ix, source_col_ix))
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        let target_table = context.tables.iter().find(|table| {
+            table.schema == foreign_key.target_schema && table.name == foreign_key.target_table
+        })?;
+        let where_clause = referenced_rows_where_clause(
+            context.config.db_type,
+            target_table,
+            &foreign_key.target_columns,
+            &values,
+        )?;
+
+        Some(ReferencedRowsRequest {
+            event: ShowDataEditorEvent {
+                config: context.config.clone(),
+                schema: target_table.schema.clone(),
+                table: target_table.name.clone(),
+                where_clause: Some(where_clause),
+            },
+            handler: context.handler.clone(),
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -1072,6 +1185,42 @@ struct ZoomedSideDocks {
 }
 
 impl EventEmitter<PanelEvent> for ResultPanel {}
+impl EventEmitter<ShowDataEditorEvent> for ResultPanel {}
+
+impl FkNavigationContext {
+    pub(crate) fn from_schema_cache(
+        config: &DataSourceConfig,
+        source_table: &TableInfo,
+        handler: FkNavigationHandler,
+    ) -> Option<Self> {
+        let cache_key = schema_cache::cache_key(config);
+        let schema = schema_cache::load(&cache_key).ok().flatten()?;
+        Self::from_schema(config.clone(), source_table.clone(), &schema, handler)
+    }
+
+    fn from_schema(
+        config: DataSourceConfig,
+        source_table: TableInfo,
+        schema: &sqlab_drivers_core::DatabaseSchema,
+        handler: FkNavigationHandler,
+    ) -> Option<Self> {
+        let foreign_keys = schema
+            .foreign_keys
+            .iter()
+            .filter(|fk| {
+                fk.source_schema == source_table.schema && fk.source_table == source_table.name
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        (!foreign_keys.is_empty()).then(|| Self {
+            config,
+            source_table,
+            foreign_keys,
+            tables: schema.tables.clone(),
+            handler,
+        })
+    }
+}
 
 impl ResultPanel {
     pub fn new(
@@ -1287,6 +1436,15 @@ impl ResultPanel {
                 execution.config.as_ref(),
                 &execution.result.columns,
             );
+            let fk_navigation =
+                fk_navigation_context_for_execution(&execution.query, execution.config.as_ref(), {
+                    let panel = cx.entity().downgrade();
+                    Rc::new(move |event, _window, cx| {
+                        let _ = panel.update(cx, |_panel, cx| {
+                            cx.emit(event);
+                        });
+                    })
+                });
             ResultsTableDelegate::from_query_state(
                 execution.result.columns.clone(),
                 enriched_metadata,
@@ -1298,6 +1456,7 @@ impl ResultPanel {
                 execution.dirty_cells.clone(),
                 editable_table,
             )
+            .with_fk_navigation(fk_navigation)
         };
 
         self.table_state = cx.new(|cx| {
@@ -2760,6 +2919,19 @@ fn editable_table_for_execution(
     EditableTable::from_table_result_columns(table, result_columns)
 }
 
+fn fk_navigation_context_for_execution(
+    query: &str,
+    config: Option<&DataSourceConfig>,
+    handler: FkNavigationHandler,
+) -> Option<FkNavigationContext> {
+    let config = config?;
+    let table_ref = single_table_select(query)?;
+    let cache_key = schema_cache::cache_key(config);
+    let schema = schema_cache::load(&cache_key).ok().flatten()?;
+    let table = find_schema_table(&schema.tables, config, &table_ref)?.clone();
+    FkNavigationContext::from_schema(config.clone(), table, &schema, handler)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedTableRef {
     schema: Option<String>,
@@ -3334,6 +3506,68 @@ fn quote_sql_identifier(identifier: &str) -> String {
         .join(".")
 }
 
+fn referenced_rows_where_clause(
+    database: Database,
+    target_table: &TableInfo,
+    target_columns: &[String],
+    values: &[String],
+) -> Option<String> {
+    if target_columns.is_empty() || target_columns.len() != values.len() {
+        return None;
+    }
+
+    let clauses = target_columns
+        .iter()
+        .zip(values)
+        .map(|(column, value)| {
+            let target_column = target_table
+                .columns
+                .iter()
+                .find(|info| info.name == *column);
+            format!(
+                "{} = {}",
+                quote_identifier_for_database(database, column),
+                sql_value_literal(value, target_column)
+            )
+        })
+        .collect::<Vec<_>>();
+    Some(clauses.join(" AND "))
+}
+
+fn quote_identifier_for_database(database: Database, identifier: &str) -> String {
+    match database {
+        Database::MySql => format!("`{}`", identifier.replace('`', "``")),
+        Database::Postgres | Database::SQLite | Database::DuckDB | Database::Databend => {
+            format!("\"{}\"", identifier.replace('"', "\"\""))
+        }
+    }
+}
+
+fn sql_value_literal(value: &str, metadata: Option<&ColumnInfo>) -> String {
+    let data_type = metadata
+        .map(|metadata| metadata.data_type.to_ascii_lowercase())
+        .unwrap_or_default();
+    if is_numeric_data_type(&data_type) && value.parse::<f64>().is_ok() {
+        return value.to_string();
+    }
+    if matches!(data_type.as_str(), "bool" | "boolean")
+        && matches!(value.to_ascii_lowercase().as_str(), "true" | "false")
+    {
+        return value.to_ascii_uppercase();
+    }
+
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn unique_column_index(columns: &[String], column: &str) -> Option<usize> {
+    let mut matches = columns
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, candidate)| (candidate == column).then_some(ix));
+    let ix = matches.next()?;
+    matches.next().is_none().then_some(ix)
+}
+
 fn sql_literal(value: &str, metadata: Option<&ColumnMetadata>) -> String {
     if value.is_empty() {
         return "NULL".to_string();
@@ -3399,6 +3633,59 @@ mod tests {
         }
     }
 
+    fn column(name: &str, data_type: &str, is_fk: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.into(),
+            data_type: data_type.into(),
+            enum_values: Vec::new(),
+            nullable: false,
+            ordinal: 0,
+            is_pk: false,
+            is_fk,
+            default_value: None,
+            is_generated: false,
+            generation_expression: None,
+            comment: None,
+        }
+    }
+
+    fn table(schema: &str, name: &str, columns: Vec<ColumnInfo>) -> TableInfo {
+        TableInfo {
+            schema: schema.into(),
+            name: name.into(),
+            kind: TableKind::Table,
+            columns,
+            comment: None,
+        }
+    }
+
+    fn fk_context(
+        source_table: TableInfo,
+        target_table: TableInfo,
+        source_columns: Vec<&str>,
+        target_columns: Vec<&str>,
+    ) -> FkNavigationContext {
+        FkNavigationContext {
+            config: DataSourceConfig {
+                name: "local".into(),
+                db_type: Database::Postgres,
+                ..DataSourceConfig::default()
+            },
+            source_table: source_table.clone(),
+            foreign_keys: vec![ForeignKeyInfo {
+                name: "fk_test".into(),
+                source_schema: source_table.schema.clone(),
+                source_table: source_table.name.clone(),
+                source_columns: source_columns.into_iter().map(str::to_string).collect(),
+                target_schema: target_table.schema.clone(),
+                target_table: target_table.name.clone(),
+                target_columns: target_columns.into_iter().map(str::to_string).collect(),
+            }],
+            tables: vec![source_table, target_table],
+            handler: Rc::new(|_, _, _| {}),
+        }
+    }
+
     #[test]
     fn renders_sql_inserts_with_identifiers_and_literals() {
         assert_eq!(
@@ -3427,6 +3714,134 @@ mod tests {
     fn writes_xlsx_zip_payload() {
         let bytes = render_xlsx(&sample_data()).expect("xlsx should render");
         assert!(bytes.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn builds_referenced_rows_where_clause_with_quoted_literals() {
+        let target = table(
+            "public",
+            "users",
+            vec![
+                column("id", "int4", false),
+                column("tenant", "text", false),
+                column("active", "boolean", false),
+            ],
+        );
+
+        assert_eq!(
+            referenced_rows_where_clause(
+                Database::Postgres,
+                &target,
+                &["id".into(), "tenant".into(), "active".into()],
+                &["42".into(), "Ada's team".into(), "true".into()],
+            ),
+            Some("\"id\" = 42 AND \"tenant\" = 'Ada''s team' AND \"active\" = TRUE".into())
+        );
+        assert_eq!(
+            referenced_rows_where_clause(
+                Database::MySql,
+                &target,
+                &["tenant".into()],
+                &["north".into()],
+            ),
+            Some("`tenant` = 'north'".into())
+        );
+    }
+
+    #[test]
+    fn resolves_simple_foreign_key_navigation_request() {
+        let source = table("public", "orders", vec![column("user_id", "int4", true)]);
+        let target = table("public", "users", vec![column("id", "int4", false)]);
+        let context = fk_context(source, target, vec!["user_id"], vec!["id"]);
+        let delegate = ResultsTableDelegate::from_query(
+            vec!["user_id".into()],
+            vec![ColumnMetadata {
+                name: "user_id".into(),
+                data_type: "int4".into(),
+                is_pk: false,
+                is_fk: true,
+            }],
+            vec![vec!["7".into()]],
+            vec![vec![false]],
+            None,
+        )
+        .with_fk_navigation(Some(context));
+
+        let request = delegate
+            .referenced_rows_request(0, 0)
+            .expect("FK cell should resolve");
+        assert_eq!(request.event.schema, "public");
+        assert_eq!(request.event.table, "users");
+        assert_eq!(request.event.where_clause, Some("\"id\" = 7".into()));
+    }
+
+    #[test]
+    fn resolves_composite_foreign_key_navigation_request() {
+        let source = table(
+            "public",
+            "orders",
+            vec![
+                column("tenant_id", "int4", true),
+                column("customer_id", "int4", true),
+            ],
+        );
+        let target = table(
+            "public",
+            "customers",
+            vec![
+                column("tenant_id", "int4", false),
+                column("id", "int4", false),
+            ],
+        );
+        let context = fk_context(
+            source,
+            target,
+            vec!["tenant_id", "customer_id"],
+            vec!["tenant_id", "id"],
+        );
+        let delegate = ResultsTableDelegate::from_query(
+            vec!["tenant_id".into(), "customer_id".into()],
+            Vec::new(),
+            vec![vec!["10".into(), "25".into()]],
+            vec![vec![false, false]],
+            None,
+        )
+        .with_fk_navigation(Some(context));
+
+        let request = delegate
+            .referenced_rows_request(0, 1)
+            .expect("composite FK cell should resolve");
+        assert_eq!(
+            request.event.where_clause,
+            Some("\"tenant_id\" = 10 AND \"id\" = 25".into())
+        );
+    }
+
+    #[test]
+    fn hides_foreign_key_navigation_for_null_or_ambiguous_values() {
+        let source = table("public", "orders", vec![column("user_id", "int4", true)]);
+        let target = table("public", "users", vec![column("id", "int4", false)]);
+        let context = fk_context(source, target, vec!["user_id"], vec!["id"]);
+
+        let null_delegate = ResultsTableDelegate::from_query(
+            vec!["user_id".into()],
+            Vec::new(),
+            vec![vec![String::new()]],
+            vec![vec![true]],
+            None,
+        )
+        .with_fk_navigation(Some(context.clone()));
+        assert!(null_delegate.referenced_rows_request(0, 0).is_none());
+
+        let duplicate_delegate = ResultsTableDelegate::from_query(
+            vec!["user_id".into(), "user_id".into()],
+            Vec::new(),
+            vec![vec!["1".into(), "1".into()]],
+            vec![vec![false, false]],
+            None,
+        )
+        .with_fk_navigation(Some(context));
+        assert!(duplicate_delegate.referenced_rows_request(0, 0).is_none());
     }
 
     #[test]

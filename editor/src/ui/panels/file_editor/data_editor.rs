@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, Modifiers, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, rgb,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, Modifiers, ParentElement, Render, StatefulInteractiveElement,
+    Styled, Window, div, prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, Sizable,
@@ -22,9 +22,9 @@ use crate::ui::activity::ActivityTracker;
 use crate::ui::panels::result::{
     CopyResultSelection, EditResultCell, EditableTable, ExtendResultSelectionDown,
     ExtendResultSelectionLeft, ExtendResultSelectionRight, ExtendResultSelectionUp,
-    ResultsTableDelegate, SelectResultCellDown, SelectResultCellLeft, SelectResultCellRight,
-    SelectResultCellUp, SelectResultFirstCellColumn, SelectResultLastCellColumn,
-    set_selected_result_cell, sync_horizontal_scroll_to_col,
+    FkNavigationContext, ResultsTableDelegate, SelectResultCellDown, SelectResultCellLeft,
+    SelectResultCellRight, SelectResultCellUp, SelectResultFirstCellColumn,
+    SelectResultLastCellColumn, set_selected_result_cell, sync_horizontal_scroll_to_col,
 };
 
 const DEFAULT_LIMIT: usize = 1000;
@@ -34,6 +34,7 @@ pub struct ShowDataEditorEvent {
     pub config: DataSourceConfig,
     pub schema: String,
     pub table: String,
+    pub where_clause: Option<String>,
 }
 
 pub struct DataEditorPanel {
@@ -51,18 +52,31 @@ pub struct DataEditorPanel {
     row_count: usize,
     error: Option<String>,
     pending_result: Option<(QueryResult, TableInfo)>,
+    filtered: bool,
 }
 
 impl DataEditorPanel {
     pub fn new(
         config: DataSourceConfig,
         table: TableInfo,
+        where_clause: Option<String>,
         activity_tracker: Entity<ActivityTracker>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let normalized_where_clause = where_clause
+            .as_deref()
+            .map(normalized_where_clause)
+            .unwrap_or_default();
+        let filtered = !normalized_where_clause.is_empty();
         let where_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("e.g. id > 10 AND name LIKE '%test%'")
+            let input =
+                InputState::new(window, cx).placeholder("e.g. id > 10 AND name LIKE '%test%'");
+            if filtered {
+                input.default_value(normalized_where_clause.clone())
+            } else {
+                input
+            }
         });
         let limit_input =
             cx.new(|cx| InputState::new(window, cx).default_value(DEFAULT_LIMIT.to_string()));
@@ -97,19 +111,35 @@ impl DataEditorPanel {
             row_count: 0,
             error: None,
             pending_result: None,
+            filtered,
         };
         panel.load_data(window, cx);
         panel
     }
 
     pub fn title(&self) -> String {
-        format!("{}.{}", self.table.schema, self.table.name)
+        let title = format!("{}.{}", self.table.schema, self.table.name);
+        if self.filtered {
+            format!("{title} (filtered)")
+        } else {
+            title
+        }
     }
 
-    pub fn matches_table(&self, config: &DataSourceConfig, table: &TableInfo) -> bool {
+    pub fn matches_table(
+        &self,
+        config: &DataSourceConfig,
+        table: &TableInfo,
+        where_clause: Option<&str>,
+        cx: &App,
+    ) -> bool {
         self.config.name == config.name
             && self.table.schema == table.schema
             && self.table.name == table.name
+            && normalized_where_clause(&self.where_input.read(cx).value())
+                == where_clause
+                    .map(normalized_where_clause)
+                    .unwrap_or_default()
     }
 
     fn new_table_state(
@@ -245,13 +275,22 @@ impl DataEditorPanel {
     ) {
         let metadata = column_metadata_for_table(&table, &result);
         let editable_table = EditableTable::from_table_result_columns(&table, &result.columns);
+        let fk_navigation = FkNavigationContext::from_schema_cache(&self.config, &table, {
+            let panel = cx.entity().downgrade();
+            std::rc::Rc::new(move |event, _window, cx| {
+                let _ = panel.update(cx, |_panel, cx| {
+                    cx.emit(event);
+                });
+            })
+        });
         let delegate = ResultsTableDelegate::from_query(
             result.columns,
             metadata,
             result.rows,
             result.nulls,
             editable_table,
-        );
+        )
+        .with_fk_navigation(fk_navigation);
         self.row_count = result.row_count;
         self.table_state = Self::new_table_state(delegate, window, cx);
         Self::subscribe_table_selection(&self.table_state, window, cx);
@@ -776,6 +815,8 @@ impl Focusable for DataEditorPanel {
         self.focus_handle.clone()
     }
 }
+
+impl EventEmitter<ShowDataEditorEvent> for DataEditorPanel {}
 
 fn data_editor_query(
     config: &DataSourceConfig,

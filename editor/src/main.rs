@@ -7,11 +7,11 @@ use gpui::{
 use gpui_component::dock::ClosePanel;
 use gpui_component::input::{
     Backspace, Copy, Cut, Delete, DeleteToBeginningOfLine, DeleteToEndOfLine, DeleteToNextWordEnd,
-    DeleteToPreviousWordStart, Enter, Escape as InputEscape, Indent, IndentInline, MoveDown,
-    MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveToEnd, MoveToEndOfLine,
-    MoveToNextWord, MoveToPreviousWord, MoveToStart, MoveToStartOfLine, MoveUp, Outdent,
-    OutdentInline, Paste as InputPaste, Redo, SelectAll, SelectToEnd, SelectToEndOfLine,
-    SelectToNextWordEnd, SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Undo,
+    DeleteToPreviousWordStart, Enter, Escape as InputEscape, IndentInline, MoveDown, MoveEnd,
+    MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveToEnd, MoveToNextWord,
+    MoveToPreviousWord, MoveToStart, MoveUp, OutdentInline, Paste as InputPaste, Redo, SelectAll,
+    SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd, SelectToPreviousWordStart, SelectToStart,
+    SelectToStartOfLine, Undo,
 };
 use gpui_component::{GlobalState, Root};
 
@@ -30,9 +30,9 @@ use shortcuts::{CustomKeymap, ShortcutAction, load_custom_keymap};
 use ui::panels::bottom_panel::ToggleBottomPanelMode;
 use ui::panels::file_editor::{
     CloseActiveTab as EditorCloseActiveTab, ConfirmSelectedQuery, CutEditorLine, CycleTabBackward,
-    CycleTabForward, ExecuteQuery, FormatQuery, IndentLines, NavigateBack, NavigateForward,
-    OutdentLines, SaveFile, SelectNextQuery, SelectPreviousQuery, ToggleCommentLines,
-    ToggleEditorReplace, ToggleEditorSearch,
+    CycleTabForward, ExecuteQuery, FormatQuery, GoToDefinition, IndentLines, NavigateBack,
+    NavigateForward, OutdentLines, SaveFile, SelectNextQuery, SelectPreviousQuery,
+    ToggleCommentLines, ToggleEditorReplace, ToggleEditorSearch,
 };
 use ui::panels::file_search::ToggleFileSearch;
 use ui::panels::keymap::ToggleKeymap;
@@ -119,14 +119,6 @@ fn register_component_bindings(cx: &mut App) {
         KeyBinding::new("shift-home", SelectToStartOfLine, INPUT),
         KeyBinding::new("shift-end", SelectToEndOfLine, INPUT),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-]", Indent, INPUT),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-[", Outdent, INPUT),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-]", Indent, INPUT),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-[", Outdent, INPUT),
-        #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-a", MoveHome, INPUT),
         #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-e", MoveEnd, INPUT),
@@ -135,9 +127,9 @@ fn register_component_bindings(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-shift-e", SelectToEndOfLine, INPUT),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-left", MoveToStartOfLine, INPUT),
+        KeyBinding::new("cmd-left", MoveHome, INPUT),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-right", MoveToEndOfLine, INPUT),
+        KeyBinding::new("cmd-right", MoveEnd, INPUT),
         #[cfg(target_os = "macos")]
         KeyBinding::new("shift-cmd-left", SelectToStartOfLine, INPUT),
         #[cfg(target_os = "macos")]
@@ -243,6 +235,7 @@ pub fn bind_all_keys(cx: &mut App, custom: &CustomKeymap) {
         bind!(ExecuteQuery, ExecuteQuery),
         bind!(SaveFile, SaveFile),
         bind!(FormatQuery, FormatQuery),
+        bind!(GoToDefinition, GoToDefinition),
         bind!(ToggleCommentLines, ToggleCommentLines),
         bind!(IndentLines, IndentLines),
         bind!(OutdentLines, OutdentLines),
@@ -339,6 +332,8 @@ fn app_menus(_cx: &gpui::App) -> Vec<Menu> {
         Menu::new("Navigate").items(vec![
             MenuItem::action("Go Back", NavigateBack),
             MenuItem::action("Go Forward", NavigateForward),
+            MenuItem::separator(),
+            MenuItem::action("Go to Definition", GoToDefinition),
         ]),
         Menu::new("Edit\u{200B}").items(vec![
             MenuItem::action("Find", ToggleEditorSearch),
@@ -360,6 +355,14 @@ fn app_menus(_cx: &gpui::App) -> Vec<Menu> {
             MenuItem::action("Edit Result Cell", EditResultCell),
             MenuItem::separator(),
             MenuItem::action("Save", SaveFile),
+        ]),
+        Menu::new("View").items(vec![
+            MenuItem::action("Toggle File Panel", ToggleLeftDock),
+            MenuItem::action("Toggle Connection Panel", ToggleRightDock),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Terminal", ToggleTerminal),
+            MenuItem::action("Toggle Results", ToggleResultsPanel),
+            MenuItem::action("Toggle Bottom Panel", ToggleBottomPanelMode),
         ]),
         Menu::new("Tab").items(vec![
             MenuItem::action("Close Editor Tab", EditorCloseActiveTab),

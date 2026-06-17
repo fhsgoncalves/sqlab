@@ -756,6 +756,7 @@ impl ConnectionPanel {
             config,
             schema,
             table,
+            where_clause: None,
         });
     }
 

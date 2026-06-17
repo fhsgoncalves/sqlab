@@ -8,8 +8,9 @@ use std::{
 
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, ParentElement, Render, Styled,
-    Subscription, Task, Window, actions, div, hsla, prelude::FluentBuilder, px,
+    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ParentElement, Render, Styled, Subscription, Task, Window, actions, div, hsla,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IconName, IconNamed, Selectable, Sizable,
@@ -17,17 +18,23 @@ use gpui_component::{
     dock::{Panel, PanelEvent, PanelState},
     h_flex,
     input::{
-        Input, InputDecoration, InputEvent, InputGutterAdornment, InputInlineAdornment, InputState,
+        self as gpui_input, Input, InputDecoration, InputEvent, InputGutterAdornment,
+        InputInlineAdornment, InputState,
     },
+    menu::{PopupMenu, PopupMenuItem},
     v_flex,
 };
 
 use super::query_detector::{QueryRange, query_ranges_for_execution, query_ranges_in_text};
-use super::sql_completion::{SqlCompletionProvider, SqlDiagnostic, sql_diagnostics_at};
+use super::sql_completion::{
+    SqlCompletionProvider, SqlDiagnostic, TableDefinitionTarget, sql_diagnostics_at,
+    table_definition_target_at,
+};
 use crate::schema_cache;
 use crate::ui::search::{SearchOptions, TextMatch, find_text_matches};
-use sqlab_drivers_core::DatabaseSchema;
+use sqlab_drivers_core::ddl::create_ddl_generator;
 use sqlab_drivers_core::manager::DataSourceManager;
+use sqlab_drivers_core::{DatabaseSchema, TableInfo};
 
 actions!(
     editor,
@@ -41,6 +48,7 @@ actions!(
         CutEditorLine,
         ToggleEditorSearch,
         ToggleEditorReplace,
+        GoToDefinition,
         CloseEditorSearch,
         SelectPreviousEditorMatch,
         SelectNextEditorMatch,
@@ -57,6 +65,12 @@ const LINE_INDENT: &str = "  ";
 #[derive(Clone, Debug)]
 pub enum EditorPanelEvent {
     CursorMoved,
+    OpenTableDefinition {
+        connection_name: String,
+        schema_name: String,
+        table_name: String,
+        ddl: String,
+    },
 }
 
 pub(crate) fn init(cx: &mut App) {
@@ -102,6 +116,7 @@ pub struct EditorPanel {
     last_observed_snapshot: Option<EditorSnapshot>,
     selected_search_path: Option<String>,
     selected_connection_name: Option<String>,
+    hover_table_definition_range: Option<Range<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -134,6 +149,14 @@ struct EditorSnapshot {
     text: String,
     cursor: usize,
     selected: String,
+}
+
+#[derive(Clone)]
+struct TableDefinitionOpen {
+    connection_name: String,
+    schema_name: String,
+    table_name: String,
+    ddl: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -464,6 +487,16 @@ fn current_line_range_for_cut(text: &str, cursor: usize) -> Range<usize> {
     start..end
 }
 
+fn table_for_definition_target<'a>(
+    schema: &'a DatabaseSchema,
+    target: &TableDefinitionTarget,
+) -> Option<&'a TableInfo> {
+    schema.tables.iter().find(|table| {
+        table.schema.eq_ignore_ascii_case(&target.schema_name)
+            && table.name.eq_ignore_ascii_case(&target.table_name)
+    })
+}
+
 impl EditorPanel {
     pub fn path(&self) -> &PathBuf {
         &self.path
@@ -641,6 +674,7 @@ impl EditorPanel {
             last_observed_snapshot: None,
             selected_search_path: None,
             selected_connection_name: None,
+            hover_table_definition_range: None,
         };
         panel.refresh_active_query(cx);
         panel.refresh_schema_cache(cx);
@@ -686,6 +720,20 @@ impl EditorPanel {
 
     pub fn selected_connection_name(&self) -> Option<&str> {
         self.selected_connection_name.as_deref()
+    }
+
+    pub fn schema_cache(&self) -> Option<&(String, Arc<DatabaseSchema>)> {
+        self.schema_cache.as_ref()
+    }
+
+    fn selected_connection_config_schema(&self, cx: &App) -> Option<String> {
+        self.data_source_manager
+            .read(cx)
+            .configs()
+            .iter()
+            .find(|config| Some(config.name.as_str()) == self.selected_connection_name())
+            .map(|config| config.schema.trim().to_string())
+            .filter(|schema| !schema.is_empty())
     }
 
     pub fn set_selected_connection_name(&mut self, name: Option<String>, cx: &mut Context<Self>) {
@@ -736,6 +784,105 @@ impl EditorPanel {
 
     pub fn set_search_path(&mut self, search_path: Option<String>, cx: &mut Context<Self>) {
         self.selected_search_path = search_path.filter(|schema| !schema.trim().is_empty());
+        cx.notify();
+    }
+
+    fn table_definition_at_cursor(&self, cx: &App) -> Option<TableDefinitionOpen> {
+        let offset = self.editor.read(cx).cursor();
+        self.table_definition_at_offset(offset, cx)
+    }
+
+    fn table_definition_at_mouse_position(
+        &self,
+        event: &MouseDownEvent,
+        cx: &App,
+    ) -> Option<TableDefinitionOpen> {
+        let offset = self
+            .editor
+            .read(cx)
+            .offset_for_mouse_position(event.position);
+        self.table_definition_at_offset(offset, cx)
+    }
+
+    fn table_definition_at_offset(&self, offset: usize, cx: &App) -> Option<TableDefinitionOpen> {
+        let connection_name = self.selected_connection_name()?.to_string();
+        let (_, schema) = self.schema_cache.as_ref()?;
+        let target = self.table_definition_target_at_offset(offset, cx)?;
+        let table = table_for_definition_target(schema, &target)?;
+        let generator = create_ddl_generator(schema.db_type);
+        let ddl = generator.generate_table_ddl(schema, table);
+
+        Some(TableDefinitionOpen {
+            connection_name,
+            schema_name: target.schema_name,
+            table_name: target.table_name,
+            ddl,
+        })
+    }
+
+    fn table_definition_target_at_offset(
+        &self,
+        offset: usize,
+        cx: &App,
+    ) -> Option<TableDefinitionTarget> {
+        let (_, schema) = self.schema_cache.as_ref()?;
+        let text = self.editor.read(cx).value().to_string();
+        table_definition_target_at(
+            &text,
+            offset,
+            schema,
+            self.selected_search_path.as_deref(),
+            self.selected_connection_config_schema(cx).as_deref(),
+        )
+    }
+
+    fn open_table_definition_at_cursor(&mut self, cx: &mut Context<Self>) {
+        let Some(definition) = self.table_definition_at_cursor(cx) else {
+            return;
+        };
+        self.emit_table_definition(definition, cx);
+    }
+
+    fn open_table_definition_at_mouse_position(
+        &mut self,
+        event: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(definition) = self.table_definition_at_mouse_position(event, cx) else {
+            return;
+        };
+        self.emit_table_definition(definition, cx);
+        cx.stop_propagation();
+    }
+
+    fn emit_table_definition(&mut self, definition: TableDefinitionOpen, cx: &mut Context<Self>) {
+        cx.emit(EditorPanelEvent::OpenTableDefinition {
+            connection_name: definition.connection_name,
+            schema_name: definition.schema_name,
+            table_name: definition.table_name,
+            ddl: definition.ddl,
+        });
+    }
+
+    fn update_hover_table_definition(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let next_range =
+            if event.modifiers.secondary() && !event.modifiers.shift && !event.modifiers.alt {
+                let offset = self
+                    .editor
+                    .read(cx)
+                    .offset_for_mouse_position(event.position);
+                self.table_definition_target_at_offset(offset, cx)
+                    .map(|target| target.token_range)
+            } else {
+                None
+            };
+
+        if self.hover_table_definition_range == next_range {
+            return;
+        }
+
+        self.hover_table_definition_range = next_range;
+        self.apply_current_decorations(cx);
         cx.notify();
     }
 
@@ -856,6 +1003,7 @@ impl EditorPanel {
             .map(|query| InputDecoration {
                 range: query.trimmed_range.clone(),
                 fill: None,
+                text_color: None,
                 border: Some(hsla(0.76, 0.73, 0.72, 0.85)),
                 border_width: px(1.),
                 underline: None,
@@ -870,12 +1018,25 @@ impl EditorPanel {
                 .map(|diagnostic| InputDecoration {
                     range: diagnostic.range.clone(),
                     fill: None,
+                    text_color: None,
                     border: None,
                     border_width: px(1.),
                     underline: Some(hsla(0.0, 0.76, 0.62, 0.95)),
                     underline_wavy: true,
                 }),
         );
+
+        if let Some(range) = &self.hover_table_definition_range {
+            decorations.push(InputDecoration {
+                range: range.clone(),
+                fill: None,
+                text_color: Some(cx.theme().link),
+                border: None,
+                border_width: px(1.),
+                underline: Some(cx.theme().link),
+                underline_wavy: false,
+            });
+        }
 
         self.editor.update(cx, |state, cx| {
             state.set_decorations(decorations, cx);
@@ -1063,6 +1224,7 @@ impl EditorPanel {
             .map(|query| InputDecoration {
                 range: query.trimmed_range.clone(),
                 fill: None,
+                text_color: None,
                 border: Some(hsla(0.76, 0.73, 0.72, 0.85)),
                 border_width: px(1.),
                 underline: None,
@@ -1077,12 +1239,25 @@ impl EditorPanel {
                 .map(|diagnostic| InputDecoration {
                     range: diagnostic.range.clone(),
                     fill: None,
+                    text_color: None,
                     border: None,
                     border_width: px(1.),
                     underline: Some(hsla(0.0, 0.76, 0.62, 0.95)),
                     underline_wavy: true,
                 }),
         );
+
+        if let Some(range) = &self.hover_table_definition_range {
+            decorations.push(InputDecoration {
+                range: range.clone(),
+                fill: None,
+                text_color: Some(cx.theme().link),
+                border: None,
+                border_width: px(1.),
+                underline: Some(cx.theme().link),
+                underline_wavy: false,
+            });
+        }
 
         self.editor.update(cx, |state, cx| {
             state.set_decorations(decorations, cx);
@@ -1432,6 +1607,20 @@ impl EditorPanel {
         self.cut_selection_or_current_line(window, cx);
     }
 
+    fn on_go_to_definition(
+        &mut self,
+        _: &GoToDefinition,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.editor_has_focus(window, cx) {
+            cx.propagate();
+            return;
+        }
+
+        self.open_table_definition_at_cursor(cx);
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -1462,6 +1651,13 @@ impl EditorPanel {
         {
             self.cut_selection_or_current_line(window, cx);
             cx.stop_propagation();
+            return;
+        }
+
+        if self.hover_table_definition_range.is_some() && !modifiers.platform {
+            self.hover_table_definition_range = None;
+            self.apply_current_decorations(cx);
+            cx.notify();
         }
     }
 }
@@ -1490,6 +1686,7 @@ impl Panel for EditorPanel {
 
 impl Render for EditorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let editor_entity = cx.entity();
         v_flex()
             .id("editor-panel")
             .size_full()
@@ -1499,6 +1696,7 @@ impl Render for EditorPanel {
             .on_action(cx.listener(Self::on_indent_lines))
             .on_action(cx.listener(Self::on_outdent_lines))
             .on_action(cx.listener(Self::on_cut_editor_line))
+            .on_action(cx.listener(Self::on_go_to_definition))
             .on_action(cx.listener(Self::toggle_search))
             .on_action(cx.listener(Self::toggle_replace))
             .on_action(cx.listener(Self::close_search))
@@ -1511,19 +1709,71 @@ impl Render for EditorPanel {
                 this.child(self.render_search_bar(cx))
             })
             .child(
-                div().key_context(FILE_EDITOR_CONTEXT).size_full().child(
-                    Input::new(&self.editor)
-                        .bordered(false)
-                        .p_0()
-                        .h_full()
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .text_size(cx.theme().mono_font_size),
-                ),
+                div()
+                    .key_context(FILE_EDITOR_CONTEXT)
+                    .size_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                            if event.modifiers.secondary()
+                                && !event.modifiers.shift
+                                && !event.modifiers.alt
+                            {
+                                this.open_table_definition_at_mouse_position(event, cx);
+                            }
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        this.update_hover_table_definition(event, cx);
+                    }))
+                    .when(self.hover_table_definition_range.is_some(), |this| {
+                        this.cursor_pointer()
+                    })
+                    .child(
+                        Input::new(&self.editor)
+                            .bordered(false)
+                            .p_0()
+                            .h_full()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(cx.theme().mono_font_size)
+                            .context_menu(move |menu, window, cx| {
+                                EditorPanel::editor_context_menu(
+                                    editor_entity.clone(),
+                                    menu,
+                                    window,
+                                    cx,
+                                )
+                            }),
+                    ),
             )
     }
 }
 
 impl EditorPanel {
+    fn editor_context_menu(
+        editor: Entity<EditorPanel>,
+        menu: PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let has_paste = cx.read_from_clipboard().is_some();
+
+        menu.item(
+            PopupMenuItem::new("Go to definition").on_click(window.listener_for(
+                &editor,
+                |this, _, _window, cx| {
+                    this.open_table_definition_at_cursor(cx);
+                },
+            )),
+        )
+        .separator()
+        .menu("Cut", Box::new(gpui_input::Cut))
+        .menu("Copy", Box::new(gpui_input::Copy))
+        .menu_with_enable("Paste", Box::new(gpui_input::Paste), has_paste)
+        .separator()
+        .menu("Select All", Box::new(gpui_input::SelectAll))
+    }
+
     fn render_search_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let match_label = if self.search_matches.is_empty() {
             "0/0".to_string()
