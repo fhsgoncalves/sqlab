@@ -4,11 +4,13 @@ use std::borrow::Cow;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "assets"]
+#[include = "app-icon.png"]
 #[include = "icons/**/*.svg"]
 struct LocalAssets;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "../assets"]
+#[include = "app-icon.png"]
 #[include = "icons/**/*.svg"]
 struct WorkspaceAssets;
 

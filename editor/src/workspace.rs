@@ -3,14 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, Window,
-    actions, div, hsla, point, prelude::FluentBuilder, px,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
+    StatefulInteractiveElement, Styled, Window, actions, div, hsla, img, point,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::{
     Icon, IconName, Root, Sizable, TitleBar, WindowExt,
     button::{Button, ButtonVariants as _},
+    dialog::DialogFooter,
     dock::{DockArea, DockItem, DockPlacement},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -21,6 +23,7 @@ use gpui_component::{
 };
 
 use crate::app_theme::SwitchTheme;
+use crate::build_info;
 use crate::credentials;
 use crate::query_session::QuerySessionStore;
 use crate::schema_cache;
@@ -49,6 +52,7 @@ actions!(
     [
         OpenFolder,
         OpenRecentFolders,
+        AboutSqlab,
         CloseRecentFolders,
         ConfirmRecentFolder,
         SelectPreviousRecentFolder,
@@ -1208,6 +1212,88 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.open_recent_folders(window, cx);
+    }
+
+    fn on_about_sqlab(&mut self, _: &AboutSqlab, window: &mut Window, cx: &mut Context<Self>) {
+        let copy_text = build_info::copy_text();
+        window.open_alert_dialog(cx, move |alert, _window, cx| {
+            let copy_text = copy_text.clone();
+            alert
+                .width(px(520.))
+                .child(
+                    v_flex()
+                        .items_center()
+                        .gap_4()
+                        .py_2()
+                        .child(
+                            img("app-icon.png")
+                                .w(px(84.))
+                                .h(px(84.))
+                                .rounded(cx.theme().radius_lg),
+                        )
+                        .child(
+                            div()
+                                .text_2xl()
+                                .text_color(cx.theme().foreground)
+                                .child(format!("{} {}", build_info::APP_NAME, build_info::VERSION)),
+                        )
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    v_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Build time"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_base()
+                                                .text_color(cx.theme().foreground)
+                                                .child(build_info::build_time()),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Commit"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_base()
+                                                .text_color(cx.theme().foreground)
+                                                .child(build_info::COMMIT_HASH),
+                                        ),
+                                ),
+                        ),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(Button::new("about-ok").label("OK").on_click(
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                            },
+                        ))
+                        .child(Button::new("about-copy").label("Copy").on_click(
+                            move |_, _window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                            },
+                        )),
+                )
+        });
     }
 
     fn on_save_file(&mut self, _: &SaveFile, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2476,6 +2562,7 @@ impl Render for Workspace {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_open_folder))
             .on_action(cx.listener(Self::on_open_recent_folders))
+            .on_action(cx.listener(Self::on_about_sqlab))
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_execute_query))
             .on_action(cx.listener(Self::on_toggle_file_search))

@@ -17,6 +17,7 @@ use gpui_component::{GlobalState, Root};
 
 mod app_theme;
 mod assets;
+mod build_info;
 mod credentials;
 mod drivers;
 mod query_session;
@@ -50,7 +51,7 @@ use ui::panels::terminal::{
     NewTerminalTab, Paste,
 };
 use workspace::{
-    CloseRecentFolders, ConfirmRecentFolder, ConfirmSelectedConnection, OpenFolder,
+    AboutSqlab, CloseRecentFolders, ConfirmRecentFolder, ConfirmSelectedConnection, OpenFolder,
     OpenRecentFolders, SelectNextConnection, SelectNextRecentFolder, SelectPreviousConnection,
     SelectPreviousRecentFolder, ToggleLeftDock, ToggleResultsPanel, ToggleRightDock,
     ToggleSearchReplace, ToggleTerminal, Workspace, load_recent_folders,
@@ -326,7 +327,11 @@ pub fn bind_all_keys(cx: &mut App, custom: &CustomKeymap) {
 
 fn app_menus(_cx: &gpui::App) -> Vec<Menu> {
     vec![
-        Menu::new("sq/lab").items(vec![MenuItem::action("Settings...", ToggleKeymap)]),
+        Menu::new("sqlab").items(vec![
+            MenuItem::action("About sqlab", AboutSqlab),
+            MenuItem::separator(),
+            MenuItem::action("Settings...", ToggleKeymap),
+        ]),
         Menu::new("File").items(vec![
             MenuItem::action("Open Recent Folder...", OpenRecentFolders),
             MenuItem::action("Open Folder...", OpenFolder),
