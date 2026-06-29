@@ -343,6 +343,41 @@ pub enum DataSourceError {
     UnsupportedType(String),
 }
 
+impl DataSourceError {
+    pub fn is_connection_closed(&self) -> bool {
+        match self {
+            DataSourceError::NotConnected => true,
+            DataSourceError::ConnectionFailed(message) | DataSourceError::QueryFailed(message) => {
+                message_indicates_closed_connection(message)
+            }
+            DataSourceError::UnsupportedType(_) => false,
+        }
+    }
+}
+
+fn message_indicates_closed_connection(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "connection closed",
+        "connection is closed",
+        "connection was closed",
+        "connection terminated",
+        "connection reset",
+        "connection aborted",
+        "closed the connection",
+        "closed network connection",
+        "server disconnected",
+        "server has gone away",
+        "server closed",
+        "lost connection",
+        "broken pipe",
+        "unexpected eof",
+        "transport endpoint is not connected",
+    ]
+    .iter()
+    .any(|phrase| message.contains(phrase))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Idle,
@@ -410,6 +445,31 @@ query_string = ""
             toml::from_str(toml).expect("deserialize data source config");
 
         assert!(config.password.is_empty());
+    }
+
+    #[test]
+    fn closed_connection_errors_are_retryable() {
+        assert!(DataSourceError::NotConnected.is_connection_closed());
+        assert!(
+            DataSourceError::QueryFailed("server closed the connection unexpectedly".to_string())
+                .is_connection_closed()
+        );
+        assert!(
+            DataSourceError::ConnectionFailed("lost connection to server".to_string())
+                .is_connection_closed()
+        );
+    }
+
+    #[test]
+    fn ordinary_connection_and_query_errors_are_not_retryable() {
+        assert!(
+            !DataSourceError::ConnectionFailed("password authentication failed".to_string())
+                .is_connection_closed()
+        );
+        assert!(
+            !DataSourceError::QueryFailed("syntax error at or near \"select\"".to_string())
+                .is_connection_closed()
+        );
     }
 
     #[test]

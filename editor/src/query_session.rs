@@ -80,10 +80,11 @@ impl QuerySessionStore {
                 .await
         };
 
-        if matches!(
-            result,
-            Err(DataSourceError::ConnectionFailed(_) | DataSourceError::NotConnected)
-        ) {
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(DataSourceError::is_connection_closed)
+        {
             let _ = self
                 .disconnect_locked(&path, &config.name, &mut sessions)
                 .await;
